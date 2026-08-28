@@ -154,6 +154,58 @@ func TestSessionAllocatesRequestIDsOnlyAfterInFlightSlot(t *testing.T) {
 	shutdownFixture(t, session)
 }
 
+func TestDispatchRPCSerializesIDAllocationThroughOutboundEnqueue(t *testing.T) {
+	session := &processSession{
+		nonce: "dispatch-test", outbound: make(chan *outboundItem, 2),
+		pending: make(map[string]*pendingCall), done: make(chan struct{}),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	firstBuilding := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondBuilding := make(chan struct{})
+	dispatched := make(chan error, 2)
+	go func() {
+		_, _, err := session.dispatchRPC(ctx, "", "health", false, func(meta protocol.RequestMeta) (any, error) {
+			close(firstBuilding)
+			<-releaseFirst
+			return protocol.HealthParams{Meta: meta}, nil
+		})
+		dispatched <- err
+	}()
+	<-firstBuilding
+	go func() {
+		_, _, err := session.dispatchRPC(ctx, "", "health", false, func(meta protocol.RequestMeta) (any, error) {
+			close(secondBuilding)
+			return protocol.HealthParams{Meta: meta}, nil
+		})
+		dispatched <- err
+	}()
+	select {
+	case <-secondBuilding:
+		t.Fatal("second request allocated an ID before the first request was enqueued")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseFirst)
+	for range 2 {
+		if err := <-dispatched; err != nil {
+			t.Fatalf("dispatchRPC() error = %v", err)
+		}
+	}
+
+	for _, wantID := range []string{"1", "2"} {
+		item := <-session.outbound
+		message, err := protocol.ParseMessage(item.payload)
+		if err != nil {
+			t.Fatalf("ParseMessage() error = %v", err)
+		}
+		if message.ID != wantID {
+			t.Fatalf("outbound ID = %q, want %q", message.ID, wantID)
+		}
+	}
+}
+
 func TestSessionShutdownEscalatesWhenProviderIgnoresSignal(t *testing.T) {
 	session := startFixtureSession(t, "ignore-shutdown-sigterm", "token-shutdown-kill")
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)

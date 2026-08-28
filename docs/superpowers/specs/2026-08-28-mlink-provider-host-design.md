@@ -341,7 +341,7 @@ new → starting → initializing → ready → stopping → stopped
 
 Provider 后续返回已移除 ID 时记录一次不含正文的迟到计数并丢弃。ID 不复用，因此不会把迟到响应交给新请求。
 
-Host 先取得全局并发槽再分配请求 ID，因此尚未上线的已分配 ID 数不超过 64。Provider Server 按十进制数值维护最高水位和最多 65 个 ID 的去重窗口，允许窗口内的并发乱序；重复或窗口外旧 ID 返回 `protocol_error`。历史请求数不会转化为常驻内存增长。
+Host 先取得全局并发槽，并把“分配 ID → 编码 → 安装 pending → outbound 入队”作为一个短临界区；等待 Provider 响应不持有该锁。因此请求按 ID 顺序上线，同时仍可并发执行。Provider Server 只保留一个十进制最高水位，重复或倒序 ID 返回 `protocol_error`，历史请求数不会转化为常驻内存增长。
 
 ### 8.4 启动环境与 Secret
 

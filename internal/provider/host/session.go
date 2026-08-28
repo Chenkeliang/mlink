@@ -69,12 +69,13 @@ type processSession struct {
 	issued   atomic.Uint64
 	expected atomic.Bool
 
-	secrets   []string
-	stderr    *redactingBuffer
-	outbound  chan *outboundItem
-	pendingMu sync.Mutex
-	pending   map[string]*pendingCall
-	inflight  chan struct{}
+	secrets    []string
+	stderr     *redactingBuffer
+	outbound   chan *outboundItem
+	dispatchMu sync.Mutex
+	pendingMu  sync.Mutex
+	pending    map[string]*pendingCall
+	inflight   chan struct{}
 
 	done     chan struct{}
 	doneOnce sync.Once
@@ -171,19 +172,16 @@ func startSession(ctx context.Context, config startConfig) (*processSession, err
 	session.setState(StateInitializing)
 	initializeCtx, cancel := withDefaultDeadline(ctx, initializeTimeout)
 	defer cancel()
-	requestID, meta, id, err := session.nextRequest(initializeCtx, "")
-	if err != nil {
-		session.abortStart()
-		return nil, err
-	}
 	params := protocol.InitializeParams{
-		Meta:             meta,
 		ProtocolVersions: []string{protocol.Version},
 		Route:            session.route,
 		Config:           config.Snapshot.Config(),
 		Secrets:          cloneSecrets(config.Secrets),
 	}
-	message, err := session.callRPC(initializeCtx, id, requestID, "", "initialize", params, false)
+	message, _, err := session.callRPC(initializeCtx, "", "initialize", false, func(meta protocol.RequestMeta) (any, error) {
+		params.Meta = meta
+		return params, nil
+	})
 	params.Secrets = nil
 	if err != nil {
 		session.abortStart()
@@ -289,11 +287,9 @@ func (s *processSession) Health(ctx context.Context) (protocol.HealthResult, err
 		return protocol.HealthResult{}, err
 	}
 	defer release()
-	requestID, meta, id, err := s.nextRequest(callCtx, "")
-	if err != nil {
-		return protocol.HealthResult{}, err
-	}
-	message, err := s.callRPC(callCtx, id, requestID, "", "health", protocol.HealthParams{Meta: meta}, false)
+	message, _, err := s.callRPC(callCtx, "", "health", false, func(meta protocol.RequestMeta) (any, error) {
+		return protocol.HealthParams{Meta: meta}, nil
+	})
 	if err != nil {
 		return protocol.HealthResult{}, err
 	}
@@ -328,15 +324,13 @@ func (s *processSession) CaptureTurn(ctx context.Context, meta CallMeta, turn mo
 		return model.WriteReceipt{}, err
 	}
 	defer release()
-	requestID, requestMeta, id, err := s.nextRequest(callCtx, meta.IdempotencyKey)
-	if err != nil {
-		return model.WriteReceipt{}, err
-	}
-	params := protocol.CaptureParams{Meta: requestMeta, Turn: turn}
-	if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
-		return model.WriteReceipt{}, err
-	}
-	message, err := s.callRPC(callCtx, id, requestID, meta.IdempotencyKey, "capture_turn", params, true)
+	message, id, err := s.callRPC(callCtx, meta.IdempotencyKey, "capture_turn", true, func(requestMeta protocol.RequestMeta) (any, error) {
+		params := protocol.CaptureParams{Meta: requestMeta, Turn: turn}
+		if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
+			return nil, err
+		}
+		return params, nil
+	})
 	if err != nil {
 		return model.WriteReceipt{}, err
 	}
@@ -375,15 +369,13 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 		return model.ContextBundle{}, err
 	}
 	defer release()
-	requestID, meta, id, err := s.nextRequest(callCtx, "")
-	if err != nil {
-		return model.ContextBundle{}, err
-	}
-	params := protocol.RecallParams{Meta: meta, Request: request}
-	if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
-		return model.ContextBundle{}, err
-	}
-	message, err := s.callRPC(callCtx, id, requestID, "", "recall", params, false)
+	message, _, err := s.callRPC(callCtx, "", "recall", false, func(meta protocol.RequestMeta) (any, error) {
+		params := protocol.RecallParams{Meta: meta, Request: request}
+		if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
+			return nil, err
+		}
+		return params, nil
+	})
 	if err != nil {
 		return model.ContextBundle{}, err
 	}
@@ -417,10 +409,9 @@ func (s *processSession) Shutdown(ctx context.Context) error {
 
 	callCtx, cancel := withDefaultDeadline(ctx, shutdownTimeout)
 	defer cancel()
-	requestID, meta, id, err := s.nextRequest(callCtx, "")
-	if err == nil {
-		_, err = s.callRPC(callCtx, id, requestID, "", "shutdown", protocol.ShutdownParams{Meta: meta}, false)
-	}
+	_, _, err := s.callRPC(callCtx, "", "shutdown", false, func(meta protocol.RequestMeta) (any, error) {
+		return protocol.ShutdownParams{Meta: meta}, nil
+	})
 	if err != nil {
 		s.terminate()
 		return err
@@ -448,17 +439,41 @@ func (s *processSession) acquireBusiness(ctx context.Context) (func(), error) {
 
 func (s *processSession) callRPC(
 	ctx context.Context,
-	id, requestID, idempotencyKey, method string,
-	params any,
+	idempotencyKey, method string,
 	capture bool,
-) (protocol.Message, error) {
+	build func(protocol.RequestMeta) (any, error),
+) (protocol.Message, string, error) {
+	id, pending, err := s.dispatchRPC(ctx, idempotencyKey, method, capture, build)
+	if err != nil {
+		return protocol.Message{}, "", err
+	}
+	message, err := s.awaitRPC(ctx, id, pending)
+	return message, id, err
+}
+
+func (s *processSession) dispatchRPC(
+	ctx context.Context,
+	idempotencyKey, method string,
+	capture bool,
+	build func(protocol.RequestMeta) (any, error),
+) (string, *pendingCall, error) {
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+	requestID, meta, id, err := s.nextRequest(ctx, idempotencyKey)
+	if err != nil {
+		return "", nil, err
+	}
+	params, err := build(meta)
+	if err != nil {
+		return "", nil, err
+	}
 	payload, err := protocol.EncodeRequest(id, method, params)
 	if err != nil {
-		return protocol.Message{}, err
+		return "", nil, err
 	}
 	deadline, ok := ctx.Deadline()
 	if !ok || !deadline.After(time.Now()) {
-		return protocol.Message{}, context.DeadlineExceeded
+		return "", nil, context.DeadlineExceeded
 	}
 	item := &outboundItem{payload: payload, deadline: deadline}
 	pending := &pendingCall{
@@ -473,12 +488,16 @@ func (s *processSession) callRPC(
 	case <-ctx.Done():
 		item.state.CompareAndSwap(uint32(outboundQueued), uint32(outboundCanceled))
 		s.removePending(id, pending)
-		return protocol.Message{}, ctx.Err()
+		return "", nil, ctx.Err()
 	case <-s.done:
 		s.removePending(id, pending)
-		return protocol.Message{}, errors.New("provider session stopped")
+		return "", nil, errors.New("provider session stopped")
 	}
+	return id, pending, nil
+}
 
+func (s *processSession) awaitRPC(ctx context.Context, id string, pending *pendingCall) (protocol.Message, error) {
+	item := pending.item
 	select {
 	case result := <-pending.response:
 		return result.message, result.err
@@ -489,9 +508,9 @@ func (s *processSession) callRPC(
 		}
 		delivery := deliveryForCanceledItem(item)
 		s.sendCancel(id)
-		if capture && delivery != DeliveryNotSent {
+		if pending.capture && delivery != DeliveryNotSent {
 			return protocol.Message{}, &CallError{
-				Code: protocol.ErrorAmbiguousResult, RequestID: requestID, IdempotencyKey: idempotencyKey,
+				Code: protocol.ErrorAmbiguousResult, RequestID: pending.requestID, IdempotencyKey: pending.idempotencyKey,
 				Delivery: delivery, ReplaySafe: s.captureReplaySafe(), Message: "capture result is unknown",
 			}
 		}
