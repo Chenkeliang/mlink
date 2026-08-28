@@ -11,6 +11,7 @@ import (
 	"mlink/internal/app"
 	"mlink/internal/cli"
 	"mlink/internal/config"
+	"mlink/internal/install"
 )
 
 type runtimeSecretStore map[string][]byte
@@ -105,5 +106,28 @@ func TestDefaultInstallPreviewDoesNotCreateUserState(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("preview created user state: %#v", entries)
+	}
+}
+
+func TestStaleRuntimeApplyDoesNotCreateUserState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dependencies, err := defaultDependencies(&bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := dependencies.InstallRequest
+	request.Agents = []app.Agent{app.Codex}
+	request.SecretInputs = map[string][]byte{app.MemoryCoreTokenSecret: []byte("test-token")}
+	err = dependencies.App.ApplyInstall(context.Background(), "plan_stale", request)
+	if !errors.Is(err, install.ErrPlanStale) {
+		t.Fatalf("error = %v", err)
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("stale apply created user state: %#v", entries)
 	}
 }

@@ -22,6 +22,11 @@ type fakeOrbRunner struct {
 	errors  map[string]error
 }
 
+type orbExitError int
+
+func (err orbExitError) Error() string { return "Orb command failed" }
+func (err orbExitError) ExitCode() int { return int(err) }
+
 func (runner *fakeOrbRunner) Run(_ context.Context, args []string, stdin io.Reader) ([]byte, error) {
 	var input []byte
 	if stdin != nil {
@@ -129,11 +134,28 @@ func TestOrbTargetReadAndRemoveUseDirectArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
+		{"orb", "-m", "hermes-agent-env", "test", "-e", path},
 		{"orb", "-m", "hermes-agent-env", "cat", path},
 		{"orb", "-m", "hermes-agent-env", "rm", path},
 	}
 	if got := callArgs(runner.calls); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %#v", got)
+	}
+}
+
+func TestOrbTargetMapsFailedExistenceProbeToNotExist(t *testing.T) {
+	path := "/home/test/.hermes/plugins/mlink/plugin.yaml"
+	key := joinArgs([]string{"orb", "-m", "hermes-agent-env", "test", "-e", path})
+	runner := &fakeOrbRunner{errors: map[string]error{key: orbExitError(1)}}
+	target, err := NewOrbTarget("hermes-agent-env", "/home/test/.hermes", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := target.Read(context.Background(), path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 

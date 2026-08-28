@@ -282,6 +282,17 @@ func (runtime *runtimeApplication) PlanInstall(ctx context.Context, request app.
 }
 
 func (runtime *runtimeApplication) ApplyInstall(ctx context.Context, planID string, request app.InstallRequest) error {
+	previewService, preparedRequest, err := runtime.prepare(ctx, request, previewLedger{})
+	if err != nil {
+		return err
+	}
+	preview, err := previewService.PlanInstall(ctx, preparedRequest)
+	if err != nil {
+		return err
+	}
+	if preview.PlanID != planID {
+		return fmt.Errorf("%w: supplied plan %q no longer matches %q", install.ErrPlanStale, planID, preview.PlanID)
+	}
 	store, ledger, err := runtime.openLedger(ctx)
 	if err != nil {
 		return err

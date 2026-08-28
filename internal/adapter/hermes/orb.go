@@ -139,6 +139,13 @@ func (target *OrbTarget) Read(ctx context.Context, path string) ([]byte, fs.File
 	if err != nil {
 		return nil, 0, err
 	}
+	if _, err := target.run(ctx, []string{"test", "-e", clean}, nil); err != nil {
+		var exitError interface{ ExitCode() int }
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+			return nil, 0, fs.ErrNotExist
+		}
+		return nil, 0, err
+	}
 	content, err := target.run(ctx, []string{"cat", clean}, nil)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such file") {
