@@ -215,7 +215,7 @@ func TestServerRejectsDuplicateRequestID(t *testing.T) {
 	harness.shutdown(t, "3")
 }
 
-func TestServerRejectsOutOfOrderRequestID(t *testing.T) {
+func TestServerAcceptsBoundedOutOfOrderRequestID(t *testing.T) {
 	harness := newHarness(t, &testHandler{})
 	harness.initialize(t)
 	harness.sendRequest(t, "3", "health", protocol.HealthParams{Meta: futureMeta("health-three")})
@@ -224,7 +224,7 @@ func TestServerRejectsOutOfOrderRequestID(t *testing.T) {
 	}
 	harness.sendRequest(t, "2", "health", protocol.HealthParams{Meta: futureMeta("health-two")})
 	response := harness.readResponse(t)
-	if response.ID != "2" || response.Error == nil || response.Error.ErrorCode != protocol.ErrorProtocol {
+	if response.ID != "2" || response.Error != nil {
 		t.Fatalf("out-of-order response = %#v", response)
 	}
 	harness.shutdown(t, "4")
@@ -244,15 +244,24 @@ func TestServerReturnsUnsupportedCapabilityForUnknownMethod(t *testing.T) {
 	harness.shutdown(t, "3")
 }
 
-func TestRequestIDTrackerKeepsOnlyHighestWatermark(t *testing.T) {
+func TestRequestIDTrackerKeepsBoundedWindow(t *testing.T) {
 	var tracker requestIDTracker
-	for value := 1; value <= 100_000; value++ {
+	if !tracker.Accept("1") || !tracker.Accept("3") || !tracker.Accept("2") {
+		t.Fatal("tracker rejected IDs inside the bounded concurrency reorder window")
+	}
+	if tracker.Accept("2") {
+		t.Fatal("tracker accepted a duplicate ID")
+	}
+	for value := 4; value <= 100_000; value++ {
 		if !tracker.Accept(strconv.Itoa(value)) {
 			t.Fatalf("Accept(%d) = false", value)
 		}
 	}
 	if tracker.highest != "100000" {
 		t.Fatalf("highest = %q, want 100000", tracker.highest)
+	}
+	if len(tracker.seen) > requestIDReorderWindow+1 {
+		t.Fatalf("tracked IDs = %d, want at most %d", len(tracker.seen), requestIDReorderWindow+1)
 	}
 	for _, replay := range []string{"1", "99999", "100000", "0100000"} {
 		if tracker.Accept(replay) {

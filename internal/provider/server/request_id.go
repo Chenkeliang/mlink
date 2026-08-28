@@ -1,7 +1,10 @@
 package server
 
+const requestIDReorderWindow = maximumConcurrency
+
 type requestIDTracker struct {
 	highest string
+	seen    map[string]struct{}
 }
 
 func (t *requestIDTracker) Accept(id string) bool {
@@ -9,11 +12,30 @@ func (t *requestIDTracker) Accept(id string) bool {
 	if normalized == "" {
 		return false
 	}
-	if t.highest != "" && compareDecimalID(normalized, t.highest) <= 0 {
+	if _, duplicate := t.seen[normalized]; duplicate {
 		return false
 	}
-	t.highest = normalized
+	if t.highest != "" && compareDecimalID(normalized, t.highest) < 0 &&
+		compareDecimalID(addSmallDecimal(normalized, requestIDReorderWindow), t.highest) < 0 {
+		return false
+	}
+	if t.highest == "" || compareDecimalID(normalized, t.highest) > 0 {
+		t.highest = normalized
+	}
+	if t.seen == nil {
+		t.seen = make(map[string]struct{}, requestIDReorderWindow+1)
+	}
+	t.seen[normalized] = struct{}{}
+	t.prune()
 	return true
+}
+
+func (t *requestIDTracker) prune() {
+	for id := range t.seen {
+		if compareDecimalID(addSmallDecimal(id, requestIDReorderWindow), t.highest) < 0 {
+			delete(t.seen, id)
+		}
+	}
 }
 
 func normalizeDecimalID(id string) string {
@@ -46,4 +68,19 @@ func compareDecimalID(left, right string) int {
 		return 1
 	}
 	return 0
+}
+
+func addSmallDecimal(id string, increment int) string {
+	result := []byte(id)
+	carry := increment
+	for index := len(result) - 1; index >= 0 && carry > 0; index-- {
+		value := int(result[index]-'0') + carry
+		result[index] = byte(value%10) + '0'
+		carry = value / 10
+	}
+	for carry > 0 {
+		result = append([]byte{byte(carry%10) + '0'}, result...)
+		carry /= 10
+	}
+	return string(result)
 }

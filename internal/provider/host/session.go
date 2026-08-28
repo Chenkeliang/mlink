@@ -284,11 +284,16 @@ func (s *processSession) Health(ctx context.Context) (protocol.HealthResult, err
 	_ = descriptor
 	callCtx, cancel := withDefaultDeadline(ctx, healthTimeout)
 	defer cancel()
+	release, err := s.acquireBusiness(callCtx)
+	if err != nil {
+		return protocol.HealthResult{}, err
+	}
+	defer release()
 	requestID, meta, id, err := s.nextRequest(callCtx, "")
 	if err != nil {
 		return protocol.HealthResult{}, err
 	}
-	message, err := s.callBusiness(callCtx, id, requestID, "", "health", protocol.HealthParams{Meta: meta}, false)
+	message, err := s.callRPC(callCtx, id, requestID, "", "health", protocol.HealthParams{Meta: meta}, false)
 	if err != nil {
 		return protocol.HealthResult{}, err
 	}
@@ -318,6 +323,11 @@ func (s *processSession) CaptureTurn(ctx context.Context, meta CallMeta, turn mo
 	}
 	callCtx, cancel := withDefaultDeadline(ctx, captureTimeout)
 	defer cancel()
+	release, err := s.acquireBusiness(callCtx)
+	if err != nil {
+		return model.WriteReceipt{}, err
+	}
+	defer release()
 	requestID, requestMeta, id, err := s.nextRequest(callCtx, meta.IdempotencyKey)
 	if err != nil {
 		return model.WriteReceipt{}, err
@@ -326,7 +336,7 @@ func (s *processSession) CaptureTurn(ctx context.Context, meta CallMeta, turn mo
 	if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
 		return model.WriteReceipt{}, err
 	}
-	message, err := s.callBusiness(callCtx, id, requestID, meta.IdempotencyKey, "capture_turn", params, true)
+	message, err := s.callRPC(callCtx, id, requestID, meta.IdempotencyKey, "capture_turn", params, true)
 	if err != nil {
 		return model.WriteReceipt{}, err
 	}
@@ -360,6 +370,11 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 	}
 	callCtx, cancel := withDefaultDeadline(ctx, recallTimeout)
 	defer cancel()
+	release, err := s.acquireBusiness(callCtx)
+	if err != nil {
+		return model.ContextBundle{}, err
+	}
+	defer release()
 	requestID, meta, id, err := s.nextRequest(callCtx, "")
 	if err != nil {
 		return model.ContextBundle{}, err
@@ -368,7 +383,7 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 	if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
 		return model.ContextBundle{}, err
 	}
-	message, err := s.callBusiness(callCtx, id, requestID, "", "recall", params, false)
+	message, err := s.callRPC(callCtx, id, requestID, "", "recall", params, false)
 	if err != nil {
 		return model.ContextBundle{}, err
 	}
@@ -416,21 +431,15 @@ func (s *processSession) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *processSession) callBusiness(
-	ctx context.Context,
-	id, requestID, idempotencyKey, method string,
-	params any,
-	capture bool,
-) (protocol.Message, error) {
+func (s *processSession) acquireBusiness(ctx context.Context) (func(), error) {
 	select {
 	case s.inflight <- struct{}{}:
-		defer func() { <-s.inflight }()
+		return func() { <-s.inflight }, nil
 	case <-ctx.Done():
-		return protocol.Message{}, ctx.Err()
+		return nil, ctx.Err()
 	case <-s.done:
-		return protocol.Message{}, errors.New("provider session stopped")
+		return nil, errors.New("provider session stopped")
 	}
-	return s.callRPC(ctx, id, requestID, idempotencyKey, method, params, capture)
 }
 
 func (s *processSession) callRPC(

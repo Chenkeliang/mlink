@@ -128,6 +128,32 @@ func TestSessionInFlightLimitLeavesNoGhostPending(t *testing.T) {
 	shutdownFixture(t, session)
 }
 
+func TestSessionAllocatesRequestIDsOnlyAfterInFlightSlot(t *testing.T) {
+	session := startFixtureSession(t, "block-capture", "token-id-window")
+	const callCount = 100
+	cancels := make([]context.CancelFunc, 0, callCount)
+	results := make(chan error, callCount)
+	for index := range callCount {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		go func(index int) {
+			_, err := session.CaptureTurn(ctx, CallMeta{IdempotencyKey: "queued-" + string(rune(index+1))}, largeTurn("active"))
+			results <- err
+		}(index)
+	}
+	waitForDiagnosticCount(t, session, "CAPTURE_STARTED", 2)
+	if issued := session.issued.Load(); issued > 3 {
+		t.Fatalf("issued request IDs = %d, want initialize plus at most two in-flight calls", issued)
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for range callCount {
+		<-results
+	}
+	shutdownFixture(t, session)
+}
+
 func TestSessionShutdownEscalatesWhenProviderIgnoresSignal(t *testing.T) {
 	session := startFixtureSession(t, "ignore-shutdown-sigterm", "token-shutdown-kill")
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
