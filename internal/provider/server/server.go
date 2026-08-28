@@ -325,6 +325,9 @@ func (s *Server) prepareCall(
 		}
 		return requestCtx, cancel, func(callCtx context.Context, id string) json.RawMessage {
 			result, err := s.handler.CaptureTurn(callCtx, params)
+			if err == nil {
+				result.ReceiptID = id
+			}
 			return resultPayload(id, result, err)
 		}, nil
 	case "recall":

@@ -1,8 +1,12 @@
 package host
 
 import (
+	"context"
 	"time"
 
+	"mlink/internal/connection"
+	"mlink/internal/model"
+	"mlink/internal/provider/manifest"
 	"mlink/internal/provider/protocol"
 )
 
@@ -47,6 +51,22 @@ type ExitEvent struct {
 	ExitCode   int       `json:"exit_code"`
 	ErrorCode  string    `json:"error_code"`
 	OccurredAt time.Time `json:"occurred_at"`
+}
+
+type CallMeta struct {
+	IdempotencyKey string
+}
+
+type Session interface {
+	RouteKey() connection.RouteKey
+	Capabilities() map[string]manifest.CapabilityDescriptor
+	Health(context.Context) (protocol.HealthResult, error)
+	CaptureTurn(context.Context, CallMeta, model.Turn) (model.WriteReceipt, error)
+	Recall(context.Context, CallMeta, model.RecallRequest) (model.ContextBundle, error)
+	Shutdown(context.Context) error
+	State() State
+	Done() <-chan struct{}
+	ExitEvent() (ExitEvent, bool)
 }
 
 type revisionPaths struct {
