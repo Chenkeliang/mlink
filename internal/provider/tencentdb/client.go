@@ -135,6 +135,27 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseDat
 	return nil
 }
 
+func (c *Client) health(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	if err != nil {
+		return errors.New("create TencentDB MemoryCore health request")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("x-tdai-service-id", c.serviceID)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return errors.New("call TencentDB MemoryCore health endpoint")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return safeAPIError(resp.StatusCode, 0)
+	}
+	return nil
+}
+
 func safeAPIError(httpStatus, code int) *APIError {
 	message := http.StatusText(httpStatus)
 	if httpStatus >= 200 && httpStatus < 300 {
