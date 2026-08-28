@@ -83,6 +83,43 @@ func TestHermesGrantDerivesCanonicalUserAndRejectsWrongToken(t *testing.T) {
 	}
 }
 
+func TestHermesDelegatedUsersRemainIsolatedWhenInterleaved(t *testing.T) {
+	server, provider := testHermesServer(t)
+	users := map[string]string{}
+	for index := 0; index < 100; index++ {
+		subject := "ou_a"
+		if index%2 == 1 {
+			subject = "ou_b"
+		}
+		response := postBrokerJSON(t, server.URL+"/v1/recall", "hermes-secret-token", map[string]any{
+			"adapter_id": "hermes", "source": "feishu", "source_subject": subject, "query": "canary",
+		})
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("iteration %d status = %d", index, response.StatusCode)
+		}
+		canonical := provider.request.Identity.UserID
+		if previous := users[subject]; previous != "" && previous != canonical {
+			t.Fatalf("subject %s changed canonical user: %q -> %q", subject, previous, canonical)
+		}
+		users[subject] = canonical
+	}
+	if users["ou_a"] == "" || users["ou_b"] == "" || users["ou_a"] == users["ou_b"] {
+		t.Fatalf("delegated users were not isolated: %#v", users)
+	}
+}
+
+func TestHermesDelegatedGrantFailsClosedWithoutStableIdentity(t *testing.T) {
+	server, _ := testHermesServer(t)
+	response := postBrokerJSON(t, server.URL+"/v1/recall", "hermes-secret-token", map[string]any{
+		"adapter_id": "hermes", "source": "feishu", "query": "canary",
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+}
+
 func TestBrokerRejectsUnknownJSONFields(t *testing.T) {
 	server, _ := testHermesServer(t)
 	response := postBrokerJSON(t, server.URL+"/v1/recall", "hermes-secret-token", map[string]any{

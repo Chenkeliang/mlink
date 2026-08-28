@@ -75,6 +75,18 @@ func (service *Service) restoreResource(ctx context.Context, backup install.Back
 		return install.DesiredResource{}, false, err
 	}
 	ownerID := "dev.mlink.restore"
+	if currentExists && contentHash(current) == backup.ProposedHash {
+		if backup.Existed {
+			return install.DesiredResource{
+				OwnerID: ownerID, Target: backup.Target, Content: append([]byte(nil), backup.Content...), Mode: backup.Mode,
+				SemanticDiff: []install.SemanticDiff{{Path: "owned-file", Before: "installed value", After: "exact pre-install backup"}},
+			}, true, nil
+		}
+		return install.DesiredResource{
+			OwnerID: ownerID, Target: backup.Target, Action: install.ActionRemoveOwned,
+			SemanticDiff: []install.SemanticDiff{{Path: "owned-file", Before: "installed value", After: "removed"}},
+		}, true, nil
+	}
 	if isCodexHooksPath(backup.Target) {
 		if !currentExists {
 			if backup.Existed {
