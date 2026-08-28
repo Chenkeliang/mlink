@@ -90,7 +90,7 @@ func (h *fixtureHandler) CaptureTurn(ctx context.Context, _ protocol.CapturePara
 
 func (h *fixtureHandler) Recall(_ context.Context, params protocol.RecallParams) (model.ContextBundle, error) {
 	scope := model.ScopeUser
-	if h.mode == "user-only-return-agent" {
+	if h.mode == "user-only-return-agent" || h.mode == "shared-capable-return-agent" {
 		scope = model.ScopeAgent
 	}
 	text := "先给结论"
@@ -132,6 +132,11 @@ func fixtureCapabilities(mode string) map[string]manifest.CapabilityDescriptor {
 	if mode == "agent-scope-only" {
 		descriptor := capabilities["recall"]
 		descriptor.Scopes = []string{"agent"}
+		capabilities["recall"] = descriptor
+	}
+	if mode == "shared-capable-return-agent" {
+		descriptor := capabilities["recall"]
+		descriptor.Scopes = []string{"user", "agent"}
 		capabilities["recall"] = descriptor
 	}
 	return capabilities

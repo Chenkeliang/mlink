@@ -252,6 +252,39 @@ func TestSessionFaultsWhenRecallResultExceedsNegotiatedScopes(t *testing.T) {
 	}
 }
 
+func TestSessionFaultsWhenDefaultRecallReturnsAgentScope(t *testing.T) {
+	session := startFixtureSession(t, "shared-capable-return-agent", "token-default-scope")
+	_, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+		Identity: testIdentity(false), Query: "private memory", MaxItems: 1,
+	})
+	if err == nil {
+		t.Fatal("Recall() error = nil, want default recall agent-scope rejection")
+	}
+	select {
+	case <-session.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Session did not fault after default recall returned Agent-shared context")
+	}
+}
+
+func TestSessionAllowsAgentScopeOnlyForOptInRecall(t *testing.T) {
+	session := startFixtureSession(t, "shared-capable-return-agent", "token-opt-in-scope")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = session.Shutdown(ctx)
+	})
+	bundle, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+		Identity: testIdentity(false), Query: "shared memory", MaxItems: 1, IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall() error = %v", err)
+	}
+	if len(bundle.Items) != 1 || bundle.Items[0].Scope != model.ScopeAgent {
+		t.Fatalf("Recall() = %#v", bundle)
+	}
+}
+
 func TestValidContextBundleEnforcesFieldByteLimits(t *testing.T) {
 	valid := model.ContextBundle{
 		Items: []model.ContextItem{{

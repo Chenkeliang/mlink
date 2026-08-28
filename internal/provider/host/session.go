@@ -388,8 +388,12 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 		return model.ContextBundle{}, err
 	}
 	var result model.ContextBundle
+	allowedScopes := []string{string(model.ScopeUser)}
+	if request.IncludeAgentShared {
+		allowedScopes = append(allowedScopes, string(model.ScopeAgent))
+	}
 	if err := protocol.DecodeParams(message.Result, &result); err != nil ||
-		!validContextBundle(result, descriptor.MaxResultItems, descriptor.Scopes) {
+		!validContextBundle(result, descriptor.MaxResultItems, allowedScopes) {
 		s.fault(protocol.ErrorProtocol)
 		return model.ContextBundle{}, errors.New("provider returned an invalid recall result")
 	}
