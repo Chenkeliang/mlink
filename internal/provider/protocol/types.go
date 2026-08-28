@@ -309,6 +309,10 @@ func marshalObject(value any) (json.RawMessage, error) {
 	return raw, nil
 }
 
+func DecodeParams(raw []byte, target any) error {
+	return decodeStrict(raw, target)
+}
+
 func decodeStrict(raw []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
