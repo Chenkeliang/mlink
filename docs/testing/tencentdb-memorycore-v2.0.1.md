@@ -49,6 +49,31 @@ Full final live suite result: 8 tests passed in 223.106 seconds. Every stateful 
 
 The corresponding offline tests also verify that cancellation/deadline errors are propagated, L2 wins deterministically over L3 when only one shared slot remains, L2 reads cannot exceed the remaining item budget, empty native IDs are rejected, non-JSON HTTP 401 responses retain their typed status, and upstream error messages cannot be reflected into MLink errors.
 
+## Provider Host subprocess smoke test
+
+The process-boundary slice was tested separately through a newly built real `mlink` executable and its exact bundled command, `mlink provider run tencentdb`:
+
+```bash
+MLINK_TEST_MEMORYCORE_URL=http://127.0.0.1:8420 \
+MLINK_TEST_MEMORYCORE_TOKEN="$MLINK_TEST_MEMORYCORE_TOKEN" \
+go test -tags=integration ./internal/provider/host \
+  -run TestLiveProviderHostRoundTripIsolation -count=1 -v -timeout=5m
+```
+
+Result on 2026-08-28: **Pass**, 1 test in 20.47 seconds (package elapsed 20.935 seconds).
+
+The test verified:
+
+- bundled Manifest resolution and the real Content-Length JSON-RPC subprocess boundary;
+- `initialize → health → capture_turn → recall → shutdown` against `mlink-memorycore-test:v2.0.1`;
+- a unique user-scoped canary became recallable after asynchronous L1 extraction;
+- a second stable user under the same test Agent could not recall the first user's L1 canary;
+- capture remained `accepted` and `replay_safe=false`;
+- the child exited normally and produced an expected immutable exit event;
+- the MemoryCore token was resolved only for the test process and sent to the Provider through `initialize` on stdin; it was not printed or written to the repository.
+
+Offline subprocess tests additionally inject Agent-model environment canaries and prove they are removed from the Provider environment. They cover queued/writing/written cancellation, ambiguous capture delivery, write watchdog termination, forced process-group shutdown, split-chunk stderr redaction, response Secret detection, Python cross-language lifecycle, malicious frames, capability escalation, and bundled-command registry rejection.
+
 ## Direct backend adversarial results
 
 These checks call the official v3 Gateway API directly so Provider behavior and backend behavior remain distinguishable.
