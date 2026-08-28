@@ -60,7 +60,7 @@ go test -tags=integration ./internal/provider/host \
   -run TestLiveProviderHostRoundTripIsolation -count=1 -v -timeout=5m
 ```
 
-Result on 2026-08-28: **Pass**, 1 test in 20.47 seconds (package elapsed 20.935 seconds).
+Most recent result on 2026-08-28: **Pass**, 1 test in 39.82 seconds (package elapsed 41.031 seconds).
 
 The test verified:
 
