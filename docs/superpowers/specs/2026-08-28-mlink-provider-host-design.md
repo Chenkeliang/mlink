@@ -197,6 +197,7 @@ Content-Length: <decimal bytes>\r\n
 - Header 名称按 ASCII 大小写不敏感比较；`Content-Length` 在任意大小写组合下合计必须出现一次，且为非负十进制整数。
 - Payload 必须是合法 UTF-8 和单个 JSON-RPC 2.0 对象。
 - 不支持批量 JSON-RPC。
+- 请求与响应 ID 必须是 1–64 字节的十进制字符串，保留超过 JavaScript safe integer 的跨语言精度。
 - `jsonrpc` 必须严格等于 `"2.0"`；响应必须恰好包含 result 或 error 之一。Host 只发送已知方法；Provider Server 解析任意非空请求方法，但只分发已协商方法，未知方法返回 `unsupported_capability`，`$/cancelRequest` 是唯一 notification。
 - stdout 出现非帧文本、重复长度、截断 payload 或超限帧时，Session 进入 `faulted`。
 - stderr 不参与协议解析。

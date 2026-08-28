@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,17 @@ func TestParseMessagePreservesLargeDecimalStringID(t *testing.T) {
 	}
 	if message.ID != id || message.Kind != MessageRequest || message.Method != "health" {
 		t.Fatalf("message = %#v", message)
+	}
+}
+
+func TestRequestIDHasByteLimit(t *testing.T) {
+	id := strings.Repeat("9", 65)
+	if _, err := EncodeRequest(id, "health", HealthParams{}); err == nil {
+		t.Fatal("EncodeRequest() accepted a 65-byte request ID")
+	}
+	raw := []byte(`{"jsonrpc":"2.0","id":"` + id + `","method":"health","params":{}}`)
+	if _, err := ParseMessage(raw); err == nil {
+		t.Fatal("ParseMessage() accepted a 65-byte request ID")
 	}
 }
 

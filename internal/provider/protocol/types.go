@@ -12,7 +12,10 @@ import (
 	"mlink/internal/provider/manifest"
 )
 
-const Version = "1.0"
+const (
+	Version           = "1.0"
+	maxRequestIDBytes = 64
+)
 
 type ErrorCode string
 
@@ -283,7 +286,7 @@ func parseID(raw json.RawMessage) (string, error) {
 }
 
 func validDecimalID(id string) bool {
-	if id == "" {
+	if id == "" || len(id) > maxRequestIDBytes {
 		return false
 	}
 	for i := range len(id) {
