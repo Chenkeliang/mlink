@@ -14,10 +14,10 @@ func TestIdentityScopeValidateForRecall(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		mutate       func(*IdentityScope)
-		wantField    string
-		wantError    bool
+		name      string
+		mutate    func(*IdentityScope)
+		wantField string
+		wantError bool
 	}{
 		{name: "complete identity", mutate: func(*IdentityScope) {}, wantError: false},
 		{name: "missing tenant", mutate: func(s *IdentityScope) { s.TenantID = "" }, wantField: "tenant_id", wantError: true},
