@@ -1,0 +1,21 @@
+# Existing Hermes configuration used to verify semantic preservation.
+model:
+  provider: llm.dedao
+  base_url: https://llm.example.test/v1
+  api_key: existing-model-secret
+agent:
+  enabled_toolsets:
+    - browser
+    - hermes
+  disabled_toolsets:
+    - computer
+  reasoning_effort: high
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  provider: hy-memory
+  memory_char_limit: 2200
+custom_section:
+  nested:
+    keep: exactly
+
