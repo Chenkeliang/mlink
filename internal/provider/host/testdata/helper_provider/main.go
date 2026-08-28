@@ -93,9 +93,13 @@ func (h *fixtureHandler) Recall(_ context.Context, params protocol.RecallParams)
 	if h.mode == "user-only-return-agent" {
 		scope = model.ScopeAgent
 	}
+	text := "先给结论"
+	if h.mode == "oversized-context-text" {
+		text = strings.Repeat("x", (256<<10)+1)
+	}
 	return model.ContextBundle{Items: []model.ContextItem{{
 		ID: "memory-a", Kind: "instruction", Scope: scope,
-		Text: "先给结论", Source: "fixture:l1/memory-a",
+		Text: text, Source: "fixture:l1/memory-a",
 	}}}, nil
 }
 

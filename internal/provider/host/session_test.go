@@ -252,6 +252,61 @@ func TestSessionFaultsWhenRecallResultExceedsNegotiatedScopes(t *testing.T) {
 	}
 }
 
+func TestValidContextBundleEnforcesFieldByteLimits(t *testing.T) {
+	valid := model.ContextBundle{
+		Items: []model.ContextItem{{
+			ID: strings.Repeat("i", 512), Kind: strings.Repeat("k", 128), Scope: model.ScopeUser,
+			Text: strings.Repeat("t", 256<<10), Source: strings.Repeat("s", 1024),
+		}},
+		Warnings: make([]string, 8),
+	}
+	for index := range valid.Warnings {
+		valid.Warnings[index] = strings.Repeat("w", 512)
+	}
+	if !validContextBundle(valid, 1, []string{"user"}) {
+		t.Fatal("validContextBundle() rejected values at field limits")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*model.ContextBundle)
+	}{
+		{name: "id", mutate: func(bundle *model.ContextBundle) { bundle.Items[0].ID += "x" }},
+		{name: "kind", mutate: func(bundle *model.ContextBundle) { bundle.Items[0].Kind += "x" }},
+		{name: "source", mutate: func(bundle *model.ContextBundle) { bundle.Items[0].Source += "x" }},
+		{name: "text", mutate: func(bundle *model.ContextBundle) { bundle.Items[0].Text += "x" }},
+		{name: "warning", mutate: func(bundle *model.ContextBundle) { bundle.Warnings[0] += "x" }},
+		{name: "warning count", mutate: func(bundle *model.ContextBundle) { bundle.Warnings = append(bundle.Warnings, "x") }},
+		{name: "utf8 bytes", mutate: func(bundle *model.ContextBundle) { bundle.Items[0].Kind = strings.Repeat("记", 43) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := valid
+			candidate.Items = append([]model.ContextItem(nil), valid.Items...)
+			candidate.Warnings = append([]string(nil), valid.Warnings...)
+			tt.mutate(&candidate)
+			if validContextBundle(candidate, 1, []string{"user"}) {
+				t.Fatal("validContextBundle() accepted an oversized field")
+			}
+		})
+	}
+}
+
+func TestSessionFaultsOnOversizedRecallResult(t *testing.T) {
+	session := startFixtureSession(t, "oversized-context-text", "token-context-size")
+	_, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+		Identity: testIdentity(false), Query: "private memory", MaxItems: 1,
+	})
+	if err == nil {
+		t.Fatal("Recall() error = nil, want oversized result rejection")
+	}
+	select {
+	case <-session.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Session did not fault after oversized recall result")
+	}
+}
+
 var fixtureBuild struct {
 	sync.Mutex
 	path string

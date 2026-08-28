@@ -23,16 +23,22 @@ import (
 )
 
 const (
-	initializeTimeout  = 5 * time.Second
-	healthTimeout      = 2 * time.Second
-	recallTimeout      = 2 * time.Second
-	captureTimeout     = 5 * time.Second
-	shutdownTimeout    = 2 * time.Second
-	writeTimeout       = 2 * time.Second
-	terminateGrace     = 250 * time.Millisecond
-	diagnosticBytes    = 64 << 10
-	defaultConcurrency = 4
-	maximumConcurrency = 64
+	initializeTimeout      = 5 * time.Second
+	healthTimeout          = 2 * time.Second
+	recallTimeout          = 2 * time.Second
+	captureTimeout         = 5 * time.Second
+	shutdownTimeout        = 2 * time.Second
+	writeTimeout           = 2 * time.Second
+	terminateGrace         = 250 * time.Millisecond
+	diagnosticBytes        = 64 << 10
+	maxContextIDBytes      = 512
+	maxContextKindBytes    = 128
+	maxContextSourceBytes  = 1024
+	maxContextTextBytes    = 256 << 10
+	maxContextWarnings     = 8
+	maxContextWarningBytes = 512
+	defaultConcurrency     = 4
+	maximumConcurrency     = 64
 )
 
 type startConfig struct {
@@ -828,12 +834,21 @@ func validHealth(result protocol.HealthResult) bool {
 }
 
 func validContextBundle(bundle model.ContextBundle, maxItems int, allowedScopes []string) bool {
-	if len(bundle.Items) > maxItems {
+	if len(bundle.Items) > maxItems || len(bundle.Warnings) > maxContextWarnings {
 		return false
+	}
+	for _, warning := range bundle.Warnings {
+		if len(warning) > maxContextWarningBytes {
+			return false
+		}
 	}
 	seen := make(map[string]struct{}, len(bundle.Items))
 	for _, item := range bundle.Items {
 		if item.ID == "" || item.Source == "" || !containsString(allowedScopes, string(item.Scope)) {
+			return false
+		}
+		if len(item.ID) > maxContextIDBytes || len(item.Kind) > maxContextKindBytes ||
+			len(item.Source) > maxContextSourceBytes || len(item.Text) > maxContextTextBytes {
 			return false
 		}
 		if _, duplicate := seen[item.ID]; duplicate {

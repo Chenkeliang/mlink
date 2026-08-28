@@ -436,7 +436,7 @@ Host 在发送前验证：
 - capture 有非空 idempotency key。
 - deadline 尚未过期。
 
-Host 在返回前做结构验证：Health 枚举与诊断限制合法；WriteReceipt 的 receipt ID 必须等于当前协议 request ID，状态只能是 accepted/visible，ReplaySafe 不得高于协商能力；ContextBundle 的条数不超过协商上限，每个 ContextItem 必须有非空稳定 ID、合法 scope、非空 source，并满足帧和字段长度限制。错误码未知、结果结构非法或约束越界都使 Session faulted；Host 不把非法部分静默修成合法结果。
+Host 在返回前做结构验证：Health 枚举与诊断限制合法；WriteReceipt 的 receipt ID 必须等于当前协议 request ID，状态只能是 accepted/visible，ReplaySafe 不得高于协商能力；ContextBundle 的条数不超过协商上限，每个 ContextItem 必须有非空稳定 ID、合法 scope、非空 source。字段按 UTF-8 字节计数：ID 不超过 512 B、kind 不超过 128 B、source 不超过 1024 B、text 不超过 256 KiB；warnings 最多 8 条且每条不超过 512 B。错误码未知、结果结构非法或约束越界都使 Session faulted；Host 不把非法部分静默修成合法结果。
 
 Host 不做语义去重、时间排序、token 预算、用户 ID 派生或 Provider 专有结果修复。
 
