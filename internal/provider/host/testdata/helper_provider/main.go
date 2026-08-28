@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"mlink/internal/model"
 	"mlink/internal/provider/manifest"
@@ -15,6 +19,13 @@ func main() {
 	mode := "normal"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
+	}
+	if mode == "block-stdin-after-init" {
+		serveInitializeThenBlock()
+		return
+	}
+	if mode == "ignore-shutdown-sigterm" {
+		signal.Ignore(syscall.SIGTERM)
 	}
 	handler := &fixtureHandler{mode: mode}
 	if err := server.New(handler).Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
@@ -62,7 +73,12 @@ func (h *fixtureHandler) Health(context.Context, protocol.HealthParams) (protoco
 	return protocol.HealthResult{Process: "ready", Config: "valid", Backend: "available", Diagnostics: diagnostics}, nil
 }
 
-func (h *fixtureHandler) CaptureTurn(context.Context, protocol.CaptureParams) (model.WriteReceipt, error) {
+func (h *fixtureHandler) CaptureTurn(ctx context.Context, _ protocol.CaptureParams) (model.WriteReceipt, error) {
+	if h.mode == "block-capture" {
+		fmt.Fprintln(os.Stderr, "CAPTURE_STARTED")
+		<-ctx.Done()
+		return model.WriteReceipt{}, ctx.Err()
+	}
 	return model.WriteReceipt{State: model.WriteAccepted, ProviderRefs: []string{"provider-ref-a"}}, nil
 }
 
@@ -74,6 +90,11 @@ func (h *fixtureHandler) Recall(_ context.Context, params protocol.RecallParams)
 }
 
 func (h *fixtureHandler) Shutdown(context.Context, protocol.ShutdownParams) error {
+	if h.mode == "ignore-shutdown-sigterm" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
 	return nil
 }
 
@@ -81,12 +102,35 @@ func fixtureCapabilities() map[string]manifest.CapabilityDescriptor {
 	return map[string]manifest.CapabilityDescriptor{
 		"health": {Version: 1, MaxInFlight: 2},
 		"capture_turn": {
-			Version: 1, Roles: []string{"user", "assistant"}, MaxRequestBytes: 1 << 20,
+			Version: 1, Roles: []string{"user", "assistant"}, MaxRequestBytes: 3800 << 10,
 			MaxInFlight: 2, ReplaySafe: false, Ordering: "turn",
 		},
 		"recall": {
-			Version: 1, Scopes: []string{"user"}, MaxRequestBytes: 1 << 20,
+			Version: 1, Scopes: []string{"user"}, MaxRequestBytes: 3800 << 10,
 			MaxResultItems: 5, MaxInFlight: 2,
 		},
+	}
+}
+
+func serveInitializeThenBlock() {
+	decoder := protocol.NewDecoder(os.Stdin)
+	raw, err := decoder.ReadFrame()
+	if err != nil {
+		os.Exit(3)
+	}
+	message, err := protocol.ParseMessage(raw)
+	if err != nil || message.Method != "initialize" {
+		os.Exit(4)
+	}
+	result := protocol.InitializeResult{
+		ProviderID: "dev.mlink.fixture", ProviderVersion: "0.1.0",
+		ProtocolVersion: protocol.Version, Capabilities: fixtureCapabilities(),
+	}
+	response, err := protocol.EncodeResult(message.ID, result)
+	if err != nil || protocol.NewEncoder(os.Stdout).WriteFrame(response) != nil {
+		os.Exit(5)
+	}
+	for {
+		time.Sleep(time.Hour)
 	}
 }

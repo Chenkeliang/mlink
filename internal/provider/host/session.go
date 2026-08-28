@@ -29,6 +29,7 @@ const (
 	captureTimeout     = 5 * time.Second
 	shutdownTimeout    = 2 * time.Second
 	writeTimeout       = 2 * time.Second
+	terminateGrace     = 250 * time.Millisecond
 	diagnosticBytes    = 64 << 10
 	defaultConcurrency = 4
 	maximumConcurrency = 64
@@ -491,7 +492,13 @@ func (s *processSession) nextRequest(ctx context.Context, idempotencyKey string)
 
 func (s *processSession) writerLoop() {
 	encoder := protocol.NewEncoder(s.stdin)
-	for item := range s.outbound {
+	for {
+		var item *outboundItem
+		select {
+		case <-s.done:
+			return
+		case item = <-s.outbound:
+		}
 		if !item.state.CompareAndSwap(uint32(outboundQueued), uint32(outboundWriting)) {
 			continue
 		}
@@ -595,7 +602,11 @@ func (s *processSession) waitLoop() {
 	if err == nil && expected {
 		errorCode = ""
 	}
-	s.failPending(errors.New("provider process exited"))
+	if expected {
+		s.failPending(errors.New("provider process exited"))
+	} else {
+		s.failPendingForFault(protocol.ErrorCode(errorCode))
+	}
 	s.exitMu.Lock()
 	s.exit = ExitEvent{Expected: expected, ExitCode: exitCode, ErrorCode: errorCode, OccurredAt: time.Now().UTC()}
 	s.exited = true
@@ -612,7 +623,7 @@ func (s *processSession) fault(code protocol.ErrorCode) {
 	s.state = StateFaulted
 	s.faultCode = string(code)
 	s.stateMu.Unlock()
-	s.failPending(&CallError{Code: code, Delivery: DeliveryMaybeSent, Message: "provider session faulted"})
+	s.failPendingForFault(code)
 	s.terminate()
 }
 
@@ -624,6 +635,30 @@ func (s *processSession) failPending(err error) {
 	for _, call := range pending {
 		select {
 		case call.response <- callResult{err: err}:
+		default:
+		}
+	}
+}
+
+func (s *processSession) failPendingForFault(code protocol.ErrorCode) {
+	s.pendingMu.Lock()
+	pending := s.pending
+	s.pending = make(map[string]*pendingCall)
+	s.pendingMu.Unlock()
+	for _, call := range pending {
+		delivery := deliveryForCanceledItem(call.item)
+		callCode := code
+		message := "provider session faulted"
+		if call.capture && delivery != DeliveryNotSent {
+			callCode = protocol.ErrorAmbiguousResult
+			message = "capture result is unknown"
+		}
+		failure := &CallError{
+			Code: callCode, RequestID: call.requestID, IdempotencyKey: call.idempotencyKey,
+			Delivery: delivery, ReplaySafe: s.captureReplaySafe(), Message: message,
+		}
+		select {
+		case call.response <- callResult{err: failure}:
 		default:
 		}
 	}
@@ -696,6 +731,17 @@ func (s *processSession) terminate() {
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = signalProcessGroup(s.cmd.Process, syscall.SIGTERM)
+		process := s.cmd.Process
+		go func() {
+			timer := time.NewTimer(terminateGrace)
+			defer timer.Stop()
+			select {
+			case <-s.done:
+				return
+			case <-timer.C:
+				_ = signalProcessGroup(process, syscall.SIGKILL)
+			}
+		}()
 	}
 }
 

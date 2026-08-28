@@ -242,11 +242,11 @@ func fixtureDeclaredCapabilities() map[string]manifest.CapabilityDescriptor {
 	return map[string]manifest.CapabilityDescriptor{
 		"health": {Version: 1, MaxInFlight: 4},
 		"capture_turn": {
-			Version: 1, Roles: []string{"user", "assistant"}, MaxRequestBytes: 1 << 20,
+			Version: 1, Roles: []string{"user", "assistant"}, MaxRequestBytes: 3800 << 10,
 			MaxInFlight: 4, ReplaySafe: false, Ordering: "turn",
 		},
 		"recall": {
-			Version: 1, Scopes: []string{"user"}, MaxRequestBytes: 1 << 20,
+			Version: 1, Scopes: []string{"user"}, MaxRequestBytes: 3800 << 10,
 			MaxResultItems: 10, MaxInFlight: 4,
 		},
 	}
