@@ -1,0 +1,30 @@
+api_version: mlink.provider/v1
+provider_id: dev.mlink.tencentdb
+name: tencentdb
+display_name: TencentDB MemoryCore
+version: 0.1.0
+entrypoint: ["mlink", "provider", "run", "tencentdb"]
+protocol: stdio-jsonrpc
+protocol_versions: ["1.0"]
+backend_compat:
+  product: tencentdb-memorycore
+  api_versions: ["v3"]
+declared_capabilities:
+  health:
+    version: 1
+    max_in_flight: 4
+  capture_turn:
+    version: 1
+    roles: [user, assistant]
+    max_request_bytes: 1048576
+    max_in_flight: 4
+    replay_safe: false
+    ordering: turn
+  recall:
+    version: 1
+    scopes: [user, agent]
+    max_request_bytes: 262144
+    max_result_items: 20
+    max_in_flight: 4
+config_schema: tencentdb-config.schema.json
+executable_sha256: bundled
