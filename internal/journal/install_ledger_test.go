@@ -46,6 +46,13 @@ func TestInstallationLedgerPersistsAndListsVerifiedBackup(t *testing.T) {
 	if !reflect.DeepEqual(listed, []install.Backup{want}) {
 		t.Fatalf("listed = %#v", listed)
 	}
+	summaries, err := ledger.ListBackupSummaries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].BackupID != want.PlanID || summaries[0].Resources != 1 {
+		t.Fatalf("summaries = %#v", summaries)
+	}
 
 	var backupPath string
 	if err := store.db.QueryRowContext(context.Background(), `

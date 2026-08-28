@@ -13,6 +13,7 @@ import (
 	"mlink/internal/config"
 	"mlink/internal/doctor"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 )
 
 type fakeApplication struct {
@@ -22,6 +23,8 @@ type fakeApplication struct {
 	installCalls int
 	status       app.Status
 	report       doctor.Report
+	drift        app.DriftReport
+	backups      []journal.BackupSummary
 }
 
 func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
@@ -59,6 +62,14 @@ func (application *fakeApplication) Status(context.Context) (app.Status, error) 
 
 func (application *fakeApplication) Doctor(context.Context, []app.Agent) (doctor.Report, error) {
 	return application.report, nil
+}
+
+func (application *fakeApplication) ConfigDiff(context.Context) (app.DriftReport, error) {
+	return application.drift, nil
+}
+
+func (application *fakeApplication) ListBackups(context.Context) ([]journal.BackupSummary, error) {
+	return application.backups, nil
 }
 
 func TestRunPreservesTencentDBProviderCommand(t *testing.T) {
@@ -144,6 +155,27 @@ func TestDoctorReturnsPendingActionExitCode(t *testing.T) {
 	code := Run(context.Background(), []string{"doctor", "codex", "--json"}, Dependencies{App: application, Stdout: stdout, Stderr: io.Discard})
 	if code != 4 || !strings.Contains(stdout.String(), `"code": "awaiting_trust"`) {
 		t.Fatalf("code/output = %d/%s", code, stdout)
+	}
+}
+
+func TestConfigDiffAndBackupListRenderJSON(t *testing.T) {
+	application := &fakeApplication{
+		drift:   app.DriftReport{Resources: []app.DriftResource{{OwnerID: "owner", Target: "/target", State: app.DriftModified}}},
+		backups: []journal.BackupSummary{{BackupID: "plan_backup", Resources: 8}},
+	}
+	for name, args := range map[string][]string{
+		"diff":    {"config", "diff", "--json"},
+		"backups": {"backup", "list", "--json"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout := &bytes.Buffer{}
+			if code := Run(context.Background(), args, Dependencies{App: application, Stdout: stdout, Stderr: io.Discard}); code != 0 {
+				t.Fatalf("code = %d", code)
+			}
+			if !strings.Contains(stdout.String(), "modified") && !strings.Contains(stdout.String(), "plan_backup") {
+				t.Fatalf("output = %s", stdout)
+			}
+		})
 	}
 }
 

@@ -93,6 +93,10 @@ func (ledger *memoryLedger) RecordOwned(_ context.Context, resource install.Owne
 	return nil
 }
 
+func (ledger *memoryLedger) ListOwned(context.Context) ([]install.OwnedResource, error) {
+	return append([]install.OwnedResource(nil), ledger.owned...), nil
+}
+
 func (ledger *memoryLedger) RecordInstallPlan(_ context.Context, planID string, agents []string) error {
 	ledger.activePlanID = planID
 	ledger.activeAgents = append([]string(nil), agents...)

@@ -48,6 +48,49 @@ func (runtime *runtimeApplication) Status(ctx context.Context) (app.Status, erro
 	return service.Status(ctx)
 }
 
+func (runtime *runtimeApplication) ConfigDiff(ctx context.Context) (app.DriftReport, error) {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return app.DriftReport{}, err
+	}
+	defer store.Close()
+	ledger, err := journal.NewInstallationLedger(store, runtime.paths.Backups)
+	if err != nil {
+		return app.DriftReport{}, err
+	}
+	status, err := runtime.Status(ctx)
+	if err != nil {
+		return app.DriftReport{}, err
+	}
+	request := defaultInstallRequest()
+	for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes} {
+		if status.Adapters[agent] {
+			request.Agents = append(request.Agents, agent)
+		}
+	}
+	if len(request.Agents) == 0 {
+		return app.DriftReport{}, errors.New("MLink has no active Adapter installation")
+	}
+	service, _, err := runtime.prepare(ctx, request, ledger)
+	if err != nil {
+		return app.DriftReport{}, err
+	}
+	return service.ConfigDiff(ctx)
+}
+
+func (runtime *runtimeApplication) ListBackups(ctx context.Context) ([]journal.BackupSummary, error) {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	ledger, err := journal.NewInstallationLedger(store, runtime.paths.Backups)
+	if err != nil {
+		return nil, err
+	}
+	return ledger.ListBackupSummaries(ctx)
+}
+
 func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Agent) (doctor.Report, error) {
 	status, err := runtime.Status(ctx)
 	if err != nil {

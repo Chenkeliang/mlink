@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"mlink/internal/install"
 )
@@ -27,6 +28,12 @@ type backupMetadata struct {
 	OperationID string `json:"operation_id"`
 	Mode        uint32 `json:"mode"`
 	Existed     bool   `json:"existed"`
+}
+
+type BackupSummary struct {
+	BackupID  string    `json:"backup_id"`
+	Resources int       `json:"resources"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func NewInstallationLedger(store *Store, directory string) (*InstallationLedger, error) {
@@ -154,6 +161,31 @@ func (ledger *InstallationLedger) LatestBackupID(ctx context.Context) (string, e
 		return "", fmt.Errorf("load latest backup ID: %w", err)
 	}
 	return backupID, nil
+}
+
+func (ledger *InstallationLedger) ListBackupSummaries(ctx context.Context) ([]BackupSummary, error) {
+	rows, err := ledger.store.db.QueryContext(ctx, `
+		SELECT backup_id, count(*), min(created_at)
+		FROM backup_artifacts GROUP BY backup_id ORDER BY min(created_at) DESC, backup_id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list backup summaries: %w", err)
+	}
+	defer rows.Close()
+	var summaries []BackupSummary
+	for rows.Next() {
+		var summary BackupSummary
+		var createdAt string
+		if err := rows.Scan(&summary.BackupID, &summary.Resources, &createdAt); err != nil {
+			return nil, err
+		}
+		parsed, err := parseTime(createdAt)
+		if err != nil {
+			return nil, err
+		}
+		summary.CreatedAt = parsed
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
 }
 
 func (ledger *InstallationLedger) RecordInstallPlan(ctx context.Context, planID string, agents []string) error {

@@ -70,6 +70,9 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if len(args) > 0 && args[0] == "doctor" {
 		return runDoctor(ctx, args[1:], deps)
 	}
+	if len(args) > 0 && args[0] == "config" {
+		return runConfig(ctx, args[1:], deps)
+	}
 	if len(args) == 3 && args[0] == "hook" && args[1] == "codex" {
 		if deps.RunCodexHook == nil || deps.RunCodexHook(ctx, args[2]) != nil {
 			writeLine(deps.Stderr, "mlink codex hook failed")
