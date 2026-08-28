@@ -2,31 +2,24 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	"io"
 	"os"
-	"slices"
 
+	"mlink/internal/cli"
 	"mlink/internal/provider/server"
 	"mlink/internal/provider/tencentdb"
 )
 
 func main() {
-	err := dispatch(os.Args[1:], func() error {
-		return server.New(tencentdb.NewServerHandler()).Serve(context.Background(), os.Stdin, os.Stdout)
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mlink provider command failed")
-		os.Exit(1)
-	}
+	os.Exit(cli.Run(context.Background(), os.Args[1:], runDependencies(os.Stdout, os.Stderr, func(ctx context.Context) error {
+		return server.New(tencentdb.NewServerHandler()).Serve(ctx, os.Stdin, os.Stdout)
+	})))
 }
 
-func dispatch(args []string, serveTencentDB func() error) error {
-	if !slices.Equal(args, []string{"provider", "run", "tencentdb"}) {
-		return errors.New("unsupported MLink command")
+func runDependencies(stdout, stderr io.Writer, serveTencentDB func(context.Context) error) cli.Dependencies {
+	return cli.Dependencies{
+		Stdout:         stdout,
+		Stderr:         stderr,
+		ServeTencentDB: serveTencentDB,
 	}
-	if serveTencentDB == nil {
-		return errors.New("TencentDB Provider Server is unavailable")
-	}
-	return serveTencentDB()
 }

@@ -1,41 +1,23 @@
 package main
 
 import (
-	"errors"
+	"bytes"
+	"context"
 	"testing"
+
+	"mlink/internal/cli"
 )
 
-func TestDispatchRunsOnlyExactTencentDBProviderCommand(t *testing.T) {
+func TestRunDependenciesStartTencentDBProvider(t *testing.T) {
 	calls := 0
-	serve := func() error {
+	deps := runDependencies(&bytes.Buffer{}, &bytes.Buffer{}, func(context.Context) error {
 		calls++
 		return nil
-	}
-	if err := dispatch([]string{"provider", "run", "tencentdb"}, serve); err != nil {
-		t.Fatalf("dispatch() error = %v", err)
+	})
+	if code := cli.Run(context.Background(), []string{"provider", "run", "tencentdb"}, deps); code != 0 {
+		t.Fatalf("Run() code = %d", code)
 	}
 	if calls != 1 {
 		t.Fatalf("serve calls = %d, want 1", calls)
-	}
-	for _, args := range [][]string{
-		nil,
-		{"provider", "run"},
-		{"provider", "run", "tencentdb", "--unsafe"},
-		{"provider", "run", "other"},
-		{"doctor"},
-	} {
-		if err := dispatch(args, serve); err == nil {
-			t.Fatalf("dispatch(%q) error = nil, want rejection", args)
-		}
-	}
-	if calls != 1 {
-		t.Fatalf("invalid commands invoked serve; calls = %d", calls)
-	}
-}
-
-func TestDispatchReturnsProviderServerFailure(t *testing.T) {
-	want := errors.New("serve failed")
-	if err := dispatch([]string{"provider", "run", "tencentdb"}, func() error { return want }); !errors.Is(err, want) {
-		t.Fatalf("dispatch() error = %v, want %v", err, want)
 	}
 }
