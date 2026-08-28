@@ -573,7 +573,7 @@ func (s *processSession) readerLoop() {
 			pending.response <- callResult{err: &CallError{
 				Code: message.Error.ErrorCode, RequestID: pending.requestID,
 				IdempotencyKey: pending.idempotencyKey, Delivery: DeliverySent,
-				ReplaySafe: s.captureReplaySafe(), Message: message.Error.Message,
+				ReplaySafe: s.captureReplaySafe(), Message: safeCallMessage(message.Error.ErrorCode),
 			}}
 			continue
 		}
@@ -855,4 +855,29 @@ func safeStartError(prefix string, err error) error {
 		return fmt.Errorf("%s: %s", prefix, callErr.Code)
 	}
 	return fmt.Errorf("%s failed", prefix)
+}
+
+func safeCallMessage(code protocol.ErrorCode) string {
+	switch code {
+	case protocol.ErrorConfiguration:
+		return "provider configuration is invalid"
+	case protocol.ErrorAuthenticationFailed:
+		return "provider authentication failed"
+	case protocol.ErrorInvalidIdentity:
+		return "provider rejected identity"
+	case protocol.ErrorUnsupportedCapability:
+		return "provider capability is unavailable"
+	case protocol.ErrorDeadlineExceeded:
+		return "provider request deadline exceeded"
+	case protocol.ErrorRateLimited:
+		return "provider rate limited the request"
+	case protocol.ErrorTemporarilyUnavailable:
+		return "provider is temporarily unavailable"
+	case protocol.ErrorPermanentFailure:
+		return "provider request failed"
+	case protocol.ErrorAmbiguousResult:
+		return "provider result is ambiguous"
+	default:
+		return "provider protocol error"
+	}
 }

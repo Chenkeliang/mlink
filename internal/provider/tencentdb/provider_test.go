@@ -494,6 +494,11 @@ func TestProviderRecallReturnsPartialBundleOnSharedHTTPClientTimeout(t *testing.
 	if !bundle.Partial || len(bundle.Warnings) != 2 || len(bundle.Items) != 1 || bundle.Items[0].ID != "l1:mem-a" {
 		t.Fatalf("bundle = %#v, want one L1 item and two shared timeout warnings", bundle)
 	}
+	for _, warning := range bundle.Warnings {
+		if strings.Contains(warning, server.URL) || strings.Contains(warning, "/v3/") {
+			t.Fatalf("warning exposed backend transport detail: %q", warning)
+		}
+	}
 }
 
 func TestProviderRecallRejectsInvalidInputBeforeNetwork(t *testing.T) {

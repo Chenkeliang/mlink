@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"mlink/internal/connection"
 	"mlink/internal/model"
 	"mlink/internal/provider/manifest"
+	"mlink/internal/provider/protocol"
 )
 
 func TestSessionRunsProviderLifecycle(t *testing.T) {
@@ -127,6 +129,27 @@ func TestSessionFaultsWhenBusinessResponseEchoesSecret(t *testing.T) {
 	}
 	if session.State() != StateFaulted {
 		t.Fatalf("State() = %q, want faulted", session.State())
+	}
+}
+
+func TestSessionDoesNotExposeProviderErrorMessage(t *testing.T) {
+	session := startFixtureSession(t, "private-health-error", "token-safe-error")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = session.Shutdown(ctx)
+	})
+
+	_, err := session.Health(context.Background())
+	var callErr *CallError
+	if !errors.As(err, &callErr) {
+		t.Fatalf("Health() error = %v, want CallError", err)
+	}
+	if callErr.Code != protocol.ErrorTemporarilyUnavailable {
+		t.Fatalf("CallError.Code = %q", callErr.Code)
+	}
+	if strings.Contains(callErr.Message, "private.memory.invalid") || len(callErr.Message) > 128 {
+		t.Fatalf("CallError.Message exposed Provider text: %q", callErr.Message)
 	}
 }
 

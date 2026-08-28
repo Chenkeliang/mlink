@@ -66,6 +66,12 @@ func (h *fixtureHandler) Initialize(_ context.Context, params protocol.Initializ
 }
 
 func (h *fixtureHandler) Health(context.Context, protocol.HealthParams) (protocol.HealthResult, error) {
+	if h.mode == "private-health-error" {
+		return protocol.HealthResult{}, &server.HandlerError{
+			Code: protocol.ErrorTemporarilyUnavailable,
+			Message: strings.Repeat("x", 1024) + " https://private.memory.invalid/secrets/token-file",
+		}
+	}
 	diagnostics := []string(nil)
 	if h.mode == "echo-health-secret" {
 		diagnostics = []string{h.secret}

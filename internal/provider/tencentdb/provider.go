@@ -133,7 +133,7 @@ func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (mod
 		result := shared[layer]
 		if result.err != nil {
 			bundle.Partial = true
-			bundle.Warnings = append(bundle.Warnings, fmt.Sprintf("%s recall unavailable: %v", result.layer, result.err))
+			bundle.Warnings = append(bundle.Warnings, fmt.Sprintf("%s recall unavailable", result.layer))
 			continue
 		}
 		appendUniqueItems(&bundle, seen, result.items, limit)
