@@ -20,6 +20,8 @@ type liveFixture struct {
 	canary   string
 }
 
+var errMissingLiveConfig = errors.New("MLINK_TEST_MEMORYCORE_URL and MLINK_TEST_MEMORYCORE_TOKEN are required")
+
 func TestLiveNewUserIsEmpty(t *testing.T) {
 	provider, identity := newLiveProvider(t, "empty")
 	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
@@ -178,6 +180,18 @@ func TestLiveMissingIdentityIsRejectedLocally(t *testing.T) {
 	}
 }
 
+func TestLiveInvalidConfigurationIsNotMissingConfig(t *testing.T) {
+	t.Setenv("MLINK_TEST_MEMORYCORE_URL", "://invalid")
+	t.Setenv("MLINK_TEST_MEMORYCORE_TOKEN", "test-token")
+	_, _, err := makeLiveProvider("invalid-config")
+	if err == nil {
+		t.Fatal("makeLiveProvider() error = nil, want invalid URL error")
+	}
+	if errors.Is(err, errMissingLiveConfig) {
+		t.Fatalf("makeLiveProvider() error = %v, invalid URL must not be treated as missing configuration", err)
+	}
+}
+
 func TestLiveTransientInventoryIsNotPromotedToL1(t *testing.T) {
 	provider, identity := newLiveProvider(t, "inventory")
 	messages := make([]model.Message, 0, 10)
@@ -225,8 +239,11 @@ func seedLiveFixture(t *testing.T, suffix string) *liveFixture {
 func newLiveProvider(t *testing.T, suffix string) (*Provider, model.IdentityScope) {
 	t.Helper()
 	provider, identity, err := makeLiveProvider(suffix)
-	if err != nil {
+	if errors.Is(err, errMissingLiveConfig) {
 		t.Skip(err)
+	}
+	if err != nil {
+		t.Fatalf("create live Provider: %v", err)
 	}
 	return provider, identity
 }
@@ -235,7 +252,7 @@ func makeLiveProvider(suffix string) (*Provider, model.IdentityScope, error) {
 	baseURL := strings.TrimSpace(os.Getenv("MLINK_TEST_MEMORYCORE_URL"))
 	token := strings.TrimSpace(os.Getenv("MLINK_TEST_MEMORYCORE_TOKEN"))
 	if baseURL == "" || token == "" {
-		return nil, model.IdentityScope{}, errors.New("MLINK_TEST_MEMORYCORE_URL and MLINK_TEST_MEMORYCORE_TOKEN are required")
+		return nil, model.IdentityScope{}, errMissingLiveConfig
 	}
 	prefix := strings.TrimSpace(os.Getenv("MLINK_TEST_MEMORYCORE_SERVICE_PREFIX"))
 	if prefix == "" {

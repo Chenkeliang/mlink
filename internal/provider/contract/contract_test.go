@@ -65,7 +65,10 @@ func (p *memoryProvider) Recall(ctx context.Context, request model.RecallRequest
 
 type leakyProvider struct{}
 
-func (leakyProvider) CaptureTurn(context.Context, model.Turn) (model.WriteReceipt, error) {
+func (leakyProvider) CaptureTurn(_ context.Context, turn model.Turn) (model.WriteReceipt, error) {
+	if err := turn.Identity.ValidateForCapture(); err != nil {
+		return model.WriteReceipt{}, err
+	}
 	return model.WriteReceipt{AcceptedIDs: []string{"accepted"}}, nil
 }
 
@@ -76,12 +79,8 @@ func (leakyProvider) Recall(ctx context.Context, request model.RecallRequest) (m
 	if err := request.Identity.ValidateForRecall(); err != nil {
 		return model.ContextBundle{}, err
 	}
-	if request.Query == "duplicate" {
-		item := model.ContextItem{ID: "l1:duplicate", Scope: model.ScopeUser, Text: "duplicate", Source: "fixture:l1"}
-		return model.ContextBundle{Items: []model.ContextItem{item, item}}, nil
-	}
-	if request.IncludeAgentShared {
-		return model.ContextBundle{Items: []model.ContextItem{{ID: "l3:persona", Scope: model.ScopeAgent, Text: "shared", Source: "fixture:l3"}}}, nil
+	if request.Identity.UserID != "user-b" {
+		return model.ContextBundle{}, nil
 	}
 	return model.ContextBundle{Items: []model.ContextItem{{
 		ID: "l1:user-a", Scope: model.ScopeUser, Text: "USER_A_CANARY", Source: "fixture:l1",

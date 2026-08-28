@@ -127,12 +127,6 @@ func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (mod
 	}
 	for _, layer := range []string{"L2", "L3"} {
 		result := shared[layer]
-		if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
-			return model.ContextBundle{}, result.err
-		}
-	}
-	for _, layer := range []string{"L2", "L3"} {
-		result := shared[layer]
 		if result.err != nil {
 			bundle.Partial = true
 			bundle.Warnings = append(bundle.Warnings, fmt.Sprintf("%s recall unavailable: %v", result.layer, result.err))
@@ -190,10 +184,12 @@ func (p *Provider) recallL2(ctx context.Context, request model.RecallRequest, li
 		return nil, err
 	}
 	items := make([]model.ContextItem, 0, len(listed.Entries))
+	readAttempts := 0
 	for _, entry := range listed.Entries {
-		if entry.Path == "" || strings.HasSuffix(entry.Path, "/") || len(items) >= limit {
+		if entry.Path == "" || strings.HasSuffix(entry.Path, "/") || readAttempts >= limit {
 			continue
 		}
+		readAttempts++
 		readBody := recallScopeBody(request)
 		readBody["path"] = entry.Path
 		var file struct {

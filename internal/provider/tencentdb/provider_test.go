@@ -358,6 +358,49 @@ func TestProviderRecallMergesSharedLayersDeterministicallyWithinRemainingBudget(
 	}
 }
 
+func TestProviderRecallLimitsScenarioReadAttemptsToRemainingBudget(t *testing.T) {
+	var mu sync.Mutex
+	scenarioReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/atomic/search":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"items":[{"id":"mem-a","type":"instruction","content":"private"}]}}`))
+		case "/v3/scenario/ls":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"entries":[{"path":"empty-a.md"},{"path":"empty-b.md"}]}}`))
+		case "/v3/scenario/read":
+			mu.Lock()
+			scenarioReads++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"content":""}}`))
+		case "/v3/core/read":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"content":"profile"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
+		Identity:           model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+		Query:              "probe",
+		MaxItems:           2,
+		IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall() error = %v", err)
+	}
+	if len(bundle.Items) != 2 || bundle.Items[1].ID != "l3:persona" {
+		t.Fatalf("item IDs = %#v, want L1 followed by L3 after empty L2", contextItemIDs(bundle.Items))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if scenarioReads != 1 {
+		t.Fatalf("scenario read attempts = %d, want remaining budget of 1", scenarioReads)
+	}
+}
+
 func TestProviderRecallSkipsL1ItemsWithoutNativeID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -409,6 +452,41 @@ func TestProviderRecallReturnsPartialBundleWhenSharedLayerFails(t *testing.T) {
 	}
 	if len(bundle.Items) != 2 {
 		t.Fatalf("item count = %d, want valid L1 and L3", len(bundle.Items))
+	}
+}
+
+func TestProviderRecallReturnsPartialBundleOnSharedHTTPClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/atomic/search":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"items":[{"id":"mem-a","type":"instruction","content":"private"}]}}`))
+		case "/v3/scenario/ls", "/v3/core/read":
+			time.Sleep(100 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL, Token: "test-token", ServiceID: "service-a",
+		HTTPClient: &http.Client{Timeout: 20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	bundle, err := NewProvider(client).Recall(context.Background(), model.RecallRequest{
+		Identity:           model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+		Query:              "probe",
+		IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall() error = %v, want L1 fail-open partial success", err)
+	}
+	if !bundle.Partial || len(bundle.Warnings) != 2 || len(bundle.Items) != 1 || bundle.Items[0].ID != "l1:mem-a" {
+		t.Fatalf("bundle = %#v, want one L1 item and two shared timeout warnings", bundle)
 	}
 }
 
