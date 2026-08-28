@@ -340,6 +340,8 @@ new → starting → initializing → ready → stopping → stopped
 
 Provider 后续返回已移除 ID 时记录一次不含正文的迟到计数并丢弃。ID 不复用，因此不会把迟到响应交给新请求。
 
+Provider Server 按十进制数值单调递增校验请求 ID，只保留一个最高水位；重复或倒序 ID 返回 `protocol_error`。历史请求数不会转化为常驻内存增长。
+
 ### 8.4 启动环境与 Secret
 
 进程使用 `exec.Command` 参数数组，不调用 Shell。Host 显式构造最小环境：只继承 `PATH`、`LANG` 和 `LC_*`；`HOME` 设置为该 Provider revision 的 MLink 数据目录，`TMPDIR` 设置为 MLink 管理的临时目录，不继承用户真实 HOME、Agent/Broker API Key、模型地址及认证变量。工作目录固定为已验证的 Provider 包目录。

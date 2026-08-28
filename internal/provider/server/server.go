@@ -68,7 +68,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 
 	initialized := false
 	stopping := false
-	seenIDs := make(map[string]struct{})
+	var requestIDs requestIDTracker
 	limits := make(map[string]chan struct{})
 	active := make(map[string]activeCall)
 	completed := make(chan completion, maximumConcurrency+1)
@@ -97,7 +97,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err != nil {
 					return err
 				}
-				seenIDs[message.ID] = struct{}{}
+				if !requestIDs.Accept(message.ID) {
+					return errors.New("initialize request ID is invalid")
+				}
 				if !successful {
 					if err := writeAndWait(ctx, writeCh, writerErr, payload); err != nil {
 						return err
@@ -124,14 +126,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			if message.Kind != protocol.MessageRequest {
 				return errors.New("provider server received a JSON-RPC response")
 			}
-			if _, duplicate := seenIDs[message.ID]; duplicate {
-				payload := errorPayload(message.ID, protocol.ErrorProtocol, "duplicate JSON-RPC request ID")
+			if !requestIDs.Accept(message.ID) {
+				payload := errorPayload(message.ID, protocol.ErrorProtocol, "duplicate or out-of-order JSON-RPC request ID")
 				if err := queueOutbound(ctx, writeCh, outbound{payload: payload}); err != nil {
 					return err
 				}
 				continue
 			}
-			seenIDs[message.ID] = struct{}{}
 			if message.Method == "initialize" {
 				payload := errorPayload(message.ID, protocol.ErrorProtocol, "initialize already completed")
 				if err := queueOutbound(ctx, writeCh, outbound{payload: payload}); err != nil {

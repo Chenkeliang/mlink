@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -212,6 +213,42 @@ func TestServerRejectsDuplicateRequestID(t *testing.T) {
 		t.Fatalf("first response = %#v", first)
 	}
 	harness.shutdown(t, "3")
+}
+
+func TestServerRejectsOutOfOrderRequestID(t *testing.T) {
+	harness := newHarness(t, &testHandler{})
+	harness.initialize(t)
+	harness.sendRequest(t, "3", "health", protocol.HealthParams{Meta: futureMeta("health-three")})
+	if response := harness.readResponse(t); response.ID != "3" || response.Error != nil {
+		t.Fatalf("request 3 response = %#v", response)
+	}
+	harness.sendRequest(t, "2", "health", protocol.HealthParams{Meta: futureMeta("health-two")})
+	response := harness.readResponse(t)
+	if response.ID != "2" || response.Error == nil || response.Error.ErrorCode != protocol.ErrorProtocol {
+		t.Fatalf("out-of-order response = %#v", response)
+	}
+	harness.shutdown(t, "4")
+}
+
+func TestRequestIDTrackerKeepsOnlyHighestWatermark(t *testing.T) {
+	var tracker requestIDTracker
+	for value := 1; value <= 100_000; value++ {
+		if !tracker.Accept(strconv.Itoa(value)) {
+			t.Fatalf("Accept(%d) = false", value)
+		}
+	}
+	if tracker.highest != "100000" {
+		t.Fatalf("highest = %q, want 100000", tracker.highest)
+	}
+	for _, replay := range []string{"1", "99999", "100000", "0100000"} {
+		if tracker.Accept(replay) {
+			t.Fatalf("Accept(%q) accepted duplicate or older ID", replay)
+		}
+	}
+	const huge = "900719925474099312345678901234567890"
+	if !tracker.Accept(huge) || tracker.highest != huge {
+		t.Fatalf("large ID watermark = %q", tracker.highest)
+	}
 }
 
 func TestServerShutdownWaitsForActiveHandlersAndRejectsNewCalls(t *testing.T) {
