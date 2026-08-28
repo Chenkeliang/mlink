@@ -29,7 +29,6 @@ func TestParseMessageRejectsInvalidJSONRPC(t *testing.T) {
 		{name: "wrong version", raw: `{"jsonrpc":"1.0","id":"1","method":"health","params":{}}`},
 		{name: "numeric id", raw: `{"jsonrpc":"2.0","id":1,"method":"health","params":{}}`},
 		{name: "non decimal id", raw: `{"jsonrpc":"2.0","id":"request-1","method":"health","params":{}}`},
-		{name: "unknown method", raw: `{"jsonrpc":"2.0","id":"1","method":"execute","params":{}}`},
 		{name: "request has result", raw: `{"jsonrpc":"2.0","id":"1","method":"health","params":{},"result":{}}`},
 		{name: "response both result and error", raw: `{"jsonrpc":"2.0","id":"1","result":{},"error":{"code":-32000,"message":"failed","data":{"code":"permanent_failure"}}}`},
 		{name: "response neither result nor error", raw: `{"jsonrpc":"2.0","id":"1"}`},
@@ -42,6 +41,19 @@ func TestParseMessageRejectsInvalidJSONRPC(t *testing.T) {
 				t.Fatal("ParseMessage() error = nil, want validation error")
 			}
 		})
+	}
+}
+
+func TestParseMessageAcceptsUnknownRequestMethodForServerDispatch(t *testing.T) {
+	message, err := ParseMessage([]byte(`{"jsonrpc":"2.0","id":"2","method":"future_recall","params":{}}`))
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+	if message.Kind != MessageRequest || message.ID != "2" || message.Method != "future_recall" {
+		t.Fatalf("message = %#v", message)
+	}
+	if _, err := EncodeRequest("2", "future_recall", map[string]string{}); err == nil {
+		t.Fatal("EncodeRequest() accepted a method unsupported by this Host")
 	}
 }
 

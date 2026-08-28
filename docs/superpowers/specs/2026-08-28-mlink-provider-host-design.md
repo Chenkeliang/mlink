@@ -197,7 +197,7 @@ Content-Length: <decimal bytes>\r\n
 - Header 名称按 ASCII 大小写不敏感比较；`Content-Length` 在任意大小写组合下合计必须出现一次，且为非负十进制整数。
 - Payload 必须是合法 UTF-8 和单个 JSON-RPC 2.0 对象。
 - 不支持批量 JSON-RPC。
-- `jsonrpc` 必须严格等于 `"2.0"`；响应必须恰好包含 result 或 error 之一。Host 只发送已知方法，Provider Server 只接受已知方法及 `$/cancelRequest` notification。
+- `jsonrpc` 必须严格等于 `"2.0"`；响应必须恰好包含 result 或 error 之一。Host 只发送已知方法；Provider Server 解析任意非空请求方法，但只分发已协商方法，未知方法返回 `unsupported_capability`，`$/cancelRequest` 是唯一 notification。
 - stdout 出现非帧文本、重复长度、截断 payload 或超限帧时，Session 进入 `faulted`。
 - stderr 不参与协议解析。
 
@@ -513,7 +513,7 @@ Adapter 的最终 fail-open 行为属于后续 Broker/Adapter 切片；本切片
 - 跨语言 ID 保持十进制字符串；超大计数值不会在 Python 中失真。
 - 已发行但已结束的 ID 被丢弃；未发行或非法 ID 使 Session faulted。
 - header 超限、payload 超限、大小写变体重复/缺失 Content-Length、非法 UTF-8、截断、stdout 垃圾全部失败。
-- 非 `2.0`、batch、result/error 同时出现或都缺失、未知方法均失败。
+- 非 `2.0`、batch、result/error 同时出现或都缺失均失败；初始化后的未知方法返回稳定的 `unsupported_capability` 且 Server 继续服务。
 - writer 在并发调用下不产生交错帧。
 
 ### 13.4 Session

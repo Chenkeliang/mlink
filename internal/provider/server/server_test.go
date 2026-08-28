@@ -230,6 +230,20 @@ func TestServerRejectsOutOfOrderRequestID(t *testing.T) {
 	harness.shutdown(t, "4")
 }
 
+func TestServerReturnsUnsupportedCapabilityForUnknownMethod(t *testing.T) {
+	harness := newHarness(t, &testHandler{})
+	harness.initialize(t)
+	raw := []byte(`{"jsonrpc":"2.0","id":"2","method":"future_recall","params":{}}`)
+	if err := harness.encoder.WriteFrame(raw); err != nil {
+		t.Fatalf("WriteFrame() error = %v", err)
+	}
+	response := harness.readResponse(t)
+	if response.ID != "2" || response.Error == nil || response.Error.ErrorCode != protocol.ErrorUnsupportedCapability {
+		t.Fatalf("unknown method response = %#v", response)
+	}
+	harness.shutdown(t, "3")
+}
+
 func TestRequestIDTrackerKeepsOnlyHighestWatermark(t *testing.T) {
 	var tracker requestIDTracker
 	for value := 1; value <= 100_000; value++ {

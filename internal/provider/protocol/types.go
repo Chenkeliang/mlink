@@ -168,9 +168,6 @@ func ParseMessage(raw []byte) (Message, error) {
 			}
 			return Message{Kind: MessageNotification, Method: wire.Method, Params: wire.Params}, nil
 		}
-		if _, known := knownRequestMethods[wire.Method]; !known {
-			return Message{}, fmt.Errorf("unknown JSON-RPC method %q", wire.Method)
-		}
 		id, err := parseID(wire.ID)
 		if err != nil {
 			return Message{}, err
