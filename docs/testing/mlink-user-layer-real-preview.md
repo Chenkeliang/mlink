@@ -8,8 +8,8 @@ Status: previewed; not applied
 
 - Git branch: `feat_product_design`
 - Candidate path: `/tmp/mlink-user-layer-preview`
-- Candidate SHA-256: `c988d0346a6d65619347c5adace24deec7b7c651181f996b5990a08d057e444f`
-- ChangeSet: `plan_f7f99973b2e9247ba34ba84291`
+- Candidate SHA-256: `e40373afdbb78ccd3d55bc8694d2155af6ec320c6612e79db71b1ad6df468f9b`
+- ChangeSet: `plan_5b496cbe0ed3a1c09525934f9c`
 - Provider: `dev.mlink.tencentdb@0.1.0`
 - MemoryCore endpoint: `http://127.0.0.1:8420`
 - Hermes target: `hermes-agent-env`, Hermes Agent `v0.20.5`
