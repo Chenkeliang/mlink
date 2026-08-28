@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net"
 	"reflect"
 	"testing"
 )
@@ -50,6 +51,33 @@ func TestDetectUsesHermesOfficialConfigPath(t *testing.T) {
 	}
 	if got := callArgs(runner.calls); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %#v", got)
+	}
+}
+
+func TestDetectBridgeSelectsHostAddressOnGuestSubnet(t *testing.T) {
+	runner := &fakeOrbRunner{results: map[string][]byte{
+		"orb\x00-m\x00hermes-agent-env\x00ip\x00-4\x00route\x00show\x00dev\x00eth0\x00scope\x00link": []byte("192.168.139.0/24 proto kernel scope link src 192.168.139.219\n"),
+	}}
+	bridge, err := DetectBridge(context.Background(), runner, "hermes-agent-env", []net.Addr{
+		&net.IPNet{IP: net.ParseIP("192.168.129.233"), Mask: net.CIDRMask(22, 32)},
+		&net.IPNet{IP: net.ParseIP("192.168.139.3"), Mask: net.CIDRMask(23, 32)},
+	}, 8097)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bridge.ListenAddress != "192.168.139.3:8097" || bridge.Endpoint != "http://192.168.139.3:8097" {
+		t.Fatalf("bridge = %#v", bridge)
+	}
+}
+
+func TestDetectBridgeFailsClosedWithoutMatchingHostAddress(t *testing.T) {
+	runner := &fakeOrbRunner{results: map[string][]byte{
+		"orb\x00-m\x00hermes-agent-env\x00ip\x00-4\x00route\x00show\x00dev\x00eth0\x00scope\x00link": []byte("192.168.139.0/24 proto kernel scope link src 192.168.139.219\n"),
+	}}
+	if _, err := DetectBridge(context.Background(), runner, "hermes-agent-env", []net.Addr{
+		&net.IPNet{IP: net.ParseIP("192.168.129.233"), Mask: net.CIDRMask(22, 32)},
+	}, 8097); err == nil {
+		t.Fatal("DetectBridge() error = nil")
 	}
 }
 

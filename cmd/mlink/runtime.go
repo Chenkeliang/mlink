@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -75,8 +76,8 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 		Paths:               paths,
 		UID:                 runtime.uid,
 		Secrets:             secret.Keychain{},
-		HermesEndpoint:      environmentDefault("MLINK_HERMES_BROKER_ENDPOINT", "http://host.orb.internal:8097"),
-		HermesListenAddress: environmentDefault("MLINK_HERMES_BROKER_LISTEN", "127.0.0.1:8097"),
+		HermesEndpoint:      environmentDefault("MLINK_HERMES_BROKER_ENDPOINT", ""),
+		HermesListenAddress: environmentDefault("MLINK_HERMES_BROKER_LISTEN", ""),
 		IdentityKey:         identityKey,
 	}
 	dependencies := cli.Dependencies{
@@ -376,6 +377,21 @@ func (runtime *runtimeApplication) prepare(ctx context.Context, request app.Inst
 	}
 	service := runtime.baseService
 	if containsAgent(request.Agents, app.Hermes) {
+		if service.HermesEndpoint == "" || service.HermesListenAddress == "" {
+			if service.HermesEndpoint != "" || service.HermesListenAddress != "" {
+				return nil, app.InstallRequest{}, errors.New("both MLink Hermes Broker endpoint and listen address must be configured together")
+			}
+			hostAddresses, err := net.InterfaceAddrs()
+			if err != nil {
+				return nil, app.InstallRequest{}, fmt.Errorf("inspect host addresses for Hermes bridge: %w", err)
+			}
+			bridge, err := hermes.DetectBridge(ctx, install.LocalTarget{}, machine, hostAddresses, 8097)
+			if err != nil {
+				return nil, app.InstallRequest{}, err
+			}
+			service.HermesEndpoint = bridge.Endpoint
+			service.HermesListenAddress = bridge.ListenAddress
+		}
 		service.HermesGrantToken = deriveHermesGrant(request.SecretInputs[app.MemoryCoreTokenSecret])
 	}
 	service.Target = router

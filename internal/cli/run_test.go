@@ -11,6 +11,7 @@ import (
 
 	"mlink/internal/app"
 	"mlink/internal/config"
+	"mlink/internal/doctor"
 	"mlink/internal/install"
 )
 
@@ -19,6 +20,8 @@ type fakeApplication struct {
 	applyCalls   int
 	appliedPlan  string
 	installCalls int
+	status       app.Status
+	report       doctor.Report
 }
 
 func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
@@ -48,6 +51,14 @@ func (application *fakeApplication) PlanUninstall(context.Context, app.Uninstall
 func (application *fakeApplication) ApplyUninstall(context.Context, string, app.UninstallRequest) error {
 	application.applyCalls++
 	return nil
+}
+
+func (application *fakeApplication) Status(context.Context) (app.Status, error) {
+	return application.status, nil
+}
+
+func (application *fakeApplication) Doctor(context.Context, []app.Agent) (doctor.Report, error) {
+	return application.report, nil
 }
 
 func TestRunPreservesTencentDBProviderCommand(t *testing.T) {
@@ -87,8 +98,6 @@ func TestRunReportsProviderFailureWithoutLeakingDetails(t *testing.T) {
 
 func TestRunRecognizesStillPlannedCommands(t *testing.T) {
 	commands := [][]string{
-		{"status"},
-		{"doctor"},
 		{"hook", "codex"},
 	}
 	for _, args := range commands {
@@ -99,6 +108,28 @@ func TestRunRecognizesStillPlannedCommands(t *testing.T) {
 		if !strings.Contains(stderr.String(), "not implemented") {
 			t.Fatalf("Run(%q) stderr = %q", args, stderr.String())
 		}
+	}
+}
+
+func TestStatusJSONRendersStructuredState(t *testing.T) {
+	application := &fakeApplication{status: app.Status{
+		Installed: true, ActivePlanID: "plan_active", ConnectionID: "local", Adapters: map[app.Agent]bool{app.Codex: true},
+	}}
+	stdout := &bytes.Buffer{}
+	code := Run(context.Background(), []string{"status", "--json"}, Dependencies{App: application, Stdout: stdout, Stderr: io.Discard})
+	if code != 0 || !strings.Contains(stdout.String(), `"active_plan_id": "plan_active"`) || !strings.Contains(stdout.String(), `"codex": true`) {
+		t.Fatalf("code/output = %d/%s", code, stdout)
+	}
+}
+
+func TestDoctorReturnsPendingActionExitCode(t *testing.T) {
+	application := &fakeApplication{report: doctor.Report{Checks: []doctor.Check{
+		{ID: "codex.hook", State: doctor.StatePendingAction, Code: "awaiting_trust"},
+	}}}
+	stdout := &bytes.Buffer{}
+	code := Run(context.Background(), []string{"doctor", "codex", "--json"}, Dependencies{App: application, Stdout: stdout, Stderr: io.Discard})
+	if code != 4 || !strings.Contains(stdout.String(), `"code": "awaiting_trust"`) {
+		t.Fatalf("code/output = %d/%s", code, stdout)
 	}
 }
 

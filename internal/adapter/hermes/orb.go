@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"mlink/internal/install"
@@ -20,6 +22,11 @@ type Detection struct {
 	HermesHome string
 	ConfigPath string
 	Version    string
+}
+
+type Bridge struct {
+	ListenAddress string
+	Endpoint      string
 }
 
 type OrbTarget struct {
@@ -53,6 +60,64 @@ func Detect(ctx context.Context, runner install.CommandRunner, machine string) (
 		ConfigPath: configPath,
 		Version:    strings.TrimSpace(string(versionOutput)),
 	}, nil
+}
+
+func DetectBridge(ctx context.Context, runner install.CommandRunner, machine string, hostAddresses []net.Addr, port int) (Bridge, error) {
+	if !orbMachinePattern.MatchString(machine) {
+		return Bridge{}, errors.New("invalid Orb machine name")
+	}
+	if port < 1 || port > 65535 {
+		return Bridge{}, errors.New("invalid Hermes Broker port")
+	}
+	if runner == nil {
+		runner = install.LocalTarget{}
+	}
+	routes, err := runner.Run(ctx, []string{"orb", "-m", machine, "ip", "-4", "route", "show", "dev", "eth0", "scope", "link"}, nil)
+	if err != nil {
+		return Bridge{}, fmt.Errorf("detect Orb guest subnet: %w", err)
+	}
+	guestNetwork, err := firstIPv4Network(string(routes))
+	if err != nil {
+		return Bridge{}, err
+	}
+	for _, address := range hostAddresses {
+		ip := addressIP(address)
+		if ip == nil || ip.To4() == nil || ip.IsLoopback() || !guestNetwork.Contains(ip) {
+			continue
+		}
+		listen := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+		return Bridge{ListenAddress: listen, Endpoint: "http://" + listen}, nil
+	}
+	return Bridge{}, errors.New("no private host address is reachable from the Orb guest subnet")
+}
+
+func firstIPv4Network(routes string) (*net.IPNet, error) {
+	for _, line := range strings.Split(routes, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.Contains(fields[0], "/") {
+			continue
+		}
+		ip, network, err := net.ParseCIDR(fields[0])
+		if err == nil && ip.To4() != nil {
+			return network, nil
+		}
+	}
+	return nil, errors.New("Orb guest did not report an IPv4 link subnet")
+}
+
+func addressIP(address net.Addr) net.IP {
+	switch value := address.(type) {
+	case *net.IPNet:
+		return value.IP
+	case *net.IPAddr:
+		return value.IP
+	default:
+		host, _, err := net.SplitHostPort(address.String())
+		if err != nil {
+			host = strings.SplitN(address.String(), "/", 2)[0]
+		}
+		return net.ParseIP(host)
+	}
 }
 
 func NewOrbTarget(machine, hermesHome string, runner install.CommandRunner) (*OrbTarget, error) {

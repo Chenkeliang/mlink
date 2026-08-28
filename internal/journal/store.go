@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -39,6 +41,35 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := store.initialize(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	return store, nil
+}
+
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("journal path is required")
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fs.ErrNotExist
+		}
+		return nil, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open journal read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	store := &Store{db: db}
+	if _, err := db.ExecContext(ctx, "PRAGMA query_only=ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("protect read-only journal: %w", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open journal read-only: %w", err)
 	}
 	return store, nil
 }
