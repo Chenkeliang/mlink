@@ -1,6 +1,6 @@
 # MLink MVP 设计规格
 
-- 状态：待用户复核
+- 状态：第二轮架构审查完成，待用户复核
 - 日期：2026-08-28
 - 目标版本：MVP
 - 首批 Agent：Codex、Pi、Hermes Agent
@@ -64,6 +64,7 @@ MVP 不包含以下内容：
 - 不把 SQLite 当作正式记忆库，也不在 MLink 内重新实现语义去重或画像生成。
 - 不强制依赖 MCP。自动召回和写入由 Hook、Extension、Memory Provider 完成。
 - 不首发跨 Provider 迁移执行器；协议和导出格式为后续迁移保留边界。
+- 不首发多 Provider 聚合、双写或自动 fan-out；MVP 中一个 Adapter 绑定一个 Connection，一个 Connection 只绑定一个 Provider 实例。
 
 ## 4. 核心原则
 
@@ -79,7 +80,9 @@ MLink 的所有安装器必须把以下字段视为受保护字段：
 
 安装前后对这些字段做语义对比。只要发生变化，安装失败并恢复 MLink 本次写入的配置。
 
-MemoryCore 自己用于记忆抽取的 LLM 配置属于 MemoryCore 运维范围，不属于 Agent 模型配置，也不由 MLink 管理。
+MemoryCore、Mem0、Hindsight、Graphiti 等后端可能需要自己的 LLM 或 Embedding 配置完成抽取与检索。这些是“记忆后端内部模型”，不属于 Agent 模型链路。MLink 可以根据 Provider Schema 保存其独立 Secret 引用，但绝不读取、复制或自动复用 Agent 的模型凭据；TUI 必须把两者明确分区展示。
+
+安装预览必须展示实际数据路径：将采集哪些消息字段、Provider endpoint 是本地还是远程、已知的后端内部 LLM/Embedding endpoint，以及哪些内容可能离开本机。MLink 只能验证配置与网络目标，不能替第三方 Provider 保证其内部数据处理行为。
 
 ### 4.2 稳定 ID 是身份，昵称只是展示属性
 
@@ -110,6 +113,7 @@ flowchart LR
         P[Pi Extension]
         T[MLink TUI / CLI]
         B[MLink Broker]
+        CN[Memory Connection]
         J[(SQLite 事件日志)]
         PH[Provider Host]
         TP[TencentDB Provider]
@@ -119,7 +123,8 @@ flowchart LR
         P --> B
         T --> B
         B --> J
-        B --> PH
+        B --> CN
+        CN --> PH
         PH -->|JSON-RPC 2.0 / stdio| TP
         TP -->|MemoryCore v3 API| MC
     end
@@ -131,7 +136,27 @@ flowchart LR
     H -->|Token-authenticated HTTP| B
 ```
 
-### 5.1 组件职责
+### 5.1 Memory Connection
+
+`Memory Connection` 是 MLink 的本地路由对象，不是 Provider 中的用户画像。它把一组 Agent Adapter 绑定到一个确定的 Provider 实例与配置版本：
+
+```text
+MemoryConnection
+  connection_id
+  provider_id
+  provider_version
+  config_revision
+  scope_mapping
+  recall_policy
+  capture_policy
+  adapter_bindings[]
+```
+
+MVP 只启用一个默认 Connection，但数据模型从第一版保留 `connection_id`。Codex、Pi、Hermes 绑定同一个 Connection 时共享同一后端和逻辑记忆作用域；未来增加第二个 Provider 或不同团队空间时，不需要改变 Agent Adapter 协议。
+
+所有入队事件必须固定记录 `connection_id + provider_id + provider_version + config_revision`。Provider 切换后，旧事件不能被发送到新 Provider。
+
+### 5.2 组件职责
 
 #### `mlink` TUI / CLI
 
@@ -155,6 +180,7 @@ flowchart LR
 - 生成幂等键，维护后台写入队列。
 - 根据活动 Provider 做路由。
 - 输出结构化诊断与审计信息。
+- 对 Agent Adapter 暴露稳定、版本化的本地 API；Adapter 不感知 Provider 进程协议。
 
 #### Provider Host
 
@@ -162,6 +188,7 @@ flowchart LR
 - 通过 JSON-RPC 2.0 over stdio 通信。
 - 做协议握手、能力协商、超时、取消和崩溃重启。
 - 隔离不同 Provider 的语言、依赖和故障。
+- 每个活动 Connection 启动独立 Provider 进程，避免不同凭据、配置和作用域共享隐式进程状态。
 
 #### TencentDB Provider
 
@@ -176,6 +203,24 @@ flowchart LR
 - 保存幂等键、重试状态、Provider 回执和失败原因。
 - 保存 MLink 安装清单及其配置备份索引。
 - 不保存 Provider 的正式长期记忆，不参与语义排序。
+
+### 5.3 Agent Adapter API
+
+宿主机 Unix Domain Socket 与 OrbStack HTTP 使用同一套版本化 JSON API：
+
+| 接口 | 目的 |
+|---|---|
+| `GET /v1/health` | Broker 与 Adapter 连接状态 |
+| `POST /v1/recall` | 发起有界记忆召回 |
+| `POST /v1/turns` | 提交完整回合，返回本地队列回执 |
+| `POST /v1/sessions/{session_id}/flush` | 请求有限时长的队列刷新 |
+
+每个 Adapter 安装获得独立 `adapter_id` 和授权策略：
+
+- **固定身份**：Codex/Pi 绑定预设的 `connection_id`、`tenant_id`、`agent_id`、`user_id`。请求不能覆盖这些字段。
+- **委托身份**：Hermes 只可提交授权来源（首版为飞书）的 `source_subject`；Broker 自己派生 `user_id`。Hermes 不能直接指定任意规范化 `user_id`。
+
+OrbStack Token 绑定 `adapter_id`、Connection、来源和权限，可单独轮换与撤销。Unix Socket 校验本机用户并仍校验 `adapter_id`，不能因为是本机调用就接受任意身份。
 
 ## 6. Provider 插件模型
 
@@ -201,18 +246,24 @@ mlink provider run tencentdb
 Provider 安装在：
 
 ```text
-~/.mlink/providers/<provider-name>/provider.yaml
+~/.mlink/providers/<publisher>/<name>/<version>/provider.yaml
 ```
 
 Manifest 结构：
 
 ```yaml
 api_version: mlink.provider/v1
+provider_id: dev.mlink.tencentdb
 name: tencentdb
 display_name: TencentDB MemoryCore
-command: ["mlink", "provider", "run", "tencentdb"]
+version: 0.1.0
+entrypoint: ["mlink", "provider", "run", "tencentdb"]
 protocol: stdio-jsonrpc
-capabilities:
+protocol_versions: ["1.0"]
+backend_compat:
+  product: tencentdb-memorycore
+  api_versions: ["v3"]
+declared_capabilities:
   - capture_turn
   - recall
   - search
@@ -220,20 +271,36 @@ capabilities:
   - episodes
   - async_write
 config_schema: config.schema.json
+executable_sha256: bundled
 ```
 
-Manifest 不保存密钥。Provider 配置引用系统 Keychain 中的 Secret ID；无 Keychain 的平台后续再定义替代方案。
+`provider_id` 是不可变的反向域名标识；显示名称和短名称不能参与路由。`entrypoint` 是参数数组，不经 Shell 展开。Manifest 不保存密钥，Provider 配置只保存系统 Keychain 中的 Secret ID。
 
-### 6.3 协议方法
+MVP 的 TencentDB Provider 与主程序一起签名，`executable_sha256: bundled` 表示使用当前 MLink 二进制。未来本地安装第三方 Provider 时必须校验包哈希、展示发布者与执行路径并要求用户明确确认。Provider 是以当前用户权限执行的代码；在实现操作系统级沙箱前，能力声明不是安全沙箱，TUI 必须如实提示这一点。MVP 不自动下载或静默安装第三方 Provider。
+
+第三方包必须提供可直接启动的 entrypoint 或明确的运行时声明，并自行封装 Python venv、Node 依赖或其他 SDK。Broker 不在启动时执行 `pip install`、`npm install` 或联网补依赖；缺少运行时由 `provider doctor` 报出确定性安装指引。
+
+`config_schema` 使用 MLink 支持的 JSON Schema 子集生成 TUI 表单，不允许 Provider 注入 HTML、脚本或可执行 UI 代码。Secret 字段必须标记 `x-mlink-secret: true`，表单只保存 Keychain 引用；未知 schema 关键字忽略但告警。JSON Schema 只验证结构，endpoint、认证和作用域等语义仍由 Provider `initialize` 与 Doctor 验证。
+
+### 6.3 传输、生命周期与 Secret
+
+每个活动 Memory Connection 对应一个独立 Provider 子进程。Provider Host 使用 UTF-8、`Content-Length` 帧格式承载 JSON-RPC 2.0；不使用“每行一个 JSON”，避免大文本和换行造成实现差异。
+
+- Provider `stdout` 只允许协议帧。
+- 日志只写 `stderr`，并遵守 MLink 的敏感信息脱敏规则。
+- Secret 不放入命令行参数或环境变量。Broker 从 Keychain 读取后，在 `initialize` 请求的独立 `secrets` 字段中通过 stdin 传给子进程；Provider 不得回显。
+- Provider Host 支持 JSON-RPC `$/cancelRequest`。达到 deadline 后 Broker 取消请求并丢弃迟到响应。
+- Provider 退出时，Broker 先调用 `shutdown`；超过宽限期再终止子进程。
 
 必需方法：
 
 | 方法 | 目的 |
 |---|---|
-| `initialize` | 协议握手，返回版本、能力和约束 |
-| `health` | 返回可用性、延迟与可操作诊断 |
+| `initialize` | 协议协商，加载 Connection 配置与 Secret，返回运行时能力和限制 |
+| `health` | 返回进程、配置和后端可用性，以及可操作诊断 |
 | `capture_turn` | 写入一个完成的用户—助手回合 |
 | `recall` | 返回当前请求的记忆上下文 |
+| `shutdown` | 停止接受新请求并在有限时间内释放资源 |
 
 可选能力：
 
@@ -250,12 +317,49 @@ Manifest 不保存密钥。Provider 配置引用系统 Keychain 中的 Secret ID
 | `export` / `import` | 迁移 |
 | `team_scope` | 团队级共享作用域 |
 | `async_write` | Provider 自身支持异步回执 |
+| `write_status` | 查询异步写入是否已可召回 |
 
-每个协议请求包含 `request_id` 和 `deadline_ms`；所有写请求额外包含 `idempotency_key`。错误必须使用稳定的结构化错误码，至少区分：配置错误、认证失败、身份无效、能力不支持、超时、限流、暂时不可用和永久失败。
+每个协议请求包含 `request_id` 和绝对 UTC Unix 毫秒 `deadline_unix_ms`；所有写请求额外包含 `idempotency_key`。错误必须使用稳定的结构化错误码，至少区分：配置错误、认证失败、身份无效、能力不支持、超时、限流、暂时不可用和永久失败。
 
-握手不只返回能力名称，还要返回能力支持的作用域。例如 Provider 可声明 `profile: [user]`、`profile: [agent]` 或两者都支持；Broker 不根据能力名称猜测数据是否为个人内容。
+### 6.4 版本与能力协商
 
-### 6.4 规范化数据
+协议版本采用 `major.minor`：
+
+- Major 不同表示不兼容，Provider 不启动。
+- Major 相同则协商双方支持的最高共同 Minor。
+- 新增可选字段只能提升 Minor；未知可选字段必须忽略。
+- 删除字段、改变字段含义或错误语义必须提升 Major。
+
+Manifest 的 `declared_capabilities` 是该版本可能提供的能力上限，仅用于未启动时展示；`initialize` 返回的运行时能力是当前配置下的实际子集。运行时不得声明 Manifest 之外的能力，Provider 身份或版本不一致时启动失败。
+
+能力不是简单布尔值，而是带约束的描述符。例如：
+
+```yaml
+capture_turn:
+  version: 1
+  roles: [user, assistant]
+  max_request_bytes: 1048576
+  replay_safe: false
+  ordering: scope
+  max_in_flight: 4
+recall:
+  version: 1
+  scopes: [user, agent]
+  kinds: [episode, fact, profile]
+  temporal_fields: true
+  stable_item_ids: true
+scope_support:
+  tenant: native_partition
+  user: native_partition
+  agent: server_filter
+  session: server_filter
+```
+
+隔离强度取值：`native_partition`、`server_filter`、`metadata_filter`、`unsupported`。多用户模式只允许通过契约测试的 `native_partition` 或 `server_filter`；不得用 Broker 收到结果后的客户端过滤补救后端串读。
+
+握手还必须返回：Provider 版本、检测到的后端产品/API 版本、最大请求/响应字节数、最大并发数、是否要求同一作用域顺序写入、支持的内容角色、写入回执语义、时间字段支持和稳定记录 ID 支持。Broker 不根据 Provider 名称写例外逻辑；后端 API 版本不在 Provider 声明的兼容范围内时，Connection 不激活。
+
+### 6.5 规范化数据
 
 ```text
 AdapterIdentity
@@ -264,6 +368,7 @@ AdapterIdentity
   display_name
 
 IdentityScope
+  connection_id
   tenant_id
   user_id
   agent_id
@@ -273,7 +378,7 @@ IdentityScope
 Turn
   identity
   messages[]
-  tool_events[]
+  optional_tool_events[]
   occurred_at
   metadata
 
@@ -287,14 +392,97 @@ RecallRequest
 
 ContextBundle
   items[]
-  profile
-  provenance[]
+  partial
+  provider_status
+  warnings[]
+
+ContextItem
+  id
+  kind
+  scope
+  text
+  created_at
+  updated_at
+  observed_at
+  valid_from
+  valid_to
+  score
+  confidence
+  source
+  metadata
+  provider_data
+```
+
+`ContextItem.id` 必须在 `provider_id + Connection` 内稳定；`source` 包含 Provider 原生记录 ID、记录类型和可审计来源。`score` 可以为空，只用于当前 Provider 返回集内部排序，不能跨 Provider 比较。缺失时间或可信度时必须返回空值，不能编造。
+
+高级 Provider 数据保存在命名空间扩展字段中，例如 `provider_data.graphiti`，不强制压平成公共字段，以免损失时间图、层级资源或程序性记忆语义。公共字段只承载 Agent 自动注入所需的最小交集；图遍历、资源浏览、Skill 管理等高级能力通过可选方法暴露。
+
+`AdapterIdentity` 只在 Adapter 与 Broker 之间使用。Broker 解析出 `IdentityScope` 后，不把原始 `source_subject` 发送给 Provider。
+
+默认 Capture Policy 只采集当前用户文本和最终助手文本。系统/开发者提示、工具输入输出、文件正文、环境变量和认证信息默认不写入记忆；只有 Adapter 与 Provider 同时声明支持且用户显式开启时，才发送 `optional_tool_events`。Provider 对丢弃或降级的字段必须在写入回执中给出 warning。
+
+Provider 负责返回排序后的候选项和字节限制；Broker 校验结构、去除稳定 ID 完全相同的项并执行字节上限；最终 Agent Adapter 根据目标 Agent 的 tokenizer 或保守估算执行最终 token 预算。Provider 的 token 估算不能替代 Agent 侧的最终限制。
+
+### 6.6 作用域映射规则
+
+Provider 可以把 MLink 的规范化作用域映射到原生分区、服务端过滤器或复合命名空间，但必须在 Connection 配置中显式声明并通过契约测试。任何维度被合并、忽略或转成共享内容，都要在 TUI 预览中显示。
+
+原生 User、Bank、Group、URI Namespace 等对象的检查或幂等创建由 Provider Adapter 内部负责，不扩散到 Agent Adapter。首次出现且尚无数据的合法身份在 `recall` 中应返回空结果；只有认证、权限或作用域配置错误才返回失败。Provider 不得因“用户还没有记忆”而要求 Broker 伪造占位 Profile。
+
+以下映射用于验证协议表达能力，不代表 MVP 同时实现这些 Provider：
+
+| Provider 类型 | Capture 映射 | Recall 映射 | 隔离/特性映射 |
+|---|---|---|---|
+| TencentDB MemoryCore | `capture_turn` → v3 L0 conversation | L1/L2/L3 查询 | `team/agent/user/session`；L2/L3 显式标为共享 Agent 作用域 |
+| Mem0 | `messages` → `add` | `search` | `user_id/agent_id/run_id`；Hosted v3 异步 event 映射为写入回执 |
+| Hindsight | 回合文本 → `retain` | `recall` | 每个 `tenant+agent+user` 使用不可逆复合 `bank_id`；`document_id` 使用稳定回合 ID |
+| Graphiti | 回合 → `add_episode` | graph/episode search | 复合作用域映射为 `group_id`；由 `turn_id` 派生确定性 UUID；保留 `reference_time`；同 group 顺序写 |
+| OpenViking | message + session commit | `find`/上下文读取 | 映射 `user/agent/session` URI；commit task 映射异步回执；资源和 Skill 保留为可选能力 |
+
+一个 Provider 只需实现 `capture_turn + recall` 的最小能力即可接入，但自动召回必须返回稳定 `ContextItem.id`。缺少严格用户隔离时只能用于明确的单用户 Connection；缺少时效字段时禁用时效保证；缺少可重放写入时使用 ambiguous 停止策略。TUI 必须显示这些限制，不能声称完整兼容。
+
+### 6.7 并发、顺序与背压
+
+- Provider 声明 `max_in_flight`；Broker 不超过该值。
+- `ordering: scope` 时，Broker 按 `connection_id + tenant_id + agent_id + user_id` 串行写入，不阻塞其他作用域。
+- 请求和响应都受协商后的字节上限约束；超限在进入 Provider 前失败。
+- Provider stdout 出现坏帧、额外文本或超过上限时视为协议错误并熔断。
+- 写队列达到容量上限时拒绝新的持久化写入并明确告警；不丢弃旧事件，也不无限占用磁盘。
+
+### 6.8 写入回执与重复边界
+
+`capture_turn` 回执包含：
+
+```text
+WriteReceipt
+  receipt_id
+  state: accepted | visible
+  provider_refs[]
+  replay_safe
   warnings[]
 ```
 
-高级 Provider 数据保存在命名空间扩展字段中，例如 `provider_data.graphiti`，不强制压平成公共字段，以免损失时间图、层级资源或程序性记忆语义。
+Broker Journal 状态为：`queued → dispatching → accepted → visible`，异常分支为 `retryable_failed`、`permanent_failed`、`ambiguous`。
 
-`AdapterIdentity` 只在 Adapter 与 Broker 之间使用。Broker 解析出 `IdentityScope` 后，不把原始 `source_subject` 发送给 Provider。
+- Provider 若能使用后端原生幂等键、稳定原生 ID 或持久化文档 ID，声明 `replay_safe: true`；Broker 可以重放未确认请求。
+- Provider 若不能保证重放幂等，声明 `replay_safe: false`。请求发出后连接中断时标为 `ambiguous`，不得自动重试，以避免生成重复记忆；Doctor 提供人工核对入口。
+- `accepted` 只表示后端接收，不表示提取结果已经可召回。异步后端可实现 `write_status`，把回执推进到 `visible`。
+- 同一 `turn_id`、不同内容哈希视为冲突；同一事件重复到达 Broker 只保留一条 Journal 记录。
+
+MLink 因此保证自身不会重复调度已确认事件，但不虚构后端不具备的 exactly-once。契约报告必须明确显示 `replay_safe` 与可能的“丢失/重复”权衡。
+
+### 6.9 Provider 切换、升级与移除
+
+Provider 切换是受控事务：
+
+1. 启动新 Provider，完成协议协商、配置验证和只读健康检查。
+2. 用户选择旧队列“排空”或“保留待处理”；不能把旧事件改绑到新 Provider。
+3. 原子更新 Connection 的活动 `config_revision`，新事件从该时刻固定到新版本。
+4. 切换失败时保留旧活动版本；不自动迁移记忆。
+
+升级 Provider 时，旧可执行版本只要仍被 Journal 引用就不能清理。新版本通过握手和健康检查后再激活；状态数据库 schema 迁移必须先备份并支持失败回滚。
+
+移除 Provider 前必须确认没有活动 Connection、排队事件或未完成迁移。删除插件只删除 MLink 管理的 Provider 包，不删除后端数据。
 
 ## 7. 身份与多用户隔离
 
@@ -313,14 +501,14 @@ Hermes 群聊中的身份源必须是飞书稳定 ID，例如 `open_id` 或经�
 MLink 不把平台稳定 ID 原文发送到 Provider。它使用本机生成并保存在 Keychain 的密钥做 HMAC：
 
 ```text
-user_id = "usr_" + base32(HMAC-SHA256(local_key, source + ":" + stable_id))[0:26]
+user_id = "usr_" + base32(HMAC-SHA256(identity_key, namespace_id + ":" + source + ":" + stable_id))[0:26]
 ```
 
-这与普通哈希的区别是：没有本机密钥时不能通过枚举常见 ID 反推映射。同一稳定 ID 每次通过 HMAC 都会得到相同 `user_id`，因此无需保存稳定 ID 原文映射。显示名与规范化 ID 的本地映射可以保存，但不得包含 `source_subject` 原文。
+这与普通哈希的区别是：没有身份密钥时不能通过枚举常见 ID 反推映射。同一 Namespace 内的稳定 ID 每次都会得到相同 `user_id`，因此无需保存稳定 ID 原文。显示名与规范化 ID 的本地映射可以保存，但不得包含 `source_subject` 原文。
 
 首次遇到新用户时：
 
-1. Identity Resolver 创建本地映射。
+1. Identity Resolver 计算规范化 `user_id`，并可记录 `user_id → display_name` 展示映射。
 2. 当前回合使用新的规范化 `user_id`。
 3. 用户尚无历史记忆时返回空结果，不读取其他用户的数据。
 4. 回合完成后按该 `user_id` 写入 MemoryCore；用户级 L1 原子记忆由 Provider 的记忆管线后续生成。
@@ -346,6 +534,18 @@ MemoryCore v3 的作用域并非所有层级都相同：L0/L1 可按 `team + age
 - **共享 Agent 通道**：L2/L3，不得称为个人画像；只用于团队/Agent 共同场景与核心设定。
 
 Hermes 多用户模式默认只把个人通道用于消息发送者的记忆召回。共享 Agent 通道在向导中单独开关并独立展示注入预算；开启后会明确提示群内用户共享该内容。MLink 不通过伪造 `agent_id` 为每个用户制造私有 L2/L3，因为那会改变 MemoryCore 官方作用域语义。
+
+### 7.4 身份绑定、备份与迁移
+
+`identity_key` 与 `namespace_id` 共同决定外部稳定 ID 到 MLink `user_id` 的映射。它们属于记忆可寻址性的一部分，不是可随意重建的缓存：
+
+- `identity_key` 存在 Keychain；`namespace_id` 存在配置中。
+- 自动轮换 `identity_key` 被禁止，因为轮换会让所有平台用户变成新的记忆用户。
+- 普通配置备份不包含 `identity_key`。
+- 便携备份使用用户口令加密 `identity_key + namespace_id`，Provider 凭据默认不包含在内；迁移到新机器时先恢复身份包，再连接原记忆后端。
+- 恢复后必须用已知平台稳定 ID做 dry-run，对比迁移前后的规范化 `user_id`，不一致则阻止启用 Adapter。
+
+Codex/Pi 的本地用户与 Hermes 飞书用户不会仅凭显示名自动合并。若用户希望三个 Agent 使用同一份个人记忆，向导必须让用户显式把本地身份绑定到某个已验证的飞书稳定身份，或直接选择同一个既有规范化 `user_id`。解绑只影响后续路由，不删除 Provider 中的记忆。
 
 ## 8. Agent 接入
 
@@ -391,7 +591,9 @@ Extension 只连接 Broker，不加载 Provider SDK。显式记忆搜索工具�
 
 Hermes 运行在 OrbStack Linux machine 时，通过 `host.orb.internal` 访问宿主机 Broker。Doctor 必须从 Hermes 所在环境实际测试 DNS、TCP、认证和往返延迟，不能只在 macOS 上测试。
 
-宿主机跨环境监听端口必须启用随机 Bearer Token；不得开放无认证接口。Broker 优先绑定仅供本机/OrbStack 使用的地址，并在 TUI 中明确展示监听范围。若 Hermes 运行在 OrbStack Docker 容器，则使用 `host.docker.internal`；使用 `--net=host` 时可使用 `localhost`。地址由环境检测选择并写入 Hermes 插件配置，不硬编码成一个全平台默认值。
+宿主机跨环境监听端口必须启用随机、逐 Adapter 的 Bearer Token；不得开放无认证业务接口。OrbStack Linux machine 不能直接访问 macOS 的 localhost，因此 Doctor 从 Hermes 环境解析并探测 `host.orb.internal`，然后优先把 Broker 绑定到对应的 OrbStack 可达本机地址。若只能绑定更宽的接口，TUI 必须显示实际监听地址和暴露风险并要求用户确认，不能静默绑定 `0.0.0.0`。
+
+若 Hermes 运行在 OrbStack Docker 容器，则使用 `host.docker.internal`；使用 `--net=host` 时可使用 `localhost`。地址由环境检测选择并写入权限为 `0600` 的 Hermes 插件配置，不硬编码成一个全平台默认值。
 
 ## 9. TUI 交互设计
 
@@ -425,13 +627,13 @@ flowchart LR
 
 1. **欢迎**：展示 MLink 像素字标、版本和一句价值说明。
 2. **环境检测**：发现 MemoryCore、Codex、Pi、Hermes 与 OrbStack，不做修改。
-3. **选择 Provider**：MVP 只列出真实可用的 TencentDB Provider；保留选择步骤以维持未来可插拔心智模型，不展示尚未安装的假选项。
-4. **配置 Provider**：填写 endpoint、service ID、team ID、逻辑 memory agent ID 和凭据引用；立即健康检查。
+3. **选择 Provider**：MVP 只列出真实可用的 TencentDB Provider；保留选择步骤以维持未来可插拔心智模型，不展示尚未安装的假选项。选择页同时展示协议版本、隔离强度、重放安全、时效和维护能力。
+4. **配置 Provider**：填写 endpoint、service ID、team ID、逻辑 memory agent ID 和凭据引用；创建一个带版本的 Memory Connection，并立即做只读健康检查。
 5. **配置身份**：选择本地用户身份；Hermes 多用户模式展示稳定 ID → 规范化 ID 规则，并选择是否启用共享 L2/L3 Agent 上下文（默认关闭）。
 6. **选择 Agent**：Codex、Pi、Hermes 多选；每项显示发现路径和可用状态。
 7. **预览变更**：逐文件展示“新增、合并、不变”，并单独显示受保护模型字段均未变化。
 8. **执行安装**：逐项应用，每一项可独立回滚。
-9. **逐项验证**：运行 Agent Adapter → Broker → Provider → MemoryCore 的实际探测，并进行一次隔离的测试写入/读取后清理测试数据。
+9. **逐项验证**：运行 Agent Adapter → Broker → Provider → MemoryCore 的实际只读探测。测试写入必须单独征得确认，并且 Provider 同时支持删除时才在专用测试 `tenant/agent/user` 作用域执行“写入 → 读取 → 删除”；不得写入用户真实记忆作用域。否则只显示手工验收步骤，不留下伪造记忆。
 
 ### 9.3 操作规则
 
@@ -483,8 +685,12 @@ mlink doctor codex|pi|hermes  # 单 Agent 诊断
 mlink install <agents...>     # 非交互安装
 mlink uninstall <agents...>   # 精确卸载 MLink 管理内容
 mlink provider list
-mlink provider use <name>
+mlink provider use <provider-id>
 mlink provider doctor <name>
+mlink connection list
+mlink connection inspect <connection-id>
+mlink backup create [--portable]
+mlink backup restore <bundle> --dry-run
 mlink config diff             # 展示将要或已经做出的配置差异
 ```
 
@@ -513,7 +719,9 @@ mlink hook codex <event>
   run/
 ```
 
-Secret 不写入 `config.yaml`、SQLite、日志或备份；只保存 Keychain 引用。
+Provider Secret 不写入 `config.yaml`、SQLite、日志或普通备份；只保存 Keychain 引用。`--portable` 便携备份只额外包含经用户口令加密的身份密钥与 Namespace，不默认导出 Provider 凭据。
+
+`state.db` 使用 WAL 模式并由 Broker 单写；并发 Hook/Extension 请求通过 Broker API 入队，Adapter 不直接打开数据库。每次配置修改生成不可变 `config_revision`，Journal 与安装清单只引用版本，不引用“当前配置”这种可变指针。
 
 ### 11.2 安装清单
 
@@ -533,6 +741,7 @@ Secret 不写入 `config.yaml`、SQLite、日志或备份；只保存 Keychain �
 - MLink 添加的 Codex Hook 节点。
 - MLink 安装的 Pi Extension 文件。
 - MLink 安装的 Hermes Provider 插件及 `memory.provider=mlink` 这一项。
+- MLink 为对应 Adapter 生成的 Token、身份委托和 Connection 绑定。
 - MLink 自己的 Broker 启动项、运行文件和可选本地状态。
 
 卸载不删除：
@@ -542,6 +751,8 @@ Secret 不写入 `config.yaml`、SQLite、日志或备份；只保存 Keychain �
 - 用户在安装后自行新增或修改的其他配置。
 
 若目标配置在安装后被用户修改，卸载先显示语义冲突，不直接覆盖整个旧文件。
+
+若 Journal 存在 queued、ambiguous 或永久失败事件，卸载默认阻止删除本地状态，并提供“排空、导出审计包、明确放弃”三种选择。只有用户明确放弃后才删除这些事件；Adapter 配置可以先卸载，但 Provider 版本和 Journal 必须保留到处理完成。
 
 ## 12. 运行时数据流
 
@@ -560,9 +771,9 @@ sequenceDiagram
     P->>M: v3 L1/L2/L3 query
     M-->>P: memories + provenance
     P-->>B: ContextBundle
-    B->>B: dedupe response IDs + enforce budget
+    B->>B: dedupe stable IDs + enforce byte/item budget
     B-->>A: bounded context
-    A-->>A: inject through official Agent API
+    A-->>A: enforce final token budget + inject
 ```
 
 Broker 只按 Provider 返回的稳定记录 ID 去除同一响应中的完全重复项；语义去重、事实合并、时效判断由 Provider 负责。这样不会用 SQLite 规则覆盖 TencentDB 或未来 Mem0 的记忆算法。
@@ -579,7 +790,7 @@ sequenceDiagram
     A->>B: capture_turn(turn)
     B->>B: validate identity + derive idempotency key
     B->>J: enqueue durable event
-    B-->>A: accepted
+    B-->>A: queued locally
     B->>P: capture_turn(turn)
     alt success
         P-->>B: receipt
@@ -593,7 +804,7 @@ sequenceDiagram
     end
 ```
 
-幂等键由 `provider + tenant_id + agent_id + user_id + session_id + turn_id + content_hash` 生成。同一事件重试不产生第二条逻辑写入；内容不同但 `turn_id` 相同视为冲突并进入诊断状态，不静默覆盖。
+幂等键由 `connection_id + provider_id + config_revision + tenant_id + agent_id + user_id + session_id + turn_id + content_hash` 生成。同一事件重复提交不产生第二条 Journal 记录；内容不同但 `turn_id` 相同视为冲突并进入诊断状态，不静默覆盖。能否安全重放到后端由 Provider 的 `replay_safe` 决定。
 
 ## 13. 错误处理与可观测性
 
@@ -603,10 +814,12 @@ sequenceDiagram
 - 超时后立即返回空上下文并附本地诊断，不向模型注入错误堆栈。
 - Provider 健康检查默认 2 秒。
 - 写入永不占用 Agent 的在线响应路径。
+- Provider 明确返回 `partial: true` 时，Broker 只保留结构校验通过的 ContextItem，并把降级原因写入本地诊断；格式不合法或作用域不匹配的项一律丢弃，不能注入 Agent。
 
 ### 13.2 重试
 
-- 仅对超时、连接失败、429 和明确的 5xx 做指数退避。
+- 仅对 Provider 声明 `replay_safe: true` 的请求，在超时、连接失败、429 和明确的 5xx 时做指数退避。
+- `replay_safe: false` 的请求只要已经开始发送而结果未知，就进入 `ambiguous`，不自动重试。
 - 认证失败、身份无效、请求格式错误不自动重试。
 - 队列设置容量和保留期；超限时 TUI 显示明确告警，不无限增长。
 
@@ -618,31 +831,57 @@ Provider Host 使用退避重启；短时间连续崩溃后熔断，并在 TUI �
 
 日志默认记录请求 ID、作用域哈希、耗时、条数、错误码和回执，不记录完整对话、召回正文、原始平台稳定 ID 或密钥。调试正文日志必须显式临时开启并显示隐私警告。
 
+### 13.5 Broker 不可用
+
+Adapter 连接不到 Broker 时立即 fail-open：不注入记忆、不阻塞 Agent 回复，也不在 Agent 目录另建一套离线队列。完成回合可以在短暂、有限次数内重连 Broker；仍失败则只记录不含正文的本地状态告警。这样避免多个 Adapter 各自落盘造成新的重复、隐私和卸载边界。
+
 ## 14. 安全边界
 
 1. 宿主机本地 Agent 优先使用 Unix Domain Socket。
-2. OrbStack 跨环境访问使用独立 HTTP 监听和随机 Bearer Token。
-3. 所有非健康检查接口都要求认证。
-4. Provider Secret 存入 macOS Keychain。
-5. 配置和日志使用用户级权限，不产生世界可读文件。
-6. Adapter 输入视为不可信，校验消息大小、身份字段与事件类型。
-7. 召回内容视为不可信数据，注入时明确标记，降低记忆中的提示注入风险。
-8. MLink 不获得 Agent LLM 凭据；安装器也不复制、显示或上传这些凭据。
+2. Unix Socket 与本地状态目录权限为当前用户可读写，不接受其他系统用户。
+3. OrbStack 跨环境访问使用独立 HTTP 监听和逐 Adapter 随机 Bearer Token；卸载或重装对应 Adapter 时撤销旧 Token。
+4. 所有非健康检查接口都要求认证；健康检查只返回最小状态，不返回版本、路径、身份或队列详情。
+5. Provider Secret 存入 macOS Keychain，并只通过 Provider stdin 初始化消息传递。
+6. 配置和日志使用用户级权限，不产生世界可读文件。
+7. Adapter 输入视为不可信，校验消息大小、身份字段与事件类型；Broker 根据 Adapter 授权派生身份，不信任调用方自报的规范化 ID。
+8. 召回内容视为不可信数据，注入时明确标记，降低记忆中的提示注入风险。
+9. 远程 Provider endpoint 必须使用 HTTPS 并校验证书；HTTP 只允许 loopback、已确认的本地开发环境或 OrbStack 内部桥接。
+10. 第三方 Provider 以当前用户权限运行，安装即等同于信任本地可执行代码；在有真实沙箱前不得把 Manifest 权限字段描述成强隔离。
+11. Capture 内容进入 Provider 后的持久化、外部 LLM 调用和遥测属于 Provider 数据边界；MLink 在安装预览中显示已知目标，但不声称能约束未沙箱化的第三方代码。
+12. MLink 不获得 Agent LLM 凭据；安装器也不复制、显示或上传这些凭据。
 
 ## 15. 测试与验收
 
 ### 15.1 Provider 契约测试
 
-每个 Provider 必须通过同一套黑盒契约：
+契约测试按能力 Profile 分层，Provider 只获得实际通过的认证标记：
 
-- 初始化与能力协商。
+| 契约 Profile | 必须验证 |
+|---|---|
+| Minimal | initialize、health、capture_turn、recall、shutdown |
+| Multi-user | user/agent/tenant 作用域不串读，缺失身份拒绝 |
+| Temporal | 时间字段保真、时间过滤或明确不支持 |
+| Replay-safe | 响应丢失后重放不产生重复逻辑记录 |
+| Async-write | accepted、状态查询、最终 visible/failed |
+| Maintenance | search、update、delete、export/import 各自语义 |
+
+通用黑盒用例包括：
+
+- `Content-Length` 帧、协议版本协商、运行时能力是 Manifest 声明的合法子集。
+- 初始化、Secret 不回显、shutdown 超时。
 - 健康检查与结构化错误。
+- 合法的新身份在尚无记忆时返回空集合，不自动创建占位画像，也不回退到默认用户。
 - 用户 A 写入后用户 B 不能召回。
 - 同一 `turn_id` 重复写入不产生重复逻辑记录。
 - 不同 Agent 与 Team 作用域不串数据。
 - 空结果、超时、429、5xx、永久错误行为一致。
-- 召回条数和 token 预算生效。
+- 请求/响应字节、并发、按 scope 顺序和背压限制生效。
+- ContextItem 的稳定 ID、作用域、来源和时间字段符合声明。
+- `replay_safe: false` 的未知结果进入 ambiguous，不自动重发。
 - Provider 进程异常退出后 Broker 可恢复或熔断。
+- stdout 混入日志、坏帧、超大帧和迟到响应会被隔离。
+
+测试仓库包含一个通过外部 Manifest 启动的非 Go 最小 Provider 夹具，以及 bank、graph、hierarchical 三种作用域模拟器。测试的目的不是证明这些真实后端已兼容，而是证明不改 Agent Adapter 和 Broker 核心即可装载不同进程、作用域映射和回执语义。真实 Provider 仍需自己的后端集成测试。
 
 ### 15.2 Adapter 测试
 
@@ -659,6 +898,9 @@ Provider Host 使用退避重启；短时间连续崩溃后熔断，并在 TUI �
 - 安装 → 用户修改其他配置 → 卸载，只删除 MLink 所有内容。
 - 备份可校验，冲突时不整文件覆盖。
 - 重复执行安装保持幂等。
+- Provider 切换时旧 Journal 事件仍固定到旧版本，不会写入新后端。
+- Provider 升级失败能继续使用旧版本；被 Journal 引用的旧包不会被清理。
+- 便携身份备份恢复后，相同稳定 ID 产生完全相同的规范化 `user_id`。
 
 ### 15.4 对抗性测试
 
@@ -674,6 +916,10 @@ Provider Host 使用退避重启；短时间连续崩溃后熔断，并在 TUI �
 8. **上下文攻击**：记忆中包含伪系统指令时，只作为带边界的历史材料注入。
 9. **OrbStack 链路**：从实际 Hermes 环境验证 `host.orb.internal`、Token、用户隔离和往返延迟。
 10. **层级作用域**：Hermes 多用户默认召回不混入共享 L2/L3；开启共享 Agent 上下文后，返回结果必须明确区分个人 L0/L1 与共享 L2/L3。
+11. **身份越权**：固定身份 Token 伪造 `user_id`、Hermes Token 伪造未授权 source 或 Connection，Broker 必须拒绝。
+12. **切换竞态**：Provider 切换过程中并发提交回合，新旧事件按原子切换点绑定到各自 config revision。
+13. **回执丢失**：后端已收到请求但 Broker 未收到响应时，按 `replay_safe` 分别验证安全重放或 ambiguous 停止。
+14. **恶意 Provider**：stdout 写日志、返回超大帧、迟到响应、伪报能力或回显 Secret 时被熔断并报告。
 
 对“过期事实”和“语义重复”的最终质量归属 Provider；MLink 的职责是正确传递时间、来源、身份和幂等信息，并在响应级别去除稳定 ID 完全相同的重复项。契约报告必须区分 MLink 适配失败和 Provider 能力不足。
 
@@ -686,6 +932,8 @@ Provider Host 使用退避重启；短时间连续崩溃后熔断，并在 TUI �
 - Hermes 两个飞书稳定用户的隔离测试通过。
 - Agent 模型与认证配置保护测试通过。
 - 重复事件、Provider 超时和崩溃测试通过。
+- 外部非 Go Provider 夹具能通过 Manifest 装载，Agent Adapter 测试无需修改。
+- Provider 切换、协议版本不兼容、回执丢失和身份越权测试通过。
 - 卸载往返测试通过。
 - 对抗性测试报告明确区分 MLink 结果与 TencentDB Provider 结果。
 
@@ -703,7 +951,7 @@ Provider 协议有独立版本。MLink 升级时先检查 Provider 与 Adapter �
 
 ## 17. 后续可插拔 Provider
 
-首版只实现 TencentDB，但协议按以下代表性能力设计：
+首版只实现 TencentDB。下表表示架构可表达的候选后端，不等于 MLink 已正式支持：
 
 | Provider | 主要原语 | MLink 适配关注点 |
 |---|---|---|
@@ -718,20 +966,28 @@ Provider 协议有独立版本。MLink 升级时先检查 Provider 与 Adapter �
 
 LangMem 更接近记忆抽取/策略库，Letta 更接近自带记忆的 Agent Runtime；二者不作为普通后端直接套入 Provider，而应在未来分别评估“处理器插件”和“Agent Adapter”。
 
-未来迁移格式采用规范化 NDJSON，包含身份、时间、来源、内容、类型和 `provider_data`。只有源与目标都声明相应的 `export`/`import` 能力时，MLink 才开放迁移命令；不承诺不同 Provider 的高级语义能无损互转。
+一个候选后端只有同时满足以下条件，才可在 TUI 中标记为“支持”：
+
+1. Provider 协议契约测试通过，并标明具体 Capability Profile。
+2. 作用域映射和隔离强度有文档且通过真实后端多用户测试。
+3. 写入回执、重放、异步可见性和限流行为有真实集成测试。
+4. 安装、配置验证、升级、切换和卸载往返测试通过。
+5. 对无法映射的高级能力给出明确缺失项，不用 `provider_data` 假装通用支持。
+
+未来迁移格式采用带 schema version 的规范化 NDJSON，包含：导出来源、Connection 和 Provider 版本、身份 Namespace、作用域映射、稳定记录 ID、时间、来源、内容、类型、删除标记、校验和与 `provider_data`。只有源与目标都声明相应的 `export`/`import` 能力时，MLink 才开放迁移命令；导入前必须 dry-run 并报告不可映射字段。不同 Provider 的图关系、层级 URI、反思结果或程序性记忆不承诺无损互转。
 
 ## 18. 实现边界与顺序
 
 本规格可以由一个实现计划覆盖，按以下垂直切片推进：
 
-1. CLI/TUI 壳、配置模型、Keychain 与 SQLite Journal。
-2. Provider Host、协议契约与假 Provider 测试夹具。
-3. TencentDB Provider 与真实 MemoryCore 集成测试。
-4. Broker 召回/写入链路、幂等、超时与认证。
+1. 规范化数据、Memory Connection、配置版本和身份 Namespace。
+2. Provider Host、帧协议、能力协商与外部非 Go 测试 Provider。
+3. SQLite Journal、Adapter API、Token 授权、幂等和回执状态机。
+4. TencentDB Provider 与真实 MemoryCore 集成测试。
 5. Codex Adapter 及配置保护。
 6. Pi Adapter 及配置保护。
 7. Hermes Adapter、OrbStack 链路和多用户隔离。
-8. 完整向导、状态面板、卸载与对抗性验收。
+8. 完整 CLI/TUI、Provider 切换、便携身份备份、卸载与对抗性验收。
 
 每个切片完成后都能独立运行对应契约测试；不在三个 Adapter 写完后才第一次做端到端验证。
 
@@ -746,10 +1002,14 @@ LangMem 更接近记忆抽取/策略库，Letta 更接近自带记忆的 Agent R
 - [Hermes Memory Provider Plugin 官方文档](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin/)
 - [OrbStack Linux networking（`host.orb.internal`）](https://docs.orbstack.dev/machines/network)
 - [OrbStack container networking（`host.docker.internal`）](https://docs.orbstack.dev/docker/network)
-- [Mem0 memory operations](https://github.com/mem0ai/mem0/tree/main/docs/core-concepts/memory-operations)
+- [JSON-RPC 2.0 规范](https://www.jsonrpc.org/specification)
+- [Mem0 Add Memories（异步 event 回执）](https://docs.mem0.ai/api-reference/memory/add-memories)
+- [Mem0 Entity-Scoped Memory](https://docs.mem0.ai/platform/features/entity-scoped-memory)
 - [Hindsight](https://github.com/vectorize-io/hindsight)
-- [Graphiti](https://github.com/getzep/graphiti)
-- [OpenViking](https://github.com/volcengine/OpenViking)
+- [Hindsight Best Practices（document_id、timestamp、tags）](https://github.com/vectorize-io/hindsight/blob/main/skills/hindsight-docs/references/best-practices.md)
+- [Graphiti episode queue（group_id 内顺序写）](https://github.com/getzep/graphiti/blob/main/mcp_server/src/services/queue_service.py)
+- [OpenViking Context Types](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/02-context-types.md)
+- [OpenViking Viking URI](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/04-viking-uri.md)
 - [Cognee](https://github.com/topoteretes/cognee)
 - [Memobase](https://github.com/memodb-io/memobase)
 - [Supermemory](https://github.com/supermemoryai/supermemory)
@@ -766,3 +1026,27 @@ LangMem 更接近记忆抽取/策略库，Letta 更接近自带记忆的 Agent R
 8. TUI 使用首次向导与日常仪表盘的混合模式。
 9. TUI 保留已确认的填充像素字标，但正文强调对齐、可读和易操作。
 10. 最终验收包含多用户、重复、过期事实、身份缺失和故障注入等对抗性测试。
+11. Agent Adapter 绑定 Memory Connection，不直接绑定 Provider；队列事件固定 Provider 与配置版本。
+12. Provider 能力使用带约束的运行时描述符，不使用简单布尔列表表达兼容性。
+13. 多用户资格取决于真实隔离契约；Broker 不用结果后过滤补救后端串读。
+14. 同一记忆跨机器继续使用时必须迁移身份 Namespace 与密钥，不能重新生成。
+
+## 21. 边界审查清单
+
+| 边界 | 责任方 | 明确禁止 |
+|---|---|---|
+| Agent 模型请求、订阅与登录 | Codex/Pi/Hermes 自身 | MLink 代理或改写 LLM 流量 |
+| Agent 生命周期事件 | Agent Adapter | Adapter 直接调用具体记忆后端 |
+| Adapter 身份授权 | Broker | 信任调用方自报的规范化 `user_id` |
+| Connection 路由与版本 | Broker | 切换 Provider 后改绑历史队列事件 |
+| 在线召回候选 | Provider | Broker 猜测 Provider 私有语义 |
+| 最终注入 token 预算 | Agent Adapter | Provider 单方面决定模型上下文大小 |
+| 写入队列与重试 | Broker Journal | 每个 Adapter 建自己的持久化队列 |
+| 语义去重、事实合并、时效排序 | Memory Backend / Provider | SQLite 充当第二套记忆算法 |
+| 记忆后端内部 LLM/Embedding | Provider 运维配置 | 自动复用 Agent 模型凭据 |
+| Provider 执行代码 | 用户明确安装并信任 | 把 Manifest 权限声明宣传成强沙箱 |
+| Provider 数据所有权 | Provider / 后端 | MLink 卸载时自动删除记忆 |
+| 跨机身份连续性 | MLink 身份便携备份 | 在新机器静默生成新身份密钥 |
+| 跨 Provider 迁移 | 独立迁移流程 | 切换 Provider 时隐式双写或自动转换 |
+
+只有当上表每一项都能在实现计划中对应到代码模块、测试或明确的非目标，架构审查才视为通过。
