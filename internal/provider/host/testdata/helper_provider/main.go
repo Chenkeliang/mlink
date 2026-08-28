@@ -61,14 +61,14 @@ func (h *fixtureHandler) Initialize(_ context.Context, params protocol.Initializ
 	}
 	return protocol.InitializeResult{
 		ProviderID: providerID, ProviderVersion: "0.1.0", ProtocolVersion: protocol.Version,
-		Capabilities: fixtureCapabilities(),
+		Capabilities: fixtureCapabilities(h.mode),
 	}, nil
 }
 
 func (h *fixtureHandler) Health(context.Context, protocol.HealthParams) (protocol.HealthResult, error) {
 	if h.mode == "private-health-error" {
 		return protocol.HealthResult{}, &server.HandlerError{
-			Code: protocol.ErrorTemporarilyUnavailable,
+			Code:    protocol.ErrorTemporarilyUnavailable,
 			Message: strings.Repeat("x", 1024) + " https://private.memory.invalid/secrets/token-file",
 		}
 	}
@@ -89,8 +89,12 @@ func (h *fixtureHandler) CaptureTurn(ctx context.Context, _ protocol.CapturePara
 }
 
 func (h *fixtureHandler) Recall(_ context.Context, params protocol.RecallParams) (model.ContextBundle, error) {
+	scope := model.ScopeUser
+	if h.mode == "user-only-return-agent" {
+		scope = model.ScopeAgent
+	}
 	return model.ContextBundle{Items: []model.ContextItem{{
-		ID: "memory-a", Kind: "instruction", Scope: model.ScopeUser,
+		ID: "memory-a", Kind: "instruction", Scope: scope,
 		Text: "先给结论", Source: "fixture:l1/memory-a",
 	}}}, nil
 }
@@ -104,8 +108,8 @@ func (h *fixtureHandler) Shutdown(context.Context, protocol.ShutdownParams) erro
 	return nil
 }
 
-func fixtureCapabilities() map[string]manifest.CapabilityDescriptor {
-	return map[string]manifest.CapabilityDescriptor{
+func fixtureCapabilities(mode string) map[string]manifest.CapabilityDescriptor {
+	capabilities := map[string]manifest.CapabilityDescriptor{
 		"health": {Version: 1, MaxInFlight: 2},
 		"capture_turn": {
 			Version: 1, Roles: []string{"user", "assistant"}, MaxRequestBytes: 3800 << 10,
@@ -116,6 +120,17 @@ func fixtureCapabilities() map[string]manifest.CapabilityDescriptor {
 			MaxResultItems: 5, MaxInFlight: 2,
 		},
 	}
+	if mode == "user-role-only" {
+		descriptor := capabilities["capture_turn"]
+		descriptor.Roles = []string{"user"}
+		capabilities["capture_turn"] = descriptor
+	}
+	if mode == "agent-scope-only" {
+		descriptor := capabilities["recall"]
+		descriptor.Scopes = []string{"agent"}
+		capabilities["recall"] = descriptor
+	}
+	return capabilities
 }
 
 func serveInitializeThenBlock() {
@@ -130,7 +145,7 @@ func serveInitializeThenBlock() {
 	}
 	result := protocol.InitializeResult{
 		ProviderID: "dev.mlink.fixture", ProviderVersion: "0.1.0",
-		ProtocolVersion: protocol.Version, Capabilities: fixtureCapabilities(),
+		ProtocolVersion: protocol.Version, Capabilities: fixtureCapabilities("normal"),
 	}
 	response, err := protocol.EncodeResult(message.ID, result)
 	if err != nil || protocol.NewEncoder(os.Stdout).WriteFrame(response) != nil {

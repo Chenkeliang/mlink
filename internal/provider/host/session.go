@@ -305,6 +305,11 @@ func (s *processSession) CaptureTurn(ctx context.Context, meta CallMeta, turn mo
 	if strings.TrimSpace(meta.IdempotencyKey) == "" {
 		return model.WriteReceipt{}, errors.New("capture requires idempotency key")
 	}
+	for _, message := range turn.Messages {
+		if !containsString(descriptor.Roles, message.Role) {
+			return model.WriteReceipt{}, fmt.Errorf("capture message role %q is outside provider capability", message.Role)
+		}
+	}
 	callCtx, cancel := withDefaultDeadline(ctx, captureTimeout)
 	defer cancel()
 	requestID, requestMeta, id, err := s.nextRequest(callCtx, meta.IdempotencyKey)
@@ -341,6 +346,12 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 	if request.MaxItems > descriptor.MaxResultItems {
 		return model.ContextBundle{}, errors.New("recall max_items exceeds provider capability")
 	}
+	if !containsString(descriptor.Scopes, string(model.ScopeUser)) {
+		return model.ContextBundle{}, errors.New("recall requires provider user scope")
+	}
+	if request.IncludeAgentShared && !containsString(descriptor.Scopes, string(model.ScopeAgent)) {
+		return model.ContextBundle{}, errors.New("shared recall requires provider agent scope")
+	}
 	callCtx, cancel := withDefaultDeadline(ctx, recallTimeout)
 	defer cancel()
 	requestID, meta, id, err := s.nextRequest(callCtx, "")
@@ -356,7 +367,8 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 		return model.ContextBundle{}, err
 	}
 	var result model.ContextBundle
-	if err := protocol.DecodeParams(message.Result, &result); err != nil || !validContextBundle(result, descriptor.MaxResultItems) {
+	if err := protocol.DecodeParams(message.Result, &result); err != nil ||
+		!validContextBundle(result, descriptor.MaxResultItems, descriptor.Scopes) {
 		s.fault(protocol.ErrorProtocol)
 		return model.ContextBundle{}, errors.New("provider returned an invalid recall result")
 	}
@@ -815,13 +827,13 @@ func validHealth(result protocol.HealthResult) bool {
 	return true
 }
 
-func validContextBundle(bundle model.ContextBundle, maxItems int) bool {
+func validContextBundle(bundle model.ContextBundle, maxItems int, allowedScopes []string) bool {
 	if len(bundle.Items) > maxItems {
 		return false
 	}
 	seen := make(map[string]struct{}, len(bundle.Items))
 	for _, item := range bundle.Items {
-		if item.ID == "" || item.Source == "" || (item.Scope != model.ScopeUser && item.Scope != model.ScopeAgent) {
+		if item.ID == "" || item.Source == "" || !containsString(allowedScopes, string(item.Scope)) {
 			return false
 		}
 		if _, duplicate := seen[item.ID]; duplicate {

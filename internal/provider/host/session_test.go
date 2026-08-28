@@ -180,6 +180,78 @@ func TestSessionValidatesCallsBeforeSending(t *testing.T) {
 	}
 }
 
+func TestSessionEnforcesNegotiatedCaptureRoles(t *testing.T) {
+	session := startFixtureSession(t, "user-role-only", "token-role-boundary")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = session.Shutdown(ctx)
+	})
+
+	_, err := session.CaptureTurn(context.Background(), CallMeta{IdempotencyKey: "role-boundary"}, model.Turn{
+		Identity: testIdentity(true),
+		Messages: []model.Message{
+			{Role: "user", Content: "remember"},
+			{Role: "assistant", Content: "acknowledged"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "role") {
+		t.Fatalf("CaptureTurn() error = %v, want negotiated role rejection", err)
+	}
+}
+
+func TestSessionEnforcesNegotiatedRecallRequestScopes(t *testing.T) {
+	t.Run("user scope required", func(t *testing.T) {
+		session := startFixtureSession(t, "agent-scope-only", "token-user-scope")
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = session.Shutdown(ctx)
+		})
+
+		_, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+			Identity: testIdentity(false), Query: "private memory", MaxItems: 1,
+		})
+		if err == nil || !strings.Contains(err.Error(), "user") {
+			t.Fatalf("Recall() error = %v, want missing user scope rejection", err)
+		}
+	})
+
+	t.Run("agent scope required for shared recall", func(t *testing.T) {
+		session := startFixtureSession(t, "normal", "token-agent-scope")
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = session.Shutdown(ctx)
+		})
+
+		_, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+			Identity: testIdentity(false), Query: "shared memory", MaxItems: 1, IncludeAgentShared: true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "agent") {
+			t.Fatalf("Recall() error = %v, want missing agent scope rejection", err)
+		}
+	})
+}
+
+func TestSessionFaultsWhenRecallResultExceedsNegotiatedScopes(t *testing.T) {
+	session := startFixtureSession(t, "user-only-return-agent", "token-response-scope")
+	_, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
+		Identity: testIdentity(false), Query: "private memory", MaxItems: 1,
+	})
+	if err == nil {
+		t.Fatal("Recall() error = nil, want response scope rejection")
+	}
+	select {
+	case <-session.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Session did not fault after out-of-scope recall result")
+	}
+	if session.State() != StateFaulted {
+		t.Fatalf("State() = %q, want faulted", session.State())
+	}
+}
+
 var fixtureBuild struct {
 	sync.Mutex
 	path string
@@ -269,7 +341,7 @@ func fixtureDeclaredCapabilities() map[string]manifest.CapabilityDescriptor {
 			MaxInFlight: 4, ReplaySafe: false, Ordering: "turn",
 		},
 		"recall": {
-			Version: 1, Scopes: []string{"user"}, MaxRequestBytes: 3800 << 10,
+			Version: 1, Scopes: []string{"user", "agent"}, MaxRequestBytes: 3800 << 10,
 			MaxResultItems: 10, MaxInFlight: 4,
 		},
 	}
