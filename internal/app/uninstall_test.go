@@ -42,6 +42,12 @@ func TestFullUninstallUsesLatestSemanticBackupAndDeletesConnectionSecret(t *test
 	if _, exists := secrets.values["connection/local/token"]; exists {
 		t.Fatal("MemoryCore token still exists")
 	}
+	if _, exists := secrets.values["identity/hmac-key"]; exists {
+		t.Fatal("identity key still exists")
+	}
+	if _, exists := secrets.values["adapter/hermes/token"]; exists {
+		t.Fatal("Hermes grant still exists")
+	}
 	if got := target.files[hermesPath].content; !bytes.Contains(got, []byte("provider: hy-memory")) || !bytes.Contains(got, []byte("later_user_setting: keep")) {
 		t.Fatalf("Hermes config after uninstall = %s", got)
 	}

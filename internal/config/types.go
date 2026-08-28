@@ -7,6 +7,12 @@ type Config struct {
 	ActiveConnectionID string                `yaml:"active_connection_id"`
 	Connections        map[string]Connection `yaml:"connections"`
 	Adapters           map[string]Adapter    `yaml:"adapters"`
+	Broker             Broker                `yaml:"broker,omitempty"`
+}
+
+type Broker struct {
+	HermesEndpoint string `yaml:"hermes_endpoint,omitempty"`
+	ListenAddress  string `yaml:"listen_address,omitempty"`
 }
 
 // Connection selects and configures a memory provider. SecretRefs point to an

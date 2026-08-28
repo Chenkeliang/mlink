@@ -52,12 +52,14 @@ type ActiveInstallStore interface {
 }
 
 type Service struct {
-	Paths            layout.Paths
-	UID              int
-	Target           install.Target
-	Ledger           install.Ledger
-	Secrets          secret.Store
-	BlockingEvents   BlockingEventStore
-	HermesEndpoint   string
-	HermesGrantToken []byte
+	Paths               layout.Paths
+	UID                 int
+	Target              install.Target
+	Ledger              install.Ledger
+	Secrets             secret.Store
+	BlockingEvents      BlockingEventStore
+	HermesEndpoint      string
+	HermesListenAddress string
+	HermesGrantToken    []byte
+	IdentityKey         []byte
 }

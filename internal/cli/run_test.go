@@ -4,9 +4,51 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
+
+	"mlink/internal/app"
+	"mlink/internal/config"
+	"mlink/internal/install"
 )
+
+type fakeApplication struct {
+	plan         install.ChangeSet
+	applyCalls   int
+	appliedPlan  string
+	installCalls int
+}
+
+func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
+	application.installCalls++
+	return application.plan, nil
+}
+
+func (application *fakeApplication) ApplyInstall(_ context.Context, planID string, _ app.InstallRequest) error {
+	application.applyCalls++
+	application.appliedPlan = planID
+	return nil
+}
+
+func (application *fakeApplication) PlanRestore(context.Context, app.RestoreRequest) (install.ChangeSet, error) {
+	return application.plan, nil
+}
+
+func (application *fakeApplication) ApplyRestore(context.Context, string, app.RestoreRequest) error {
+	application.applyCalls++
+	return nil
+}
+
+func (application *fakeApplication) PlanUninstall(context.Context, app.UninstallRequest) (install.ChangeSet, error) {
+	return application.plan, nil
+}
+
+func (application *fakeApplication) ApplyUninstall(context.Context, string, app.UninstallRequest) error {
+	application.applyCalls++
+	return nil
+}
 
 func TestRunPreservesTencentDBProviderCommand(t *testing.T) {
 	calls := 0
@@ -43,14 +85,10 @@ func TestRunReportsProviderFailureWithoutLeakingDetails(t *testing.T) {
 	}
 }
 
-func TestRunRecognizesPlannedCommands(t *testing.T) {
+func TestRunRecognizesStillPlannedCommands(t *testing.T) {
 	commands := [][]string{
-		{"install"},
 		{"status"},
 		{"doctor"},
-		{"backup"},
-		{"uninstall"},
-		{"broker", "serve"},
 		{"hook", "codex"},
 	}
 	for _, args := range commands {
@@ -61,6 +99,146 @@ func TestRunRecognizesPlannedCommands(t *testing.T) {
 		if !strings.Contains(stderr.String(), "not implemented") {
 			t.Fatalf("Run(%q) stderr = %q", args, stderr.String())
 		}
+	}
+}
+
+func TestRunStartsBrokerService(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), []string{"broker", "serve"}, Dependencies{
+		Stderr: io.Discard,
+		ServeBroker: func(context.Context) error {
+			calls++
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}
+
+func TestInstallDryRunPrintsPlanAndNeverApplies(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	stdout := new(bytes.Buffer)
+	code := Run(context.Background(), []string{"install", "--dry-run", "codex", "pi", "hermes"}, Dependencies{
+		App: application, InstallRequest: fixtureCLIInstallRequest(), Stdin: strings.NewReader(""), Stdout: stdout, Stderr: io.Discard,
+	})
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if application.applyCalls != 0 {
+		t.Fatalf("apply calls = %d", application.applyCalls)
+	}
+	for _, want := range []string{"Plan", "plan_test", "/Users/test/.local/bin/mlink", "memory.provider", "hy-memory -> mlink"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("preview missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestInstallDeclinedConsentNeverApplies(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	code := Run(context.Background(), []string{"install", "codex"}, Dependencies{
+		App: application, InstallRequest: fixtureCLIInstallRequest(), Stdin: strings.NewReader("n\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 0 || application.applyCalls != 0 {
+		t.Fatalf("code/apply = %d/%d", code, application.applyCalls)
+	}
+}
+
+func TestInstallRequiresDisplayedPlanForNonInteractiveApply(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	code := Run(context.Background(), []string{"install", "codex", "--apply-plan", "plan_test", "--yes"}, Dependencies{
+		App: application, InstallRequest: fixtureCLIInstallRequest(), Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 0 || application.applyCalls != 1 || application.appliedPlan != "plan_test" {
+		t.Fatalf("code/calls/plan = %d/%d/%q", code, application.applyCalls, application.appliedPlan)
+	}
+	application.applyCalls = 0
+	code = Run(context.Background(), []string{"install", "codex", "--yes"}, Dependencies{
+		App: application, InstallRequest: fixtureCLIInstallRequest(), Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 2 || application.applyCalls != 0 {
+		t.Fatalf("unsafe apply code/calls = %d/%d", code, application.applyCalls)
+	}
+}
+
+func TestInstallReadsMemoryCoreTokenFromStdinAndRejectsArgvSecret(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	template := fixtureCLIInstallRequest()
+	template.SecretInputs = nil
+	code := Run(context.Background(), []string{"install", "--dry-run", "codex", "--memorycore-token-stdin"}, Dependencies{
+		App: application, InstallRequest: template, Stdin: strings.NewReader("stdin-token\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 0 {
+		t.Fatalf("stdin token code = %d", code)
+	}
+	code = Run(context.Background(), []string{"install", "--dry-run", "codex", "--memorycore-token", "argv-secret"}, Dependencies{
+		App: application, InstallRequest: template, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 2 {
+		t.Fatalf("argv token code = %d", code)
+	}
+}
+
+func TestInstallJSONIsNonMutatingWithoutApplyPlan(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	stdout := new(bytes.Buffer)
+	code := Run(context.Background(), []string{"install", "codex", "--json"}, Dependencies{
+		App: application, InstallRequest: fixtureCLIInstallRequest(), Stdin: strings.NewReader("y\n"), Stdout: stdout, Stderr: io.Discard,
+	})
+	if code != 0 || application.applyCalls != 0 {
+		t.Fatalf("code/apply = %d/%d", code, application.applyCalls)
+	}
+	if strings.Contains(stdout.String(), "secret") || !strings.Contains(stdout.String(), `"plan_id": "plan_test"`) {
+		t.Fatalf("json = %s", stdout)
+	}
+}
+
+func TestBackupRestoreAndUninstallRequireConfirmation(t *testing.T) {
+	for name, args := range map[string][]string{
+		"restore":   {"backup", "restore", "plan_backup"},
+		"uninstall": {"uninstall", "codex"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			application := &fakeApplication{plan: fixtureInstallPlan()}
+			code := Run(context.Background(), args, Dependencies{
+				App: application, Stdin: strings.NewReader("n\n"), Stdout: io.Discard, Stderr: io.Discard,
+			})
+			if code != 0 || application.applyCalls != 0 {
+				t.Fatalf("code/apply = %d/%d", code, application.applyCalls)
+			}
+		})
+	}
+}
+
+func TestMutatingCommandWrongExplicitPlanReturnsConflict(t *testing.T) {
+	application := &fakeApplication{plan: fixtureInstallPlan()}
+	code := Run(context.Background(), []string{"uninstall", "codex", "--apply-plan", "plan_other", "--yes"}, Dependencies{
+		App: application, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 3 || application.applyCalls != 0 {
+		t.Fatalf("code/apply = %d/%d", code, application.applyCalls)
+	}
+}
+
+func fixtureInstallPlan() install.ChangeSet {
+	return install.ChangeSet{
+		PlanID: "plan_test", GeneratedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC), MLinkVersion: "0.1.0",
+		Operations: []install.Operation{
+			{ID: "op_binary", OwnerID: "dev.mlink.binary", Target: "/Users/test/.local/bin/mlink", Action: install.ActionCreate, RollbackAction: "remove_created"},
+			{
+				ID: "op_hermes", OwnerID: "dev.mlink.adapter.hermes.config", Target: "/home/test/.hermes/config.yaml", Action: install.ActionSemanticMerge, RollbackAction: "restore_backup",
+				SemanticDiff:        []install.SemanticDiff{{Path: "memory.provider", Before: "hy-memory", After: "mlink"}},
+				ProtectedInvariants: []install.Invariant{{Name: "hermes.model_auth", BeforeHash: "same", ProposedHash: "same", Preserved: true}},
+			},
+		},
+	}
+}
+
+func fixtureCLIInstallRequest() app.InstallRequest {
+	return app.InstallRequest{
+		Connection:   config.Connection{ID: "local"},
+		SecretInputs: map[string][]byte{app.MemoryCoreTokenSecret: []byte("memorycore-token")},
 	}
 }
 

@@ -36,6 +36,9 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if len(request.SecretInputs[MemoryCoreTokenSecret]) == 0 {
 		return install.ChangeSet{}, errors.New("MemoryCore token input is required")
 	}
+	if len(service.IdentityKey) != 32 {
+		return install.ChangeSet{}, errors.New("32-byte MLink identity key is required")
+	}
 
 	binary, _, err := service.Target.Read(ctx, service.Paths.SourceExecutable)
 	if err != nil {
@@ -51,7 +54,7 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 		}},
 	}}
 
-	configuration := desiredConfig(request.Connection, agents)
+	configuration := service.desiredConfig(request.Connection, agents)
 	configData, err := yaml.Marshal(configuration)
 	if err != nil {
 		return install.ChangeSet{}, fmt.Errorf("render MLink config: %w", err)
@@ -124,23 +127,20 @@ func (service *Service) ApplyInstall(ctx context.Context, planID string, request
 	if service.Secrets == nil {
 		return errors.New("secret store is required")
 	}
-	account := "connection/" + request.Connection.ID + "/token"
-	previous, getErr := service.Secrets.Get(ctx, account)
-	previousExisted := getErr == nil
-	if getErr != nil && !errors.Is(getErr, fs.ErrNotExist) {
-		return fmt.Errorf("read previous MemoryCore token: %w", getErr)
+	managedSecrets, err := service.installSecrets(ctx, request)
+	if err != nil {
+		return err
 	}
-	secretValue := append([]byte(nil), request.SecretInputs[MemoryCoreTokenSecret]...)
-	defer wipe(secretValue)
-	defer wipe(previous)
-	if err := service.Secrets.Put(ctx, account, secretValue); err != nil {
+	defer wipeManagedSecrets(managedSecrets)
+	if err := service.putManagedSecrets(ctx, managedSecrets); err != nil {
+		_ = service.restoreManagedSecrets(ctx, managedSecrets)
 		return err
 	}
 	transaction := install.NewTransaction(service.Target, service.Ledger)
 	if err := transaction.Apply(ctx, plan); err != nil {
-		secretErr := service.restoreSecret(ctx, account, previous, previousExisted)
+		secretErr := service.restoreManagedSecrets(ctx, managedSecrets)
 		if secretErr != nil {
-			return errors.Join(err, fmt.Errorf("restore MemoryCore token: %w", secretErr))
+			return errors.Join(err, fmt.Errorf("restore MLink secrets: %w", secretErr))
 		}
 		return err
 	}
@@ -149,7 +149,7 @@ func (service *Service) ApplyInstall(ctx context.Context, planID string, request
 		copy(agents, plan.DetectedAgents)
 		if err := recorder.RecordInstallPlan(ctx, plan.PlanID, agents); err != nil {
 			rollbackErr := transaction.Rollback(ctx, plan)
-			secretErr := service.restoreSecret(ctx, account, previous, previousExisted)
+			secretErr := service.restoreManagedSecrets(ctx, managedSecrets)
 			return errors.Join(err, rollbackErr, secretErr)
 		}
 	}
@@ -223,7 +223,7 @@ func (service *Service) planHermes(ctx context.Context, request InstallRequest) 
 	return resources, nil
 }
 
-func desiredConfig(connection config.Connection, agents []Agent) config.Config {
+func (service *Service) desiredConfig(connection config.Connection, agents []Agent) config.Config {
 	connection.ProviderConfig = cloneAnyMap(connection.ProviderConfig)
 	connection.SecretRefs = map[string]string{
 		"token": "keychain://dev.mlink/connection/" + connection.ID + "/token",
@@ -238,6 +238,10 @@ func desiredConfig(connection config.Connection, agents []Agent) config.Config {
 		ActiveConnectionID: connection.ID,
 		Connections:        map[string]config.Connection{connection.ID: connection},
 		Adapters:           adapters,
+		Broker: config.Broker{
+			HermesEndpoint: service.HermesEndpoint,
+			ListenAddress:  service.HermesListenAddress,
+		},
 	}
 }
 
@@ -348,15 +352,92 @@ func cloneAnyMap(input map[string]any) map[string]any {
 	return output
 }
 
-func (service *Service) restoreSecret(ctx context.Context, account string, previous []byte, existed bool) error {
-	if existed {
-		return service.Secrets.Put(ctx, account, previous)
-	}
-	return service.Secrets.Delete(ctx, account)
-}
-
 func wipe(value []byte) {
 	for index := range value {
 		value[index] = 0
+	}
+}
+
+type managedSecret struct {
+	account  string
+	value    []byte
+	previous []byte
+	existed  bool
+	written  bool
+}
+
+func (service *Service) installSecrets(ctx context.Context, request InstallRequest) ([]managedSecret, error) {
+	values := []managedSecret{
+		{account: "connection/" + request.Connection.ID + "/token", value: append([]byte(nil), request.SecretInputs[MemoryCoreTokenSecret]...)},
+		{account: "identity/hmac-key", value: append([]byte(nil), service.IdentityKey...)},
+	}
+	if agentSelected(request.Agents, Hermes) {
+		values = append(values, managedSecret{account: "adapter/hermes/token", value: append([]byte(nil), service.HermesGrantToken...)})
+	}
+	for index := range values {
+		previous, err := service.Secrets.Get(ctx, values[index].account)
+		if err == nil {
+			values[index].previous = previous
+			values[index].existed = true
+			if values[index].account == "identity/hmac-key" {
+				if len(previous) != 32 {
+					wipeManagedSecrets(values)
+					return nil, errors.New("stored MLink identity key is invalid")
+				}
+				wipe(values[index].value)
+				values[index].value = append([]byte(nil), previous...)
+			}
+			continue
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			wipeManagedSecrets(values)
+			return nil, fmt.Errorf("read previous MLink secret for %q: %w", values[index].account, err)
+		}
+	}
+	return values, nil
+}
+
+func agentSelected(agents []Agent, want Agent) bool {
+	for _, agent := range agents {
+		if agent == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (service *Service) putManagedSecrets(ctx context.Context, values []managedSecret) error {
+	for index := range values {
+		if err := service.Secrets.Put(ctx, values[index].account, values[index].value); err != nil {
+			return err
+		}
+		values[index].written = true
+	}
+	return nil
+}
+
+func (service *Service) restoreManagedSecrets(ctx context.Context, values []managedSecret) error {
+	var restoreErrors []error
+	for index := len(values) - 1; index >= 0; index-- {
+		if !values[index].written {
+			continue
+		}
+		var err error
+		if values[index].existed {
+			err = service.Secrets.Put(ctx, values[index].account, values[index].previous)
+		} else {
+			err = service.Secrets.Delete(ctx, values[index].account)
+		}
+		if err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("%s: %w", values[index].account, err))
+		}
+	}
+	return errors.Join(restoreErrors...)
+}
+
+func wipeManagedSecrets(values []managedSecret) {
+	for index := range values {
+		wipe(values[index].value)
+		wipe(values[index].previous)
 	}
 }

@@ -91,32 +91,21 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 	if err != nil {
 		return err
 	}
-	account := ""
-	var previous []byte
-	previousExisted := false
+	var removedSecrets []managedSecret
 	if isFullAgentSet(agents) && service.Secrets != nil {
 		connectionID, err := service.activeConnectionID(ctx)
 		if err != nil {
 			return err
 		}
-		account = "connection/" + connectionID + "/token"
-		previous, err = service.Secrets.Get(ctx, account)
-		if err == nil {
-			previousExisted = true
-			if err := service.Secrets.Delete(ctx, account); err != nil {
-				wipe(previous)
-				return err
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		removedSecrets, err = service.removeInstallSecrets(ctx, connectionID)
+		if err != nil {
 			return err
 		}
 	}
-	defer wipe(previous)
+	defer wipeManagedSecrets(removedSecrets)
 	if err := install.NewTransaction(service.Target, service.Ledger).Apply(ctx, plan); err != nil {
-		if previousExisted {
-			if restoreErr := service.Secrets.Put(ctx, account, previous); restoreErr != nil {
-				return errors.Join(err, fmt.Errorf("restore MemoryCore token: %w", restoreErr))
-			}
+		if restoreErr := service.restoreManagedSecrets(ctx, removedSecrets); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("restore MLink secrets: %w", restoreErr))
 		}
 		return err
 	}
@@ -128,6 +117,38 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 		}
 	}
 	return nil
+}
+
+func (service *Service) removeInstallSecrets(ctx context.Context, connectionID string) ([]managedSecret, error) {
+	values := []managedSecret{
+		{account: "connection/" + connectionID + "/token"},
+		{account: "identity/hmac-key"},
+		{account: "adapter/hermes/token"},
+	}
+	for index := range values {
+		previous, err := service.Secrets.Get(ctx, values[index].account)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			wipeManagedSecrets(values)
+			return nil, err
+		}
+		values[index].previous = previous
+		values[index].existed = true
+	}
+	for index := range values {
+		if !values[index].existed {
+			continue
+		}
+		if err := service.Secrets.Delete(ctx, values[index].account); err != nil {
+			_ = service.restoreManagedSecrets(ctx, values)
+			wipeManagedSecrets(values)
+			return nil, err
+		}
+		values[index].written = true
+	}
+	return values, nil
 }
 
 func isFullAgentSet(agents []Agent) bool {

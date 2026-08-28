@@ -211,6 +211,12 @@ func TestApplyInstallStoresSecretAndAppliesExactPlan(t *testing.T) {
 	if got := string(secrets.values["connection/local/token"]); got != "memorycore-secret" {
 		t.Fatalf("stored secret = %q", got)
 	}
+	if got := secrets.values["identity/hmac-key"]; len(got) != 32 {
+		t.Fatalf("identity key length = %d", len(got))
+	}
+	if got := string(secrets.values["adapter/hermes/token"]); got != "hermes-grant-secret" {
+		t.Fatalf("Hermes grant = %q", got)
+	}
 	if target.writes == 0 || target.runs != 2 {
 		t.Fatalf("apply writes/runs = %d/%d", target.writes, target.runs)
 	}
@@ -221,6 +227,27 @@ func TestApplyInstallStoresSecretAndAppliesExactPlan(t *testing.T) {
 	configData := target.files[service.Paths.Config].content
 	if bytes.Contains(configData, []byte("memorycore-secret")) || !bytes.Contains(configData, []byte("keychain://dev.mlink/connection/local/token")) {
 		t.Fatalf("non-secret config is unsafe: %s", configData)
+	}
+	if !bytes.Contains(configData, []byte("listen_address: 192.168.139.1:8097")) {
+		t.Fatalf("Broker listen address missing: %s", configData)
+	}
+}
+
+func TestApplyInstallPreservesExistingIdentityKey(t *testing.T) {
+	service, _, secrets := newInstallFixture(t)
+	existing := bytes.Repeat([]byte{0x31}, 32)
+	secrets.values["identity/hmac-key"] = append([]byte(nil), existing...)
+	service.IdentityKey = bytes.Repeat([]byte{0x42}, 32)
+	request := fixtureInstallRequest()
+	plan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(secrets.values["identity/hmac-key"], existing) {
+		t.Fatal("reinstall rotated the stable identity key")
 	}
 }
 
@@ -267,13 +294,15 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 	})
 	secrets := &memorySecrets{values: make(map[string][]byte)}
 	return &Service{
-		Paths:            paths,
-		UID:              501,
-		Target:           target,
-		Ledger:           newMemoryLedger(),
-		Secrets:          secrets,
-		HermesEndpoint:   "http://192.168.139.1:8097",
-		HermesGrantToken: []byte("hermes-grant-secret"),
+		Paths:               paths,
+		UID:                 501,
+		Target:              target,
+		Ledger:              newMemoryLedger(),
+		Secrets:             secrets,
+		HermesEndpoint:      "http://192.168.139.1:8097",
+		HermesListenAddress: "192.168.139.1:8097",
+		HermesGrantToken:    []byte("hermes-grant-secret"),
+		IdentityKey:         bytes.Repeat([]byte{0x2a}, 32),
 	}, target, secrets
 }
 
