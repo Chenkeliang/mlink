@@ -240,10 +240,11 @@ TUI 安装后要求用户在 Codex `/hooks` 中检查并信任；Doctor 只有�
 |---|---|
 | `session_start` | 建立或恢复稳定 `session_id` |
 | `before_agent_start` | 调用 Broker recall 并注入有界上下文 |
-| `agent_end` | 从完成的消息集合生成 Turn 并异步提交 |
+| `agent_end` | 更新当前低层运行的候选完成消息，不立即写入 |
+| `agent_settled` | 在自动重试、压缩重试和后续运行全部结束后，提交最终 Turn |
 | `session_shutdown` | 请求有限时长 flush |
 
-Extension 只实现 Pi 事件与 Broker API 的映射，不加载 Provider SDK，不读取 Pi 模型配置。`agent_end` 可能因继续、重试或宿主行为重复出现，因此不能把“事件触发一次”当作幂等保证；Broker 使用 turn identity 与内容哈希判定重复或冲突。
+Extension 只实现 Pi 事件与 Broker API 的映射，不加载 Provider SDK，不读取 Pi 模型配置。Pi 官方明确说明 `agent_end` 之后仍可能自动重试、压缩重试或继续处理后续消息，因此 Extension 只缓存最后一次候选结果，并在 `agent_settled` 到达时提交一次最终回合。Broker 仍使用 turn identity 与内容哈希作为最终幂等边界，不能把任何前端事件的触发次数当作幂等保证。
 
 若目标文件已经存在且不属于当前 MLink 安装，Installer 必须报冲突，不能覆盖。
 
@@ -464,7 +465,7 @@ queued → dispatching → accepted → visible
 ### 15.1 单元与 Golden 测试
 
 - Codex `hooks.json` 新建、语义合并、重复安装、冲突和卸载。
-- Pi Extension 安装、文件冲突和事件 payload。
+- Pi Extension 安装、文件冲突、`agent_end → agent_settled` 最终化和事件 payload。
 - Hermes YAML 合并、关闭内置记忆、恢复旧 Provider 与工具集。
 - 模型配置保护字段安装前后完全一致。
 - ChangeSet 文本、JSON 和 TUI 模型使用相同数据。
@@ -505,7 +506,7 @@ queued → dispatching → accepted → visible
 至少覆盖：
 
 - 同一 Codex/Pi/Hermes 回合重放十次。
-- Fragment 乱序、缺失 Stop、重复 agent_end。
+- Fragment 乱序、缺失 Stop、重复 agent_end、缺失或重复 agent_settled。
 - 同一 `turn_id` 不同内容冲突。
 - 两个飞书用户 100 次交错读写不串数据。
 - 身份缺失、昵称变化与同名不同 ID。
@@ -527,4 +528,3 @@ queued → dispatching → accepted → visible
 6. 模型地址、模型 Provider、认证和订阅配置保护测试通过。
 7. 备份、恢复、卸载和失败回滚往返测试通过。
 8. 最终对抗性测试报告明确区分 MLink 缺陷与 TencentDB Provider/MemoryCore 能力限制。
-
