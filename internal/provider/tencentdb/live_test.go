@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,12 +20,6 @@ type liveFixture struct {
 	canary   string
 }
 
-var (
-	seededLiveOnce sync.Once
-	seededLive     *liveFixture
-	seededLiveErr  error
-)
-
 func TestLiveNewUserIsEmpty(t *testing.T) {
 	provider, identity := newLiveProvider(t, "empty")
 	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
@@ -37,25 +30,28 @@ func TestLiveNewUserIsEmpty(t *testing.T) {
 		t.Fatalf("Recall() error = %v", err)
 	}
 	if len(bundle.Items) != 0 {
-		t.Fatalf("new user received %d item(s): %#v", len(bundle.Items), bundle.Items)
+		t.Fatalf("new user received unexpected item(s): %s", bundleSummary(bundle))
 	}
 }
 
 func TestLiveCaptureAndEventuallyRecallL1(t *testing.T) {
-	fixture := seededLiveFixture(t)
+	fixture := seedLiveFixture(t, "capture")
+	recallIdentity := fixture.identity
+	recallIdentity.SessionID += "-new-session"
+	recallIdentity.TurnID = ""
 	bundle := eventuallyRecall(t, fixture.provider, model.RecallRequest{
-		Identity: fixture.identity,
+		Identity: recallIdentity,
 		Query:    fixture.canary,
 	}, 2*time.Minute, func(bundle model.ContextBundle) bool {
 		return bundleContains(bundle, model.ScopeUser, fixture.canary)
 	})
 	if !bundleContains(bundle, model.ScopeUser, fixture.canary) {
-		t.Fatalf("L1 recall did not contain canary %q: %#v", fixture.canary, bundle)
+		t.Fatalf("cross-session L1 recall did not contain canary: %s", bundleSummary(bundle))
 	}
 }
 
-func TestLiveDuplicateContentProducesNoDuplicateContextID(t *testing.T) {
-	fixture := seededLiveFixture(t)
+func TestLiveRepeatedContentProducesNoDuplicateContextID(t *testing.T) {
+	fixture := seedLiveFixture(t, "repeated-content")
 	bundle := eventuallyRecall(t, fixture.provider, model.RecallRequest{
 		Identity: fixture.identity,
 		Query:    fixture.canary,
@@ -66,14 +62,21 @@ func TestLiveDuplicateContentProducesNoDuplicateContextID(t *testing.T) {
 	seen := make(map[string]struct{}, len(bundle.Items))
 	for _, item := range bundle.Items {
 		if _, exists := seen[item.ID]; exists {
-			t.Fatalf("duplicate ContextItem ID %q in %#v", item.ID, bundle.Items)
+			t.Fatalf("duplicate ContextItem ID %q in %s", item.ID, bundleSummary(bundle))
 		}
 		seen[item.ID] = struct{}{}
 	}
 }
 
 func TestLiveTwoUsersDoNotShareL1(t *testing.T) {
-	fixture := seededLiveFixture(t)
+	fixture := seedLiveFixture(t, "user-isolation")
+	eventuallyRecall(t, fixture.provider, model.RecallRequest{
+		Identity: fixture.identity,
+		Query:    fixture.canary,
+		MaxItems: 20,
+	}, 2*time.Minute, func(bundle model.ContextBundle) bool {
+		return bundleContains(bundle, model.ScopeUser, fixture.canary)
+	})
 	other := fixture.identity
 	other.UserID += "-other"
 	other.SessionID += "-other"
@@ -88,12 +91,19 @@ func TestLiveTwoUsersDoNotShareL1(t *testing.T) {
 		t.Fatalf("Recall(other user) error = %v", err)
 	}
 	if bundleContains(bundle, model.ScopeUser, fixture.canary) {
-		t.Fatalf("other user received private canary %q: %#v", fixture.canary, bundle.Items)
+		t.Fatalf("other user received private canary: %s", bundleSummary(bundle))
 	}
 }
 
 func TestLiveAgentSharedLayersAreOptIn(t *testing.T) {
-	fixture := seededLiveFixture(t)
+	fixture := seedLiveFixture(t, "shared-layers")
+	eventuallyRecall(t, fixture.provider, model.RecallRequest{
+		Identity: fixture.identity,
+		Query:    fixture.canary,
+		MaxItems: 20,
+	}, 2*time.Minute, func(bundle model.ContextBundle) bool {
+		return bundleContains(bundle, model.ScopeUser, fixture.canary)
+	})
 	privateBundle, err := fixture.provider.Recall(context.Background(), model.RecallRequest{
 		Identity: fixture.identity,
 		Query:    fixture.canary,
@@ -104,7 +114,7 @@ func TestLiveAgentSharedLayersAreOptIn(t *testing.T) {
 	}
 	for _, item := range privateBundle.Items {
 		if item.Scope == model.ScopeAgent {
-			t.Fatalf("default recall returned Agent-shared item %#v", item)
+			t.Fatalf("default recall returned Agent-shared item %q", item.ID)
 		}
 	}
 
@@ -121,12 +131,43 @@ func TestLiveAgentSharedLayersAreOptIn(t *testing.T) {
 		}
 		return false
 	})
-	for _, item := range sharedBundle.Items {
-		if item.Scope == model.ScopeAgent {
-			return
-		}
+	if !bundleHasScope(sharedBundle, model.ScopeAgent) {
+		t.Fatalf("opt-in recall did not return Agent-shared L2/L3: %s", bundleSummary(sharedBundle))
 	}
-	t.Fatalf("opt-in recall did not return Agent-shared L2/L3: %#v", sharedBundle)
+
+	otherUser := fixture.identity
+	otherUser.UserID += "-other"
+	otherUser.SessionID += "-other"
+	otherUser.TurnID = ""
+	otherUserBundle, err := fixture.provider.Recall(context.Background(), model.RecallRequest{
+		Identity:           otherUser,
+		Query:              fixture.canary,
+		MaxItems:           20,
+		IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall(other user, same agent) error = %v", err)
+	}
+	if !bundleHasScope(otherUserBundle, model.ScopeAgent) {
+		t.Fatalf("other user under same agent did not receive Agent-shared layer: %s", bundleSummary(otherUserBundle))
+	}
+
+	otherAgent := fixture.identity
+	otherAgent.AgentID += "-other"
+	otherAgent.SessionID += "-other-agent"
+	otherAgent.TurnID = ""
+	otherAgentBundle, err := fixture.provider.Recall(context.Background(), model.RecallRequest{
+		Identity:           otherAgent,
+		Query:              fixture.canary,
+		MaxItems:           20,
+		IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall(other agent) error = %v", err)
+	}
+	if bundleHasScope(otherAgentBundle, model.ScopeAgent) {
+		t.Fatalf("other agent received Agent-shared layer: %s", bundleSummary(otherAgentBundle))
+	}
 }
 
 func TestLiveMissingIdentityIsRejectedLocally(t *testing.T) {
@@ -160,36 +201,25 @@ func TestLiveTransientInventoryIsNotPromotedToL1(t *testing.T) {
 		t.Fatalf("Recall() error = %v", err)
 	}
 	if len(bundle.Items) != 0 {
-		t.Fatalf("transient inventory was promoted to L1: %#v", bundle.Items)
+		t.Fatalf("transient inventory was promoted to L1: %s", bundleSummary(bundle))
 	}
 }
 
-func seededLiveFixture(t *testing.T) *liveFixture {
+func seedLiveFixture(t *testing.T, suffix string) *liveFixture {
 	t.Helper()
-	seededLiveOnce.Do(func() {
-		provider, identity, err := makeLiveProvider("seeded")
-		if err != nil {
-			seededLiveErr = err
-			return
-		}
-		canary := "MLINK_LIVE_" + fmt.Sprint(time.Now().UnixNano())
-		messages := make([]model.Message, 0, 10)
-		for range 5 {
-			messages = append(messages,
-				model.Message{Role: "user", Content: "我的长期个人代号是 " + canary + "，以后询问个人代号时请使用它。"},
-				model.Message{Role: "assistant", Content: "已记录你的长期个人代号 " + canary + "。"},
-			)
-		}
-		if _, err := provider.CaptureTurn(context.Background(), model.Turn{Identity: identity, Messages: messages}); err != nil {
-			seededLiveErr = err
-			return
-		}
-		seededLive = &liveFixture{provider: provider, identity: identity, canary: canary}
-	})
-	if seededLiveErr != nil {
-		t.Fatalf("seed live fixture: %v", seededLiveErr)
+	provider, identity := newLiveProvider(t, suffix)
+	canary := "MLINK_LIVE_" + fmt.Sprint(time.Now().UnixNano())
+	messages := make([]model.Message, 0, 10)
+	for range 5 {
+		messages = append(messages,
+			model.Message{Role: "user", Content: "我的长期个人代号是 " + canary + "，以后询问个人代号时请使用它。"},
+			model.Message{Role: "assistant", Content: "已记录你的长期个人代号 " + canary + "。"},
+		)
 	}
-	return seededLive
+	if _, err := provider.CaptureTurn(context.Background(), model.Turn{Identity: identity, Messages: messages}); err != nil {
+		t.Fatalf("seed live fixture: %v", err)
+	}
+	return &liveFixture{provider: provider, identity: identity, canary: canary}
 }
 
 func newLiveProvider(t *testing.T, suffix string) (*Provider, model.IdentityScope) {
@@ -251,7 +281,7 @@ func eventuallyRecall(
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("memory did not become visible in %s: last_error=%v last_bundle=%#v", timeout, lastErr, last)
+			t.Fatalf("memory did not become visible in %s: last_error=%v last_bundle=%s", timeout, lastErr, bundleSummary(last))
 		case <-ticker.C:
 		}
 	}
@@ -263,7 +293,7 @@ func waitForL1Idle(t *testing.T, client *Client, timeout time.Duration) {
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	seenBusy := false
+	consecutiveIdle := 0
 	for {
 		var status struct {
 			L1 struct {
@@ -274,9 +304,12 @@ func waitForL1Idle(t *testing.T, client *Client, timeout time.Duration) {
 		}
 		err := client.post(ctx, "/v2/pipeline/status", map[string]any{}, &status)
 		if err == nil {
-			busy := status.L1.Queued > 0 || status.L1.Running > 0
-			seenBusy = seenBusy || busy
-			if status.L1.Idle && seenBusy {
+			if status.L1.Idle && status.L1.Queued == 0 && status.L1.Running == 0 {
+				consecutiveIdle++
+			} else {
+				consecutiveIdle = 0
+			}
+			if consecutiveIdle >= 2 {
 				return
 			}
 		}
@@ -295,4 +328,21 @@ func bundleContains(bundle model.ContextBundle, scope model.ScopeKind, text stri
 		}
 	}
 	return false
+}
+
+func bundleHasScope(bundle model.ContextBundle, scope model.ScopeKind) bool {
+	for _, item := range bundle.Items {
+		if item.Scope == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func bundleSummary(bundle model.ContextBundle) string {
+	parts := make([]string, 0, len(bundle.Items))
+	for _, item := range bundle.Items {
+		parts = append(parts, fmt.Sprintf("%s[%s]", item.ID, item.Scope))
+	}
+	return fmt.Sprintf("items=%d ids=%s partial=%t warnings=%d", len(bundle.Items), strings.Join(parts, ","), bundle.Partial, len(bundle.Warnings))
 }

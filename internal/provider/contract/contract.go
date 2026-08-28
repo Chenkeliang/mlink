@@ -23,6 +23,11 @@ func Run(t *testing.T, factory Factory) {
 		if _, err := provider.Recall(context.Background(), model.RecallRequest{Query: "probe"}); err == nil {
 			t.Fatal("Recall() accepted a request without identity")
 		}
+		if _, err := provider.CaptureTurn(context.Background(), model.Turn{
+			Messages: []model.Message{{Role: "user", Content: "probe"}},
+		}); err == nil {
+			t.Fatal("CaptureTurn() accepted a turn without identity")
+		}
 	})
 
 	t.Run("new user is empty", func(t *testing.T) {

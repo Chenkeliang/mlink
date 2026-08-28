@@ -18,6 +18,9 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 		{name: "missing base URL", config: Config{Token: "secret", ServiceID: "service-a"}},
 		{name: "relative base URL", config: Config{BaseURL: "/v1", Token: "secret", ServiceID: "service-a"}},
 		{name: "unsupported scheme", config: Config{BaseURL: "ftp://memory.test", Token: "secret", ServiceID: "service-a"}},
+		{name: "base URL with userinfo", config: Config{BaseURL: "http://user:pass@memory.test", Token: "secret", ServiceID: "service-a"}},
+		{name: "base URL with query", config: Config{BaseURL: "http://memory.test?token=secret", Token: "secret", ServiceID: "service-a"}},
+		{name: "base URL with fragment", config: Config{BaseURL: "http://memory.test#fragment", Token: "secret", ServiceID: "service-a"}},
 		{name: "missing token", config: Config{BaseURL: "http://memory.test", ServiceID: "service-a"}},
 		{name: "missing service ID", config: Config{BaseURL: "http://memory.test", Token: "secret"}},
 	}
@@ -86,6 +89,7 @@ func TestClientPostSendsAuthenticationAndDecodesData(t *testing.T) {
 
 func TestClientPostReturnsSanitizedAPIErrors(t *testing.T) {
 	const token = "top-secret-token"
+	const privateCanary = "PRIVATE_MEMORY_CANARY"
 
 	tests := []struct {
 		name       string
@@ -104,9 +108,16 @@ func TestClientPostReturnsSanitizedAPIErrors(t *testing.T) {
 		{
 			name:       "business envelope failure",
 			status:     http.StatusOK,
-			body:       `{"code":422,"message":"missing user_id","request_id":"req-b"}`,
+			body:       `{"code":422,"message":"` + token + ` ` + privateCanary + `","request_id":"req-b"}`,
 			wantStatus: http.StatusOK,
 			wantCode:   422,
+		},
+		{
+			name:       "plain text authentication failure",
+			status:     http.StatusUnauthorized,
+			body:       token + " " + privateCanary,
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   0,
 		},
 	}
 
@@ -132,8 +143,8 @@ func TestClientPostReturnsSanitizedAPIErrors(t *testing.T) {
 			if apiErr.HTTPStatus != tt.wantStatus || apiErr.Code != tt.wantCode {
 				t.Fatalf("APIError = %#v, want status=%d code=%d", apiErr, tt.wantStatus, tt.wantCode)
 			}
-			if strings.Contains(err.Error(), token) {
-				t.Fatalf("error leaked token: %q", err)
+			if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), privateCanary) {
+				t.Fatalf("error leaked response content: %q", err)
 			}
 		})
 	}
@@ -159,5 +170,21 @@ func TestClientPostHonorsCanceledContext(t *testing.T) {
 	}
 	if serverCalled {
 		t.Fatal("server received request after context was canceled")
+	}
+}
+
+func TestClientPostRejectsMissingEnvelopeCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"ok","data":{}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, Token: "test-token", ServiceID: "service-a"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if err := client.post(context.Background(), "/v3/probe", map[string]string{"probe": "ok"}, &struct{}{}); err == nil {
+		t.Fatal("post() error = nil, want invalid envelope error")
 	}
 }

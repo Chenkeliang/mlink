@@ -40,14 +40,18 @@ func (e *APIError) Error() string {
 }
 
 func NewClient(config Config) (*Client, error) {
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	baseURL := strings.TrimSpace(config.BaseURL)
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("invalid TencentDB MemoryCore base URL")
 	}
-	if strings.TrimSpace(config.Token) == "" {
+	token := strings.TrimSpace(config.Token)
+	if token == "" {
 		return nil, errors.New("missing TencentDB MemoryCore token")
 	}
-	if strings.TrimSpace(config.ServiceID) == "" {
+	serviceID := strings.TrimSpace(config.ServiceID)
+	if serviceID == "" {
 		return nil, errors.New("missing TencentDB MemoryCore service ID")
 	}
 
@@ -58,8 +62,8 @@ func NewClient(config Config) (*Client, error) {
 
 	return &Client{
 		baseURL:   strings.TrimRight(parsed.String(), "/"),
-		token:     config.Token,
-		serviceID: config.ServiceID,
+		token:     token,
+		serviceID: serviceID,
 		http:      httpClient,
 	}, nil
 }
@@ -89,22 +93,38 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseDat
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return safeAPIError(resp.StatusCode, 0)
+		}
 		return fmt.Errorf("read TencentDB MemoryCore response: %w", err)
 	}
 	if len(raw) > maxResponseBytes {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return safeAPIError(resp.StatusCode, 0)
+		}
 		return errors.New("TencentDB MemoryCore response exceeds 4 MiB limit")
 	}
 
 	var envelope struct {
-		Code    int             `json:"code"`
-		Message string          `json:"message"`
-		Data    json.RawMessage `json:"data"`
+		Code *int            `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	decodeErr := json.Unmarshal(raw, &envelope)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		code := 0
+		if decodeErr == nil && envelope.Code != nil {
+			code = *envelope.Code
+		}
+		return safeAPIError(resp.StatusCode, code)
+	}
+	if decodeErr != nil {
 		return errors.New("TencentDB MemoryCore returned invalid JSON")
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || envelope.Code != 0 {
-		return &APIError{HTTPStatus: resp.StatusCode, Code: envelope.Code, Message: envelope.Message}
+	if envelope.Code == nil {
+		return errors.New("TencentDB MemoryCore returned invalid response envelope")
+	}
+	if *envelope.Code != 0 {
+		return safeAPIError(resp.StatusCode, *envelope.Code)
 	}
 	if responseData == nil || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return nil
@@ -113,4 +133,12 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseDat
 		return errors.New("TencentDB MemoryCore returned invalid response data")
 	}
 	return nil
+}
+
+func safeAPIError(httpStatus, code int) *APIError {
+	message := http.StatusText(httpStatus)
+	if httpStatus >= 200 && httpStatus < 300 {
+		message = "request rejected"
+	}
+	return &APIError{HTTPStatus: httpStatus, Code: code, Message: message}
 }

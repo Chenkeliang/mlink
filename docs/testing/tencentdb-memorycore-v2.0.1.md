@@ -36,14 +36,16 @@ The token value is supplied through the process environment and is never placed 
 | Test | Result | Observation |
 |---|---|---|
 | New identity | Pass | A valid unseen user returns an empty L1 bundle. |
-| L0 capture to L1 recall | Pass | Ten messages became a visible user-scoped L1 memory in about 27 seconds. |
-| Duplicate response IDs | Pass | MLink returned every stable Context ID at most once. |
-| Two-user L1 isolation | Pass | User B could not recall user A's L1 canary under the same Provider process. |
-| Shared-layer policy | Pass | Default recall returned no Agent-scoped items; explicit opt-in saw L2/L3 after about 114 seconds. |
+| L0 capture to cross-session L1 recall | Pass | Ten messages captured in session A became a visible user-scoped L1 memory when recalled from session B in about 21 seconds. Recall does not send `session_id`. |
+| Repeated-content response IDs | Pass | MLink returned every stable Context ID at most once. This does not claim replay-safe capture. |
+| Two-user L1 isolation | Pass | After user A's L1 canary was confirmed visible, user B could not recall it under the same Provider process. |
+| Shared-layer policy and hierarchy | Pass | Default recall returned no Agent-scoped items; explicit opt-in saw L2/L3 after about 125 seconds. A second user under the same Agent could read the shared layer; a different Agent could not. |
 | Missing identity | Pass | MLink rejected the request locally without falling back to `default`. |
-| Transient inventory | Pass | Ten raw messages containing current stock `104` produced zero L1 memories; L1 extraction completed in about 12 seconds. |
+| Transient inventory | Pass | Ten raw messages containing current stock `104` produced zero L1 memories; L1 extraction completed in about 8 seconds. |
 
-Full live suite result: 7 tests passed in 154.233 seconds.
+Full post-review live suite result: 7 tests passed in 195.802 seconds. Every stateful test used a unique service/team/Agent/user fixture. Running the integration suite without URL/token now safely skips all seven tests instead of failing.
+
+The corresponding offline tests also verify that cancellation/deadline errors are propagated, L2 wins deterministically over L3 when only one shared slot remains, L2 reads cannot exceed the remaining item budget, empty native IDs are rejected, non-JSON HTTP 401 responses retain their typed status, and upstream error messages cannot be reflected into MLink errors.
 
 ## Direct backend adversarial results
 

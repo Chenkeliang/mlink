@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"mlink/internal/model"
@@ -108,24 +107,32 @@ func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (mod
 		err   error
 	}
 	results := make(chan sharedResult, 2)
-	var wg sync.WaitGroup
-	wg.Add(2)
+	remaining := limit - len(bundle.Items)
 	go func() {
-		defer wg.Done()
-		items, err := p.recallL2(ctx, request, limit)
+		items, err := p.recallL2(ctx, request, remaining)
 		results <- sharedResult{layer: "L2", items: items, err: err}
 	}()
 	go func() {
-		defer wg.Done()
 		items, err := p.recallL3(ctx, request)
 		results <- sharedResult{layer: "L3", items: items, err: err}
 	}()
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
 
-	for result := range results {
+	shared := make(map[string]sharedResult, 2)
+	for range 2 {
+		result := <-results
+		shared[result.layer] = result
+	}
+	if err := ctx.Err(); err != nil {
+		return model.ContextBundle{}, err
+	}
+	for _, layer := range []string{"L2", "L3"} {
+		result := shared[layer]
+		if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+			return model.ContextBundle{}, result.err
+		}
+	}
+	for _, layer := range []string{"L2", "L3"} {
+		result := shared[layer]
 		if result.err != nil {
 			bundle.Partial = true
 			bundle.Warnings = append(bundle.Warnings, fmt.Sprintf("%s recall unavailable: %v", result.layer, result.err))
@@ -155,6 +162,9 @@ func (p *Provider) recallL1(ctx context.Context, request model.RecallRequest, li
 	}
 	items := make([]model.ContextItem, 0, len(response.Items))
 	for _, item := range response.Items {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
 		items = append(items, model.ContextItem{
 			ID:        "l1:" + item.ID,
 			Kind:      item.Type,
@@ -163,7 +173,7 @@ func (p *Provider) recallL1(ctx context.Context, request model.RecallRequest, li
 			CreatedAt: parseTime(item.CreatedAt),
 			UpdatedAt: parseTime(item.UpdatedAt),
 			Score:     item.Score,
-			Source:    "tencentdb:l1",
+			Source:    "tencentdb:l1/" + item.ID,
 		})
 	}
 	return items, nil
@@ -204,7 +214,7 @@ func (p *Provider) recallL2(ctx context.Context, request model.RecallRequest, li
 			Text:      file.Content,
 			CreatedAt: parseTime(file.CreatedAt),
 			UpdatedAt: parseTime(file.UpdatedAt),
-			Source:    "tencentdb:l2",
+			Source:    "tencentdb:l2/" + entry.Path,
 		})
 	}
 	return items, nil
@@ -229,20 +239,16 @@ func (p *Provider) recallL3(ctx context.Context, request model.RecallRequest) ([
 		Text:      file.Content,
 		CreatedAt: parseTime(file.CreatedAt),
 		UpdatedAt: parseTime(file.UpdatedAt),
-		Source:    "tencentdb:l3",
+		Source:    "tencentdb:l3/persona",
 	}}, nil
 }
 
 func recallScopeBody(request model.RecallRequest) map[string]any {
-	body := map[string]any{
+	return map[string]any{
 		"team_id":  request.Identity.TenantID,
 		"agent_id": request.Identity.AgentID,
 		"user_id":  request.Identity.UserID,
 	}
-	if request.Identity.SessionID != "" {
-		body["session_id"] = request.Identity.SessionID
-	}
-	return body
 }
 
 func appendUniqueItems(bundle *model.ContextBundle, seen map[string]struct{}, items []model.ContextItem, limit int) {

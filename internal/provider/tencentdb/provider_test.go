@@ -3,6 +3,7 @@ package tencentdb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -148,6 +149,9 @@ func TestProviderRecallDefaultsToUserScopedL1(t *testing.T) {
 		if body["team_id"] != "team-a" || body["agent_id"] != "agent-a" || body["user_id"] != "user-a" {
 			t.Fatalf("recall scope = %#v, want explicit team/agent/user", body)
 		}
+		if _, exists := body["session_id"]; exists {
+			t.Fatalf("recall scope = %#v, session_id must not narrow long-term recall", body)
+		}
 		if body["query"] != "MLink" || body["limit"] != float64(5) {
 			t.Fatalf("recall query = %#v, want query=MLink limit=5", body)
 		}
@@ -159,8 +163,10 @@ func TestProviderRecallDefaultsToUserScopedL1(t *testing.T) {
 
 	provider := newTestProvider(t, server.URL)
 	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
-		Identity: model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
-		Query:    "MLink",
+		Identity: model.IdentityScope{
+			TenantID: "team-a", UserID: "user-a", AgentID: "agent-a", SessionID: "current-session",
+		},
+		Query: "MLink",
 	})
 	if err != nil {
 		t.Fatalf("Recall() error = %v", err)
@@ -197,6 +203,9 @@ func TestProviderRecallIncludesAgentSharedLayersOnlyWhenRequested(t *testing.T) 
 		if body["team_id"] != "team-a" || body["agent_id"] != "agent-a" || body["user_id"] != "user-a" {
 			t.Errorf("%s scope = %#v, want explicit team/agent/user", r.URL.Path, body)
 		}
+		if _, exists := body["session_id"]; exists {
+			t.Errorf("%s scope = %#v, session_id must not narrow long-term recall", r.URL.Path, body)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -220,7 +229,9 @@ func TestProviderRecallIncludesAgentSharedLayersOnlyWhenRequested(t *testing.T) 
 
 	provider := newTestProvider(t, server.URL)
 	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
-		Identity:           model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+		Identity: model.IdentityScope{
+			TenantID: "team-a", UserID: "user-a", AgentID: "agent-a", SessionID: "current-session",
+		},
 		Query:              "MLink",
 		MaxItems:           5,
 		IncludeAgentShared: true,
@@ -255,6 +266,115 @@ func TestProviderRecallIncludesAgentSharedLayersOnlyWhenRequested(t *testing.T) 
 	wantPaths := "/v3/atomic/search,/v3/core/read,/v3/scenario/ls,/v3/scenario/read"
 	if gotPaths != wantPaths {
 		t.Fatalf("shared recall paths = %q, want %q", gotPaths, wantPaths)
+	}
+}
+
+func TestProviderRecallPropagatesCancellationFromSharedLayers(t *testing.T) {
+	sharedStarted := make(chan struct{}, 2)
+	releaseHandlers := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/atomic/search":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"items":[{"id":"mem-a","type":"instruction","content":"private"}]}}`))
+		case "/v3/scenario/ls", "/v3/core/read":
+			sharedStarted <- struct{}{}
+			select {
+			case <-r.Context().Done():
+			case <-releaseHandlers:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	defer close(releaseHandlers)
+
+	provider := newTestProvider(t, server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Recall(ctx, model.RecallRequest{
+			Identity:           model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+			Query:              "probe",
+			IncludeAgentShared: true,
+		})
+		done <- err
+	}()
+
+	<-sharedStarted
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recall() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recall() did not return promptly after cancellation")
+	}
+}
+
+func TestProviderRecallMergesSharedLayersDeterministicallyWithinRemainingBudget(t *testing.T) {
+	var mu sync.Mutex
+	scenarioReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/atomic/search":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"items":[{"id":"mem-a","type":"instruction","content":"private"}]}}`))
+		case "/v3/scenario/ls":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"entries":[{"path":"scene-a.md"},{"path":"scene-b.md"}]}}`))
+		case "/v3/scenario/read":
+			mu.Lock()
+			scenarioReads++
+			mu.Unlock()
+			time.Sleep(30 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"content":"scenario"}}`))
+		case "/v3/core/read":
+			_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"content":"profile"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
+		Identity:           model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+		Query:              "probe",
+		MaxItems:           2,
+		IncludeAgentShared: true,
+	})
+	if err != nil {
+		t.Fatalf("Recall() error = %v", err)
+	}
+	if len(bundle.Items) != 2 || bundle.Items[0].ID != "l1:mem-a" || bundle.Items[1].ID != "l2:scene-a.md" {
+		t.Fatalf("item order = %#v, want deterministic L1 then L2 within budget", contextItemIDs(bundle.Items))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if scenarioReads != 1 {
+		t.Fatalf("scenario reads = %d, want remaining budget of 1", scenarioReads)
+	}
+}
+
+func TestProviderRecallSkipsL1ItemsWithoutNativeID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"items":[{"id":"","type":"instruction","content":"unsafe"},{"id":"mem-a","type":"instruction","content":"safe"}]}}`))
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	bundle, err := provider.Recall(context.Background(), model.RecallRequest{
+		Identity: model.IdentityScope{TenantID: "team-a", UserID: "user-a", AgentID: "agent-a"},
+		Query:    "probe",
+	})
+	if err != nil {
+		t.Fatalf("Recall() error = %v", err)
+	}
+	if len(bundle.Items) != 1 || bundle.Items[0].ID != "l1:mem-a" || bundle.Items[0].Source != "tencentdb:l1/mem-a" {
+		t.Fatalf("items = %#v, want only auditable native ID", bundle.Items)
 	}
 }
 
@@ -321,4 +441,12 @@ func newTestProvider(t *testing.T, baseURL string) *Provider {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	return NewProvider(client)
+}
+
+func contextItemIDs(items []model.ContextItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	return ids
 }
