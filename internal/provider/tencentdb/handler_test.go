@@ -131,6 +131,42 @@ func TestServerHandlerHealthDoesNotExposeBackendBody(t *testing.T) {
 	}
 }
 
+func TestServerHandlerDoesNotFollowBackendRedirects(t *testing.T) {
+	var targetCalls int
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalls++
+		if authorization := r.Header.Get("Authorization"); authorization != "" {
+			t.Errorf("redirect target received Authorization header %q", authorization)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	handler := NewServerHandler()
+	_, err := handler.Initialize(context.Background(), protocol.InitializeParams{
+		Config:  json.RawMessage(`{"base_url":` + quoteJSON(redirector.URL) + `,"service_id":"service-a","timeout_ms":1000}`),
+		Secrets: map[string]string{"token": "redirect-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := handler.Health(context.Background(), protocol.HealthParams{})
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if health.Backend != "unavailable" {
+		t.Fatalf("Health().Backend = %q, want unavailable", health.Backend)
+	}
+	if targetCalls != 0 {
+		t.Fatalf("redirect target calls = %d, want 0", targetCalls)
+	}
+}
+
 func TestServerHandlerAcceptsHTTPSAndLoopbackHTTP(t *testing.T) {
 	for _, endpoint := range []string{"https://memory.example.com", "http://127.0.0.1:8420", "http://[::1]:8420", "http://localhost:8420"} {
 		t.Run(endpoint, func(t *testing.T) {

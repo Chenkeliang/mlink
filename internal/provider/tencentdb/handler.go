@@ -52,7 +52,12 @@ func (h *ServerHandler) Initialize(_ context.Context, params protocol.Initialize
 	}
 	client, err := NewClient(Config{
 		BaseURL: config.BaseURL, Token: token, ServiceID: config.ServiceID,
-		HTTPClient: &http.Client{Timeout: time.Duration(config.TimeoutMS) * time.Millisecond},
+		HTTPClient: &http.Client{
+			Timeout: time.Duration(config.TimeoutMS) * time.Millisecond,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	})
 	if err != nil {
 		return protocol.InitializeResult{}, configurationError("invalid TencentDB configuration")
