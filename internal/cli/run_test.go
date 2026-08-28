@@ -79,6 +79,20 @@ func TestRunPreservesTencentDBProviderCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithoutArgumentsStartsTUI(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), nil, Dependencies{
+		Stderr: io.Discard,
+		RunTUI: func(context.Context) error {
+			calls++
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}
+
 func TestRunReportsProviderFailureWithoutLeakingDetails(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	code := Run(context.Background(), []string{"provider", "run", "tencentdb"}, Dependencies{

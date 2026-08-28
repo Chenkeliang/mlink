@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	adapterclient "mlink/internal/adapter/client"
 	"mlink/internal/adapter/codex"
 	"mlink/internal/adapter/hermes"
@@ -31,6 +33,7 @@ import (
 	"mlink/internal/layout"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
+	"mlink/internal/tui"
 )
 
 type runtimeApplication struct {
@@ -93,6 +96,10 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 		})
 	}
 	dependencies.ServeBroker = runtime.ServeBroker
+	dependencies.RunTUI = func(context.Context) error {
+		_, err := tea.NewProgram(tui.New(runtime, dependencies.InstallRequest), tea.WithAltScreen(), tea.WithInput(stdin), tea.WithOutput(stdout)).Run()
+		return err
+	}
 	return dependencies, nil
 }
 
