@@ -75,8 +75,14 @@ func TestProviderCaptureTurnWritesExplicitScopeAndMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CaptureTurn() error = %v", err)
 	}
-	if len(receipt.AcceptedIDs) != 2 || receipt.AcceptedIDs[0] != "msg-a" || receipt.AcceptedIDs[1] != "msg-b" {
-		t.Fatalf("receipt accepted IDs = %#v, want [msg-a msg-b]", receipt.AcceptedIDs)
+	if receipt.State != model.WriteAccepted || receipt.ReplaySafe {
+		t.Fatalf("receipt state/replay-safe = %q/%v, want accepted/false", receipt.State, receipt.ReplaySafe)
+	}
+	if receipt.ReceiptID != "" {
+		t.Fatalf("receipt ID = %q, direct Provider must leave protocol receipt ID unset", receipt.ReceiptID)
+	}
+	if len(receipt.ProviderRefs) != 2 || receipt.ProviderRefs[0] != "msg-a" || receipt.ProviderRefs[1] != "msg-b" {
+		t.Fatalf("receipt provider refs = %#v, want [msg-a msg-b]", receipt.ProviderRefs)
 	}
 }
 

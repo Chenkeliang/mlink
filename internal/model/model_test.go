@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -90,5 +91,31 @@ func TestIdentityScopeValidateForCapture(t *testing.T) {
 				t.Fatalf("ValidateForCapture() error = %q, want missing field %q", err, tt.wantField)
 			}
 		})
+	}
+}
+
+func TestWriteReceiptJSONContract(t *testing.T) {
+	receipt := WriteReceipt{
+		ReceiptID:    "request-7",
+		State:        WriteAccepted,
+		ProviderRefs: []string{"memory-a"},
+		ReplaySafe:   false,
+		Warnings:     []string{"visible after extraction"},
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	got := string(raw)
+	for _, field := range []string{
+		`"receipt_id":"request-7"`,
+		`"state":"accepted"`,
+		`"provider_refs":["memory-a"]`,
+		`"replay_safe":false`,
+		`"warnings":["visible after extraction"]`,
+	} {
+		if !strings.Contains(got, field) {
+			t.Fatalf("JSON = %s, want field %s", got, field)
+		}
 	}
 }

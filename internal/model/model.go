@@ -85,8 +85,19 @@ type ContextBundle struct {
 	Warnings []string      `json:"warnings,omitempty"`
 }
 
+type WriteState string
+
+const (
+	WriteAccepted WriteState = "accepted"
+	WriteVisible  WriteState = "visible"
+)
+
 type WriteReceipt struct {
-	AcceptedIDs []string `json:"accepted_ids"`
+	ReceiptID    string     `json:"receipt_id"`
+	State        WriteState `json:"state"`
+	ProviderRefs []string   `json:"provider_refs,omitempty"`
+	ReplaySafe   bool       `json:"replay_safe"`
+	Warnings     []string   `json:"warnings,omitempty"`
 }
 
 var ErrInvalidIdentity = errors.New("invalid identity scope")

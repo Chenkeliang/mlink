@@ -47,7 +47,10 @@ func (p *memoryProvider) CaptureTurn(_ context.Context, turn model.Turn) (model.
 		Text:   turn.Messages[0].Content,
 		Source: "fixture:l1",
 	}}
-	return model.WriteReceipt{AcceptedIDs: []string{turn.Identity.TurnID}}, nil
+	return model.WriteReceipt{
+		State:        model.WriteAccepted,
+		ProviderRefs: []string{turn.Identity.TurnID},
+	}, nil
 }
 
 func (p *memoryProvider) Recall(ctx context.Context, request model.RecallRequest) (model.ContextBundle, error) {
@@ -69,7 +72,7 @@ func (leakyProvider) CaptureTurn(_ context.Context, turn model.Turn) (model.Writ
 	if err := turn.Identity.ValidateForCapture(); err != nil {
 		return model.WriteReceipt{}, err
 	}
-	return model.WriteReceipt{AcceptedIDs: []string{"accepted"}}, nil
+	return model.WriteReceipt{State: model.WriteAccepted, ProviderRefs: []string{"accepted"}}, nil
 }
 
 func (leakyProvider) Recall(ctx context.Context, request model.RecallRequest) (model.ContextBundle, error) {

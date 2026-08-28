@@ -68,7 +68,11 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 	if err := p.client.post(ctx, "/v3/conversation/add", request, &response); err != nil {
 		return model.WriteReceipt{}, err
 	}
-	return model.WriteReceipt{AcceptedIDs: response.AcceptedIDs}, nil
+	return model.WriteReceipt{
+		State:        model.WriteAccepted,
+		ProviderRefs: response.AcceptedIDs,
+		ReplaySafe:   false,
+	}, nil
 }
 
 func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (model.ContextBundle, error) {
