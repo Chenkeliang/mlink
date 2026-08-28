@@ -939,11 +939,18 @@ Adapter 连接不到 Broker 时立即 fail-open：不注入记忆、不阻塞 Ag
 
 ## 16. 分发与升级
 
-MVP 以签名的单一 Go 二进制分发，首要目标为 macOS arm64，随后可构建 macOS amd64。安装方式预留：
+MLink Core、CLI、TUI 与 Broker 以签名的单一 Go 二进制作为唯一正式运行产物。首要目标为 macOS arm64，随后构建 macOS amd64；后续按需求增加 Linux 与 Windows。Go 是核心实现约束，不是 Provider 实现约束：Provider 可以使用 Go、TypeScript、Python 或其他语言，只要遵守版本化的进程外协议并自行封装运行时依赖。
 
-- 下载签名 release 后放入 PATH。
-- 后续提供 Homebrew Tap。
-- 企业分发使用非交互 CLI 与 JSON 输出。
+分发入口与核心产物分离：
+
+- 签名 Release 是版本、校验值和平台二进制的事实来源，支持下载后直接放入 PATH。
+- Homebrew Tap 是 macOS 的主要持久安装入口。
+- npm 包提供 `npx @mlink/cli setup` 和全局安装入口，但只负责识别平台、选择与 npm 包相同的确定版本、下载并验证 Go 二进制、再执行 `mlink`。
+- 后续 Windows 入口可使用 WinGet 或 Scoop；企业分发使用非交互 CLI 与 JSON 输出。
+
+npm 包不得复制 Broker、Provider Host、配置修改或卸载等业务逻辑，也不得使直接下载的 MLink 二进制依赖 Node 或 Bun。它不能在运行时追踪未固定的 `latest`，不能绕过校验执行下载内容，也不能在 package install 阶段静默修改 Codex、Pi、Hermes 或其模型配置。真正的配置变更只能由用户显式执行 `mlink setup`，并继续遵守预览、备份、验证和可卸载约束。
+
+PyPI 不是 MVP 分发入口。未来如提供 PyPI 包，也只能采用与 npm 相同的薄引导器模型，不能产生 Python 版 MLink Core 或第二套行为实现。
 
 Broker 作为当前 macOS 用户的 LaunchAgent 运行，不要求 root。安装器创建 MLink 自有的 LaunchAgent plist，使用固定可执行文件路径并记录在安装清单；`mlink status` 检查 LaunchAgent、Unix Socket 和 Provider 三层状态。卸载时只删除该 LaunchAgent，不操作 MemoryCore 进程。
 
