@@ -53,6 +53,27 @@ func buildOperation(ctx context.Context, target Target, resource DesiredResource
 	if strings.TrimSpace(resource.OwnerID) == "" || strings.TrimSpace(resource.Target) == "" {
 		return Operation{}, errors.New("resource owner and target are required")
 	}
+	if resource.Action == ActionService {
+		if len(resource.Command) == 0 {
+			return Operation{}, errors.New("service action command is required")
+		}
+		operation := Operation{
+			OwnerID:              resource.OwnerID,
+			Target:               resource.Target,
+			Action:               ActionService,
+			BeforeHash:           hashBytes(nil),
+			ProposedHash:         hashBytes(resource.CommandInput),
+			SemanticDiff:         append([]SemanticDiff(nil), resource.SemanticDiff...),
+			ProtectedInvariants:  append([]Invariant(nil), resource.ProtectedInvariants...),
+			RollbackAction:       "service_compensation",
+			Command:              append([]string(nil), resource.Command...),
+			CommandInput:         append([]byte(nil), resource.CommandInput...),
+			RollbackCommand:      append([]string(nil), resource.RollbackCommand...),
+			RollbackCommandInput: append([]byte(nil), resource.RollbackCommandInput...),
+		}
+		operation.ID = "op_" + hashParts(operation.OwnerID, operation.Target, string(operation.Action), strings.Join(operation.Command, "\x00"), operation.ProposedHash)[:26]
+		return operation, nil
+	}
 	before, mode, err := target.Read(ctx, resource.Target)
 	exists := true
 	if errors.Is(err, fs.ErrNotExist) {
@@ -79,21 +100,23 @@ func buildOperation(ctx context.Context, target Target, resource DesiredResource
 	beforeHash := hashBytes(before)
 	proposedHash := hashBytes(resource.Content)
 	operation := Operation{
-		OwnerID:             resource.OwnerID,
-		Target:              resource.Target,
-		Action:              action,
-		BeforeHash:          beforeHash,
-		ProposedHash:        proposedHash,
-		SemanticDiff:        append([]SemanticDiff(nil), resource.SemanticDiff...),
-		ProtectedInvariants: append([]Invariant(nil), resource.ProtectedInvariants...),
-		RollbackAction:      rollbackAction(exists),
-		Content:             append([]byte(nil), resource.Content...),
-		Mode:                resource.Mode,
-		Command:             append([]string(nil), resource.Command...),
-		CommandInput:        append([]byte(nil), resource.CommandInput...),
-		Verify:              resource.Verify,
-		beforeExists:        exists,
-		beforeMode:          mode,
+		OwnerID:              resource.OwnerID,
+		Target:               resource.Target,
+		Action:               action,
+		BeforeHash:           beforeHash,
+		ProposedHash:         proposedHash,
+		SemanticDiff:         append([]SemanticDiff(nil), resource.SemanticDiff...),
+		ProtectedInvariants:  append([]Invariant(nil), resource.ProtectedInvariants...),
+		RollbackAction:       rollbackAction(exists),
+		Content:              append([]byte(nil), resource.Content...),
+		Mode:                 resource.Mode,
+		Command:              append([]string(nil), resource.Command...),
+		CommandInput:         append([]byte(nil), resource.CommandInput...),
+		RollbackCommand:      append([]string(nil), resource.RollbackCommand...),
+		RollbackCommandInput: append([]byte(nil), resource.RollbackCommandInput...),
+		Verify:               resource.Verify,
+		beforeExists:         exists,
+		beforeMode:           mode,
 	}
 	operation.ID = "op_" + hashParts(operation.OwnerID, operation.Target, string(operation.Action), operation.BeforeHash, operation.ProposedHash)[:26]
 	return operation, nil

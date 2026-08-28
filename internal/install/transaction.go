@@ -174,6 +174,11 @@ func (t Transaction) rollbackOperations(ctx context.Context, planID string, oper
 	for i := len(operations) - 1; i >= 0; i-- {
 		operation := operations[i]
 		if operation.Action == ActionService {
+			if len(operation.RollbackCommand) != 0 {
+				if _, err := t.target.Run(ctx, operation.RollbackCommand, bytes.NewReader(operation.RollbackCommandInput)); err != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Errorf("compensate %q: %w", operation.Target, err))
+				}
+			}
 			continue
 		}
 		backup, err := t.ledger.LoadBackup(ctx, planID, operation.Target)

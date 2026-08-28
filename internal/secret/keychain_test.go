@@ -3,7 +3,9 @@ package secret
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,6 +21,11 @@ type fakeRunner struct {
 	output []byte
 	err    error
 }
+
+type exitCodeError int
+
+func (err exitCodeError) Error() string { return "command failed" }
+func (err exitCodeError) ExitCode() int { return int(err) }
 
 func (r *fakeRunner) Run(_ context.Context, args []string, stdin io.Reader) ([]byte, error) {
 	var input bytes.Buffer
@@ -90,5 +97,12 @@ func TestKeychainRejectsInvalidInputBeforeRunner(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	}
+}
+
+func TestKeychainGetMapsSecurityItemNotFound(t *testing.T) {
+	store := Keychain{Runner: &fakeRunner{err: exitCodeError(44)}}
+	if _, err := store.Get(context.Background(), "connection/local/token"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Get() error = %v", err)
 	}
 }

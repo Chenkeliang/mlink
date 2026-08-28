@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 )
 
 var ErrUnsupported = errors.New("system keychain is unsupported")
@@ -62,6 +63,10 @@ func (k Keychain) Get(ctx context.Context, account string) ([]byte, error) {
 	}
 	output, err := k.runner().Run(ctx, args, nil)
 	if err != nil {
+		var exitError interface{ ExitCode() int }
+		if errors.As(err, &exitError) && exitError.ExitCode() == 44 {
+			return nil, fs.ErrNotExist
+		}
 		return nil, fmt.Errorf("read MLink secret for %q: %w", account, err)
 	}
 	return bytes.TrimSuffix(output, []byte{'\n'}), nil

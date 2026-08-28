@@ -18,6 +18,7 @@ import (
 var (
 	ErrTurnConflict      = errors.New("turn conflicts with an existing event")
 	ErrInvalidTransition = errors.New("invalid journal state transition")
+	ErrBlockingEvents    = errors.New("journal has events that block state deletion")
 )
 
 type State string
@@ -466,6 +467,24 @@ func (s *Store) ListBlockingEvents(ctx context.Context) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?) ORDER BY created_at, id", StatePermanentFailed, StateAmbiguous)
 	if err != nil {
 		return nil, fmt.Errorf("list blocking events: %w", err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		event, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) ListStateDeletionBlockers(ctx context.Context) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?, ?, ?, ?) ORDER BY created_at, id",
+		StateQueued, StateDispatching, StateRetryableFailed, StatePermanentFailed, StateAmbiguous)
+	if err != nil {
+		return nil, fmt.Errorf("list state deletion blockers: %w", err)
 	}
 	defer rows.Close()
 	var events []Event

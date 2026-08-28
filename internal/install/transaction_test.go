@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -19,8 +20,11 @@ type fakeTarget struct {
 	files       map[string]fakeFile
 	initial     map[string][]byte
 	actions     []string
+	reads       int
 	writes      int
 	failAtWrite int
+	runs        int
+	failAtRun   int
 }
 
 func newFakeTarget(files map[string][]byte) *fakeTarget {
@@ -33,6 +37,7 @@ func newFakeTarget(files map[string][]byte) *fakeTarget {
 }
 
 func (t *fakeTarget) Read(_ context.Context, target string) ([]byte, fs.FileMode, error) {
+	t.reads++
 	file, ok := t.files[target]
 	if !ok {
 		return nil, 0, fs.ErrNotExist
@@ -60,7 +65,12 @@ func (t *fakeTarget) Remove(_ context.Context, target string) error {
 	return nil
 }
 
-func (t *fakeTarget) Run(context.Context, []string, io.Reader) ([]byte, error) {
+func (t *fakeTarget) Run(_ context.Context, args []string, _ io.Reader) ([]byte, error) {
+	t.runs++
+	t.actions = append(t.actions, "run:"+strings.Join(args, " "))
+	if t.failAtRun > 0 && t.runs == t.failAtRun {
+		return nil, errors.New("injected service failure")
+	}
 	return nil, nil
 }
 
@@ -138,6 +148,25 @@ func TestBuildChangeSetRejectsDuplicateTarget(t *testing.T) {
 	}
 }
 
+func TestBuildChangeSetDoesNotReadServiceActionAsFile(t *testing.T) {
+	target := newFakeTarget(nil)
+	plan, err := BuildChangeSet(target, []DesiredResource{{
+		OwnerID: "broker",
+		Target:  "service:dev.mlink.broker",
+		Action:  ActionService,
+		Command: []string{"launchctl", "kickstart", "-k", "gui/501/dev.mlink.broker"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 1 || plan.Operations[0].Action != ActionService {
+		t.Fatalf("plan = %#v", plan)
+	}
+	if target.reads != 0 {
+		t.Fatalf("service preview performed %d file reads", target.reads)
+	}
+}
+
 func TestApplyFailureRollsBackInReverseOrder(t *testing.T) {
 	target := newFakeTarget(map[string][]byte{"a": []byte("before-a"), "b": []byte("before-b")})
 	target.failAtWrite = 2
@@ -158,6 +187,35 @@ func TestApplyFailureRollsBackInReverseOrder(t *testing.T) {
 	}
 	if got := string(target.files["a"].content); got != "before-a" {
 		t.Fatalf("a after rollback = %q", got)
+	}
+}
+
+func TestServiceFailureCompensatesEarlierServiceBeforeFileRollback(t *testing.T) {
+	target := newFakeTarget(nil)
+	target.failAtRun = 2
+	plan, err := BuildChangeSet(target, []DesiredResource{
+		{OwnerID: "broker", Target: "/plist", Content: []byte("plist"), Mode: 0o600},
+		{
+			OwnerID: "broker", Target: "service:bootstrap", Action: ActionService,
+			Command: []string{"launchctl", "bootstrap"}, RollbackCommand: []string{"launchctl", "bootout"},
+		},
+		{OwnerID: "broker", Target: "service:kickstart", Action: ActionService, Command: []string{"launchctl", "kickstart"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewTransaction(target, newMemoryLedger()).Apply(context.Background(), plan); err == nil {
+		t.Fatal("Apply() error = nil")
+	}
+	want := []string{
+		"apply:/plist",
+		"run:launchctl bootstrap",
+		"run:launchctl kickstart",
+		"run:launchctl bootout",
+		"remove:/plist",
+	}
+	if !reflect.DeepEqual(target.actions, want) {
+		t.Fatalf("actions = %#v, want %#v", target.actions, want)
 	}
 }
 

@@ -27,35 +27,39 @@ type ChangeSet struct {
 }
 
 type Operation struct {
-	ID                  string             `json:"operation_id"`
-	OwnerID             string             `json:"owner_id"`
-	Target              string             `json:"target"`
-	Action              Action             `json:"action"`
-	BeforeHash          string             `json:"before_hash"`
-	ProposedHash        string             `json:"proposed_hash"`
-	SemanticDiff        []SemanticDiff     `json:"semantic_diff,omitempty"`
-	ProtectedInvariants []Invariant        `json:"protected_invariants,omitempty"`
-	RollbackAction      string             `json:"rollback_action"`
-	Content             []byte             `json:"-"`
-	Mode                fs.FileMode        `json:"-"`
-	Command             []string           `json:"-"`
-	CommandInput        []byte             `json:"-"`
-	Verify              func([]byte) error `json:"-"`
-	beforeExists        bool
-	beforeMode          fs.FileMode
+	ID                   string             `json:"operation_id"`
+	OwnerID              string             `json:"owner_id"`
+	Target               string             `json:"target"`
+	Action               Action             `json:"action"`
+	BeforeHash           string             `json:"before_hash"`
+	ProposedHash         string             `json:"proposed_hash"`
+	SemanticDiff         []SemanticDiff     `json:"semantic_diff,omitempty"`
+	ProtectedInvariants  []Invariant        `json:"protected_invariants,omitempty"`
+	RollbackAction       string             `json:"rollback_action"`
+	Content              []byte             `json:"-"`
+	Mode                 fs.FileMode        `json:"-"`
+	Command              []string           `json:"-"`
+	CommandInput         []byte             `json:"-"`
+	RollbackCommand      []string           `json:"-"`
+	RollbackCommandInput []byte             `json:"-"`
+	Verify               func([]byte) error `json:"-"`
+	beforeExists         bool
+	beforeMode           fs.FileMode
 }
 
 type DesiredResource struct {
-	OwnerID             string
-	Target              string
-	Action              Action
-	Content             []byte
-	Mode                fs.FileMode
-	Command             []string
-	CommandInput        []byte
-	SemanticDiff        []SemanticDiff
-	ProtectedInvariants []Invariant
-	Verify              func([]byte) error
+	OwnerID              string
+	Target               string
+	Action               Action
+	Content              []byte
+	Mode                 fs.FileMode
+	Command              []string
+	CommandInput         []byte
+	RollbackCommand      []string
+	RollbackCommandInput []byte
+	SemanticDiff         []SemanticDiff
+	ProtectedInvariants  []Invariant
+	Verify               func([]byte) error
 }
 
 type SemanticDiff struct {
