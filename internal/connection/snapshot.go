@@ -36,11 +36,8 @@ func NewSnapshot(
 	if !validStableID(connectionID) {
 		return ConnectionSnapshot{}, errors.New("invalid connection_id")
 	}
-	if !validProviderID(provider.ID) {
-		return ConnectionSnapshot{}, errors.New("invalid provider_id")
-	}
-	if !validSemVer(provider.Version) {
-		return ConnectionSnapshot{}, errors.New("invalid provider_version")
+	if err := ValidateProviderRef(provider); err != nil {
+		return ConnectionSnapshot{}, err
 	}
 	if !validStableID(configRevision) {
 		return ConnectionSnapshot{}, errors.New("invalid config_revision")
@@ -56,6 +53,16 @@ func NewSnapshot(
 		config:     append(json.RawMessage(nil), config...),
 		secretRefs: cloneStringMap(secretRefs),
 	}, nil
+}
+
+func ValidateProviderRef(provider ProviderRef) error {
+	if !validProviderID(provider.ID) {
+		return errors.New("invalid provider_id")
+	}
+	if !validSemVer(provider.Version) {
+		return errors.New("invalid provider_version")
+	}
+	return nil
 }
 
 func (s ConnectionSnapshot) RouteKey() RouteKey {
