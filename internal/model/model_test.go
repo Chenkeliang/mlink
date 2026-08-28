@@ -119,3 +119,21 @@ func TestWriteReceiptJSONContract(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnFragmentJSONDoesNotExposeCanonicalUserOverride(t *testing.T) {
+	fragment := TurnFragment{
+		AdapterID: "hermes",
+		Identity:  AdapterIdentity{Source: "feishu", SourceSubject: "ou_stable", DisplayName: "User"},
+		SessionID: "session",
+		TurnID:    "turn",
+		Role:      "user",
+		Content:   "hello",
+	}
+	data, err := json.Marshal(fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "user_id") {
+		t.Fatalf("fragment permits canonical user override: %s", data)
+	}
+}

@@ -61,6 +61,24 @@ type Turn struct {
 	Messages []Message     `json:"messages"`
 }
 
+// AdapterIdentity is the non-canonical identity asserted by an Adapter. The
+// Broker authorizes it and derives any canonical user ID itself.
+type AdapterIdentity struct {
+	Source        string `json:"source"`
+	SourceSubject string `json:"source_subject,omitempty"`
+	DisplayName   string `json:"display_name,omitempty"`
+}
+
+type TurnFragment struct {
+	AdapterID  string          `json:"adapter_id"`
+	Identity   AdapterIdentity `json:"identity"`
+	SessionID  string          `json:"session_id"`
+	TurnID     string          `json:"turn_id"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	OccurredAt time.Time       `json:"occurred_at"`
+}
+
 type RecallRequest struct {
 	Identity           IdentityScope `json:"identity"`
 	Query              string        `json:"query"`

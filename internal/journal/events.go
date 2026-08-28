@@ -121,7 +121,7 @@ func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool
 	if envelope.Route.ConnectionID == "" || envelope.Route.ProviderID == "" || envelope.Route.ProviderVersion == "" || envelope.Route.ConfigRevision == "" {
 		return Event{}, false, errors.New("complete route is required")
 	}
-	messageJSON, err := json.Marshal(envelope.Turn.Messages)
+	messageJSON, err := json.Marshal(contentHashMessages(envelope.Turn.Messages))
 	if err != nil {
 		return Event{}, false, fmt.Errorf("encode turn messages: %w", err)
 	}
@@ -202,6 +202,21 @@ func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool
 		return Event{}, false, fmt.Errorf("commit journal event: %w", err)
 	}
 	return event, true, nil
+}
+
+func contentHashMessages(messages []model.Message) []struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+} {
+	content := make([]struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}, len(messages))
+	for i, message := range messages {
+		content[i].Role = message.Role
+		content[i].Content = message.Content
+	}
+	return content
 }
 
 func (s *Store) Event(ctx context.Context, id string) (Event, error) {
