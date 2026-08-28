@@ -156,6 +156,47 @@ func TestRetryCompletesDeliveryAttemptAudit(t *testing.T) {
 	}
 }
 
+func TestRecordFragmentPairsOutOfOrderAndEnqueuesTurn(t *testing.T) {
+	store := openTestStore(t)
+	envelope := fixtureEnvelope("usr_a", "turn-fragments", "prompt")
+	assistant := Fragment{
+		AdapterID:  envelope.AdapterID,
+		Route:      envelope.Route,
+		Identity:   envelope.Turn.Identity,
+		Role:       "assistant",
+		Content:    "answer",
+		OccurredAt: time.Date(2026, 8, 28, 11, 1, 0, 0, time.UTC),
+	}
+	user := assistant
+	user.Role = "user"
+	user.Content = "prompt"
+	user.OccurredAt = time.Date(2026, 8, 28, 11, 0, 0, 0, time.UTC)
+	if err := store.RecordFragment(context.Background(), assistant); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordFragment(context.Background(), user); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := store.db.QueryRow("SELECT id FROM journal_events WHERE turn_id = ?", "turn-fragments").Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	event, err := store.Event(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(event.Turn.Messages) != 2 || event.Turn.Messages[0].Role != "user" || event.Turn.Messages[1].Role != "assistant" {
+		t.Fatalf("messages = %#v", event.Turn.Messages)
+	}
+	var fragments int
+	if err := store.db.QueryRow("SELECT count(*) FROM turn_fragments WHERE turn_id = ?", "turn-fragments").Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if fragments != 0 {
+		t.Fatalf("fragments retained after enqueue = %d", fragments)
+	}
+}
+
 func rawPayloadForTest(t *testing.T, store *Store, id string) []byte {
 	t.Helper()
 	var payload []byte

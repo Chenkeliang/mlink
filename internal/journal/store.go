@@ -15,6 +15,9 @@ import (
 //go:embed migrations/001_initial.sql
 var initialMigration string
 
+//go:embed migrations/002_fragment_routes.sql
+var fragmentRoutesMigration string
+
 type Store struct {
 	db *sql.DB
 }
@@ -57,26 +60,33 @@ func (s *Store) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"); err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
 	}
-	var applied int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version = 1").Scan(&applied); err != nil {
-		return fmt.Errorf("inspect migrations: %w", err)
-	}
-	if applied == 1 {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin migration: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, initialMigration); err != nil {
-		return fmt.Errorf("apply migration 1: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"); err != nil {
-		return fmt.Errorf("record migration 1: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration 1: %w", err)
+	migrations := []struct {
+		version int
+		sql     string
+	}{{version: 1, sql: initialMigration}, {version: 2, sql: fragmentRoutesMigration}}
+	for _, migration := range migrations {
+		var applied int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version = ?", migration.version).Scan(&applied); err != nil {
+			return fmt.Errorf("inspect migrations: %w", err)
+		}
+		if applied == 1 {
+			continue
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", migration.version, err)
+		}
+		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply migration %d: %w", migration.version, err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))", migration.version); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", migration.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", migration.version, err)
+		}
 	}
 	return nil
 }

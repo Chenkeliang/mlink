@@ -78,8 +78,8 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO turn_fragments(
 			adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
-			role, content, content_hash, occurred_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			role, content, content_hash, occurred_at, provider_id, provider_version, config_revision
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id, role)
 		DO UPDATE SET occurred_at = excluded.occurred_at
 		WHERE turn_fragments.content_hash = excluded.content_hash`,
@@ -94,6 +94,9 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 		[]byte(fragment.Content),
 		hash,
 		formatTime(occurredAt),
+		fragment.Route.ProviderID,
+		fragment.Route.ProviderVersion,
+		fragment.Route.ConfigRevision,
 	)
 	if err != nil {
 		return fmt.Errorf("record turn fragment: %w", err)
@@ -105,7 +108,88 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 	if changed == 0 {
 		return ErrTurnConflict
 	}
+	pair, complete, err := s.fragmentPair(ctx, fragment)
+	if err != nil || !complete {
+		return err
+	}
+	if _, _, err := s.EnqueueTurn(ctx, pair); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		DELETE FROM turn_fragments
+		WHERE adapter_id = ? AND connection_id = ? AND tenant_id = ? AND agent_id = ?
+		  AND user_id = ? AND session_id = ? AND turn_id = ?`,
+		fragment.AdapterID,
+		fragment.Route.ConnectionID,
+		fragment.Identity.TenantID,
+		fragment.Identity.AgentID,
+		fragment.Identity.UserID,
+		fragment.Identity.SessionID,
+		fragment.Identity.TurnID,
+	)
+	if err != nil {
+		return fmt.Errorf("clear completed turn fragments: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT role, content, occurred_at, provider_id, provider_version, config_revision
+		FROM turn_fragments
+		WHERE adapter_id = ? AND connection_id = ? AND tenant_id = ? AND agent_id = ?
+		  AND user_id = ? AND session_id = ? AND turn_id = ?`,
+		fragment.AdapterID,
+		fragment.Route.ConnectionID,
+		fragment.Identity.TenantID,
+		fragment.Identity.AgentID,
+		fragment.Identity.UserID,
+		fragment.Identity.SessionID,
+		fragment.Identity.TurnID,
+	)
+	if err != nil {
+		return Envelope{}, false, fmt.Errorf("read turn fragments: %w", err)
+	}
+	defer rows.Close()
+	messages := make(map[string]model.Message, 2)
+	var route connection.RouteKey
+	for rows.Next() {
+		var role, content, occurredAt, providerID, providerVersion, configRevision string
+		if err := rows.Scan(&role, &content, &occurredAt, &providerID, &providerVersion, &configRevision); err != nil {
+			return Envelope{}, false, fmt.Errorf("scan turn fragment: %w", err)
+		}
+		parsed, err := parseTime(occurredAt)
+		if err != nil {
+			return Envelope{}, false, err
+		}
+		currentRoute := connection.RouteKey{
+			ConnectionID:    fragment.Route.ConnectionID,
+			ProviderID:      providerID,
+			ProviderVersion: providerVersion,
+			ConfigRevision:  configRevision,
+		}
+		if route.ConnectionID != "" && route != currentRoute {
+			return Envelope{}, false, ErrTurnConflict
+		}
+		route = currentRoute
+		messages[role] = model.Message{Role: role, Content: content, OccurredAt: parsed}
+	}
+	if err := rows.Err(); err != nil {
+		return Envelope{}, false, fmt.Errorf("read turn fragments: %w", err)
+	}
+	user, hasUser := messages["user"]
+	assistant, hasAssistant := messages["assistant"]
+	if !hasUser || !hasAssistant {
+		return Envelope{}, false, nil
+	}
+	return Envelope{
+		AdapterID: fragment.AdapterID,
+		Route:     route,
+		Turn: model.Turn{
+			Identity: fragment.Identity,
+			Messages: []model.Message{user, assistant},
+		},
+	}, true, nil
 }
 
 func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool, error) {

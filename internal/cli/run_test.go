@@ -73,3 +73,21 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 		t.Fatalf("stderr = %q", got)
 	}
 }
+
+func TestRunDispatchesCodexHookEvent(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), []string{"hook", "codex", "Stop"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		RunCodexHook: func(_ context.Context, event string) error {
+			calls++
+			if event != "Stop" {
+				t.Fatalf("event = %q", event)
+			}
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}

@@ -1,0 +1,20 @@
+{
+  "custom_top_level": {"preserve": true},
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "/Users/test/bin/check-command", "timeout": 5}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/Users/test/bin/existing-prompt-hook", "timeout": 2}
+        ]
+      }
+    ]
+  }
+}

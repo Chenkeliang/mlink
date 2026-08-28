@@ -1,0 +1,10 @@
+{
+  "session_id": "thr_123",
+  "turn_id": "turn_456",
+  "transcript_path": "/path/that/must/not/be/read.jsonl",
+  "cwd": "/workspace",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "custom-model",
+  "permission_mode": "default",
+  "prompt": "How should I format the answer?"
+}
