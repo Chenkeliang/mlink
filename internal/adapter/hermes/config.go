@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -10,10 +11,12 @@ import (
 )
 
 const (
-	memoryEnabledPath      = "memory.memory_enabled"
-	userProfileEnabledPath = "memory.user_profile_enabled"
-	memoryProviderPath     = "memory.provider"
-	disabledMemoryPath     = "agent.disabled_toolsets[memory]"
+	groupSessionsPerUserPath  = "group_sessions_per_user"
+	threadSessionsPerUserPath = "thread_sessions_per_user"
+	memoryEnabledPath         = "memory.memory_enabled"
+	userProfileEnabledPath    = "memory.user_profile_enabled"
+	memoryProviderPath        = "memory.provider"
+	disabledMemoryPath        = "agent.disabled_toolsets[memory]"
 )
 
 type ownedYAMLValue struct {
@@ -29,10 +32,14 @@ type ConfigOwnership struct {
 	disabledToolsetsExisted  bool
 	disabledToolsetsOriginal *yaml.Node
 	disabledMemoryWasPresent bool
+	original                 []byte
+	installed                []byte
 }
 
 func (ownership ConfigOwnership) Paths() []string {
 	return []string{
+		groupSessionsPerUserPath,
+		threadSessionsPerUserPath,
 		memoryEnabledPath,
 		userProfileEnabledPath,
 		memoryProviderPath,
@@ -52,7 +59,7 @@ func MergeConfig(before []byte) ([]byte, ConfigOwnership, error) {
 		memoryMappingExisted: memoryMappingExisted,
 		agentMappingExisted:  agentMappingExisted,
 	}
-	for _, path := range []string{memoryEnabledPath, userProfileEnabledPath, memoryProviderPath} {
+	for _, path := range []string{groupSessionsPerUserPath, threadSessionsPerUserPath, memoryEnabledPath, userProfileEnabledPath, memoryProviderPath} {
 		node, exists, err := findYAMLPath(document.Content[0], strings.Split(path, "."))
 		if err != nil {
 			return nil, ConfigOwnership{}, err
@@ -68,6 +75,12 @@ func MergeConfig(before []byte) ([]byte, ConfigOwnership, error) {
 	ownership.disabledToolsetsOriginal = cloneYAMLNode(disabled)
 	if exists && disabled.Kind == yaml.SequenceNode {
 		ownership.disabledMemoryWasPresent = sequenceContains(disabled, "memory")
+	}
+	if err := setYAMLValue(document.Content[0], []string{groupSessionsPerUserPath}, boolNode(false)); err != nil {
+		return nil, ConfigOwnership{}, err
+	}
+	if err := setYAMLValue(document.Content[0], []string{threadSessionsPerUserPath}, boolNode(false)); err != nil {
+		return nil, ConfigOwnership{}, err
 	}
 
 	if err := setYAMLValue(document.Content[0], strings.Split(memoryEnabledPath, "."), boolNode(false)); err != nil {
@@ -91,19 +104,26 @@ func MergeConfig(before []byte) ([]byte, ConfigOwnership, error) {
 	if err != nil {
 		return nil, ConfigOwnership{}, fmt.Errorf("marshal Hermes config: %w", err)
 	}
+	ownership.original = append([]byte(nil), before...)
+	ownership.installed = append([]byte(nil), after...)
 	return after, ownership, nil
 }
 
 func RestoreConfig(current []byte, ownership ConfigOwnership) ([]byte, error) {
+	if len(ownership.installed) != 0 && bytes.Equal(current, ownership.installed) {
+		return append([]byte(nil), ownership.original...), nil
+	}
 	document, err := parseYAMLDocument(current)
 	if err != nil {
 		return nil, err
 	}
 	root := document.Content[0]
 	wants := map[string]*yaml.Node{
-		memoryEnabledPath:      boolNode(false),
-		userProfileEnabledPath: boolNode(false),
-		memoryProviderPath:     stringNode("mlink"),
+		groupSessionsPerUserPath:  boolNode(false),
+		threadSessionsPerUserPath: boolNode(false),
+		memoryEnabledPath:         boolNode(false),
+		userProfileEnabledPath:    boolNode(false),
+		memoryProviderPath:        stringNode("mlink"),
 	}
 	for _, owned := range ownership.values {
 		currentNode, exists, err := findYAMLPath(root, strings.Split(owned.path, "."))

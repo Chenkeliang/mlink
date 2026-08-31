@@ -194,6 +194,8 @@ func (service *Service) planHermes(ctx context.Context, request InstallRequest) 
 		Content: after,
 		Mode:    0o600,
 		SemanticDiff: []install.SemanticDiff{
+			{Path: "group_sessions_per_user", Before: "true or configured", After: "false"},
+			{Path: "thread_sessions_per_user", Before: "false or configured", After: "false"},
 			{Path: "memory.memory_enabled", Before: "true or configured", After: "false"},
 			{Path: "memory.user_profile_enabled", Before: "true or configured", After: "false"},
 			{Path: "memory.provider", Before: "existing provider", After: "mlink"},
@@ -298,6 +300,8 @@ func protectedHermesHash(data []byte) (string, error) {
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return "", fmt.Errorf("parse protected Hermes config: %w", err)
 	}
+	delete(document, "group_sessions_per_user")
+	delete(document, "thread_sessions_per_user")
 	memory, _ := document["memory"].(map[string]any)
 	if memory != nil {
 		delete(memory, "memory_enabled")

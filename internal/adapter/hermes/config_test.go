@@ -19,9 +19,13 @@ func TestMergeConfigDisablesOnlyBuiltinMemoryAndSelectsMLink(t *testing.T) {
 	assertYAMLValue(t, after, "memory.memory_enabled", false)
 	assertYAMLValue(t, after, "memory.user_profile_enabled", false)
 	assertYAMLValue(t, after, "memory.provider", "mlink")
+	assertYAMLValue(t, after, "group_sessions_per_user", false)
+	assertYAMLValue(t, after, "thread_sessions_per_user", false)
 	assertStringListContains(t, after, "agent.disabled_toolsets", "memory")
 
 	wantPaths := []string{
+		"group_sessions_per_user",
+		"thread_sessions_per_user",
 		"memory.memory_enabled",
 		"memory.user_profile_enabled",
 		"memory.provider",
@@ -34,6 +38,23 @@ func TestMergeConfigDisablesOnlyBuiltinMemoryAndSelectsMLink(t *testing.T) {
 		if !reflect.DeepEqual(yamlValue(t, before, path), yamlValue(t, after, path)) {
 			t.Fatalf("unowned path %q changed", path)
 		}
+	}
+}
+
+func TestMergeConfigMakesGroupsAndThreadsSharedAndRestoresExactly(t *testing.T) {
+	before := []byte("group_sessions_per_user: true\nmemory:\n  provider: hy-memory\n")
+	after, ownership, err := MergeConfig(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertYAMLValue(t, after, "group_sessions_per_user", false)
+	assertYAMLValue(t, after, "thread_sessions_per_user", false)
+	restored, err := RestoreConfig(after, ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(restored, before) {
+		t.Fatalf("restored = %q, want %q", restored, before)
 	}
 }
 

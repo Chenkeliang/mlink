@@ -47,6 +47,11 @@ class MLinkMemoryProvider(MemoryProvider):
         self._hermes_home = _default_hermes_home()
         self._platform = ""
         self._subject = ""
+        self._primary_subject = ""
+        self._alternate_subject = ""
+        self._chat_type = ""
+        self._chat_id = ""
+        self._thread_id = ""
         self._session_id = ""
         self._queue = None
         self._worker = None
@@ -66,7 +71,12 @@ class MLinkMemoryProvider(MemoryProvider):
     def initialize(self, session_id, **kwargs):
         self._hermes_home = str(kwargs.get("hermes_home") or _default_hermes_home())
         self._platform = str(kwargs.get("platform") or "").strip()
-        subject = str(kwargs.get("user_id_alt") or kwargs.get("user_id") or "").strip()
+        self._primary_subject = str(kwargs.get("user_id") or "").strip()
+        self._alternate_subject = str(kwargs.get("user_id_alt") or "").strip()
+        self._chat_type = str(kwargs.get("chat_type") or "").strip()
+        self._chat_id = str(kwargs.get("chat_id") or "").strip()
+        self._thread_id = str(kwargs.get("thread_id") or "").strip()
+        subject = self._alternate_subject or self._primary_subject
         self._session_id = str(session_id or "").strip()
         self._config = _load_config(self._hermes_home)
         if not subject:
@@ -93,6 +103,11 @@ class MLinkMemoryProvider(MemoryProvider):
             "adapter_id": "hermes",
             "source": self._platform,
             "source_subject": self._subject,
+            "chat_type": self._chat_type,
+            "chat_id": self._chat_id,
+            "thread_id": self._thread_id,
+            "primary_subject": self._primary_subject,
+            "alternate_subject": self._alternate_subject,
             "query": str(query),
             "max_items": 8,
         }
@@ -122,13 +137,18 @@ class MLinkMemoryProvider(MemoryProvider):
             return
         self._turn_counter += 1
         active_session = str(session_id or self._session_id or "").strip()
-        turn_material = "\0".join((active_session, str(self._turn_counter), user_text, assistant_text))
+        turn_material = "\0".join((active_session, self._subject, self._chat_id, self._thread_id, str(self._turn_counter), user_text, assistant_text))
         turn_id = "hermes_" + hashlib.sha256(turn_material.encode("utf-8")).hexdigest()[:26]
         occurred_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         payload = {
             "adapter_id": "hermes",
             "source": self._platform,
             "source_subject": self._subject,
+            "chat_type": self._chat_type,
+            "chat_id": self._chat_id,
+            "thread_id": self._thread_id,
+            "primary_subject": self._primary_subject,
+            "alternate_subject": self._alternate_subject,
             "session_id": active_session or "hermes-session",
             "turn_id": turn_id,
             "messages": [
@@ -195,4 +215,3 @@ class MLinkMemoryProvider(MemoryProvider):
 
 def register(ctx):
     ctx.register_memory_provider(MLinkMemoryProvider())
-

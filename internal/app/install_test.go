@@ -182,6 +182,22 @@ func TestPlanInstallContainsAllSelectedResourcesAndNoWrites(t *testing.T) {
 			t.Fatalf("invariant not preserved: %#v", invariant)
 		}
 	}
+	var hermesDiff []install.SemanticDiff
+	for _, operation := range plan.Operations {
+		if operation.Target == "/home/test/.hermes/config.yaml" {
+			hermesDiff = operation.SemanticDiff
+			break
+		}
+	}
+	for _, want := range []string{"group_sessions_per_user", "thread_sessions_per_user"} {
+		found := false
+		for _, diff := range hermesDiff {
+			found = found || diff.Path == want && diff.After == "false"
+		}
+		if !found {
+			t.Fatalf("Hermes ChangeSet missing %q: %#v", want, hermesDiff)
+		}
+	}
 }
 
 func TestPlanInstallSecretValueDoesNotAffectPlanIdentity(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,8 +28,17 @@ func TestPlanProviderUsesOfficialLifecycleAndDelegatedIdentity(t *testing.T) {
 			t.Fatalf("missing official lifecycle method %s", method)
 		}
 	}
-	if !strings.Contains(plugin, `subject = str(kwargs.get("user_id_alt") or kwargs.get("user_id") or "").strip()`) {
+	if !strings.Contains(plugin, `self._alternate_subject = str(kwargs.get("user_id_alt") or "").strip()`) ||
+		!strings.Contains(plugin, `self._primary_subject = str(kwargs.get("user_id") or "").strip()`) {
 		t.Fatal("stable identity precedence missing")
+	}
+	for _, want := range []string{
+		`"chat_type": self._chat_type`, `"chat_id": self._chat_id`, `"thread_id": self._thread_id`,
+		`"primary_subject": self._primary_subject`, `"alternate_subject": self._alternate_subject`,
+	} {
+		if !strings.Contains(plugin, want) {
+			t.Fatalf("provider context missing %q", want)
+		}
 	}
 	if !strings.Contains(plugin, `if not subject:`) || !strings.Contains(plugin, `identity_missing`) {
 		t.Fatal("missing identity rejection absent")
@@ -81,6 +91,18 @@ func TestPlanProviderCreatesPrivateConfigAndIsDeterministic(t *testing.T) {
 	digest := sha256.Sum256(first[1].Content)
 	if actual := fmt.Sprintf("%x\n", digest); actual != string(golden) {
 		t.Fatalf("provider digest = %q, golden = %q", actual, golden)
+	}
+}
+
+func TestProviderTemplateParsesAsPython(t *testing.T) {
+	resources, err := PlanProvider("/home/test/.hermes", HTTPGrant{Endpoint: "http://127.0.0.1:8097", Token: "token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("python3", "-c", "import ast,sys; ast.parse(sys.stdin.read())")
+	command.Stdin = bytes.NewReader(resources[1].Content)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("Python template syntax: %v: %s", err, output)
 	}
 }
 
