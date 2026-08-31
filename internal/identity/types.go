@@ -17,6 +17,22 @@ func (context ExternalContext) String() string {
 
 func (context ExternalContext) GoString() string { return context.String() }
 
+type RouteKind string
+
+const (
+	RouteOwner   RouteKind = "owner"
+	RoutePrivate RouteKind = "hermes-private"
+	RouteGroup   RouteKind = "hermes-group"
+)
+
+type RouteIntent struct {
+	Kind                 RouteKind
+	PrincipalFingerprint string
+	SessionID            string
+	ActorDigest          string
+	IncludeAgentShared   bool
+}
+
 type ResolvedIdentity struct {
 	ConnectionID       string
 	SpaceID            string

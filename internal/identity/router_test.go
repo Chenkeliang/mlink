@@ -3,6 +3,8 @@ package identity
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"mlink/internal/config"
@@ -23,6 +25,73 @@ func TestOldAndNewAliasesResolveToSameOwner(t *testing.T) {
 	}
 	if old.UserID != "usr_owner_keliang" || newer.UserID != old.UserID || old.SpaceID != "personal-owner" || !old.IncludeAgentShared {
 		t.Fatalf("resolved = %#v %#v", old, newer)
+	}
+}
+
+func TestRouterEmitsOwnerIntentWithoutDynamicFingerprint(t *testing.T) {
+	router := fixtureRouter(t, []BindingValue{
+		{RefID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", Value: []byte("on_old"), PrincipalID: "owner"},
+		{RefID: "owner-feishu-union-2", Source: "feishu", Kind: "union_id", Value: []byte("on_new"), PrincipalID: "owner"},
+	})
+	old, err := router.ResolveHermesIntent(ExternalContext{Source: "feishu", ChatType: "dm", ChatID: "oc_dm", AlternateSubject: "on_old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := router.ResolveHermesIntent(ExternalContext{Source: "feishu", ChatType: "dm", ChatID: "oc_dm", AlternateSubject: "on_new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Kind != RouteOwner || newer.Kind != RouteOwner || old.PrincipalFingerprint != "" || newer.PrincipalFingerprint != "" || !old.IncludeAgentShared || !newer.IncludeAgentShared {
+		t.Fatalf("owner intents = %#v %#v", old, newer)
+	}
+}
+
+func TestRouterEmitsStablePrivateFingerprintWithoutRawIdentity(t *testing.T) {
+	router := fixtureRouter(t, nil)
+	context := ExternalContext{Source: "feishu", ChatType: "dm", ChatID: "oc_private_raw", AlternateSubject: "on_private_raw"}
+	first, err := router.ResolveHermesIntent(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := router.ResolveHermesIntent(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Kind != RoutePrivate || first.PrincipalFingerprint == "" || first.PrincipalFingerprint != second.PrincipalFingerprint || first.IncludeAgentShared {
+		t.Fatalf("private intents = %#v %#v", first, second)
+	}
+	rendered := fmt.Sprintf("%#v", first)
+	for _, raw := range []string{context.ChatID, context.AlternateSubject} {
+		if strings.Contains(rendered, raw) {
+			t.Fatalf("intent leaked raw identity %q: %s", raw, rendered)
+		}
+	}
+}
+
+func TestRouterEmitsGroupFingerprintAndTopicScopedSession(t *testing.T) {
+	router := fixtureRouter(t, nil)
+	base := ExternalContext{Source: "feishu", ChatType: "group", ChatID: "oc_group_raw", ThreadID: "omt_topic_one", AlternateSubject: "on_actor_raw"}
+	first, err := router.ResolveHermesIntent(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherActor := base
+	otherActor.AlternateSubject = "on_other_raw"
+	second, _ := router.ResolveHermesIntent(otherActor)
+	otherTopic := base
+	otherTopic.ThreadID = "omt_topic_two"
+	third, _ := router.ResolveHermesIntent(otherTopic)
+	if first.Kind != RouteGroup || first.PrincipalFingerprint != second.PrincipalFingerprint || first.PrincipalFingerprint != third.PrincipalFingerprint {
+		t.Fatalf("group fingerprints = %#v %#v %#v", first, second, third)
+	}
+	if first.SessionID != second.SessionID || first.SessionID == third.SessionID || first.ActorDigest == second.ActorDigest || first.IncludeAgentShared {
+		t.Fatalf("group sessions = %#v %#v %#v", first, second, third)
+	}
+	rendered := fmt.Sprintf("%#v", first)
+	for _, raw := range []string{base.ChatID, base.ThreadID, base.AlternateSubject} {
+		if strings.Contains(rendered, raw) {
+			t.Fatalf("intent leaked raw identity %q: %s", raw, rendered)
+		}
 	}
 }
 

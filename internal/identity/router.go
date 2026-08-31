@@ -41,6 +41,49 @@ func (router Router) ResolveFixed(adapterID, sessionID string) (ResolvedIdentity
 	return router.resolved(space, principal.CanonicalUserID, sessionID, ""), nil
 }
 
+func (router Router) ResolveHermesIntent(context ExternalContext) (RouteIntent, error) {
+	if !router.valid() || context.Source != "feishu" {
+		return RouteIntent{}, ErrUnsupportedContext
+	}
+	sessionID := router.sessionID(context)
+	actorDigest := router.actorDigest(context)
+	switch context.ChatType {
+	case "group":
+		if context.ChatID == "" {
+			return RouteIntent{}, ErrGroupIdentityMissing
+		}
+		return RouteIntent{
+			Kind: RouteGroup, PrincipalFingerprint: "prn_" + router.hmacBase32("principal-group\x00"+router.NamespaceID+"\x00"+context.Source+"\x00"+context.ChatID),
+			SessionID: sessionID, ActorDigest: actorDigest,
+		}, nil
+	case "dm":
+		if context.ChatID == "" || context.AlternateSubject == "" && context.PrimarySubject == "" {
+			return RouteIntent{}, ErrIdentityMissing
+		}
+		match, err := router.Bindings.match(router.Key, context)
+		if err != nil {
+			return RouteIntent{}, err
+		}
+		if match.Revoked {
+			return RouteIntent{}, ErrBindingRevoked
+		}
+		if match.Matched {
+			owner, exists := router.Principals["owner"]
+			if !exists || owner.CanonicalUserID == "" || match.PrincipalID != owner.ID {
+				return RouteIntent{}, ErrBindingConflict
+			}
+			return RouteIntent{Kind: RouteOwner, SessionID: sessionID, ActorDigest: actorDigest, IncludeAgentShared: true}, nil
+		}
+		subject := stableSubject(context)
+		return RouteIntent{
+			Kind: RoutePrivate, PrincipalFingerprint: "prn_" + router.hmacBase32("principal-private\x00"+router.NamespaceID+"\x00"+context.Source+"\x00"+subject),
+			SessionID: sessionID, ActorDigest: actorDigest,
+		}, nil
+	default:
+		return RouteIntent{}, ErrUnsupportedContext
+	}
+}
+
 func (router Router) ResolveHermes(context ExternalContext) (ResolvedIdentity, error) {
 	if !router.valid() || context.Source != "feishu" {
 		return ResolvedIdentity{}, ErrUnsupportedContext
