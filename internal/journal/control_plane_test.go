@@ -3,6 +3,7 @@ package journal
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,16 @@ func TestControlPlaneMigrationHasNoRawExternalIDColumns(t *testing.T) {
 				t.Fatalf("%s contains forbidden column %q: %s", table, forbidden, joined)
 			}
 		}
+	}
+}
+
+func TestLoadControlPlaneTreatsPreV4JournalAsUnprovisioned(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`DROP TABLE control_plane_installations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadControlPlane(context.Background()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

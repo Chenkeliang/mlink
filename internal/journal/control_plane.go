@@ -80,6 +80,13 @@ func (s *Store) LoadControlPlane(ctx context.Context) (ControlPlaneState, error)
 	if s == nil || s.db == nil {
 		return ControlPlaneState{}, errors.New("journal store is unavailable")
 	}
+	var tableCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'control_plane_installations'`).Scan(&tableCount); err != nil {
+		return ControlPlaneState{}, fmt.Errorf("inspect control-plane schema: %w", err)
+	}
+	if tableCount == 0 {
+		return ControlPlaneState{}, fs.ErrNotExist
+	}
 	var value ControlPlaneState
 	err := s.db.QueryRowContext(ctx, `
 		SELECT installation_id, instance_id, owner_user_id, owner_team_id, owner_agent_id, owner_asset_id,
