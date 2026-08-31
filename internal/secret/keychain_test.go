@@ -106,3 +106,25 @@ func TestKeychainGetMapsSecurityItemNotFound(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 }
+
+func TestKeychainDeleteMapsSecurityItemNotFound(t *testing.T) {
+	store := Keychain{Runner: &fakeRunner{err: exitCodeError(44)}}
+	if err := store.Delete(context.Background(), "identity/binding/owner-feishu-union-1"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Delete() error = %v", err)
+	}
+}
+
+func TestKeychainBindingValueAppearsOnlyOnStdin(t *testing.T) {
+	runner := &fakeRunner{}
+	store := Keychain{Runner: runner}
+	value := []byte("on_actual_binding")
+	if err := store.Put(context.Background(), "identity/binding/owner-feishu-union-1", value); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].stdin != "on_actual_binding\n" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	if strings.Contains(strings.Join(runner.calls[0].args, " "), string(value)) {
+		t.Fatal("binding value leaked into argv")
+	}
+}

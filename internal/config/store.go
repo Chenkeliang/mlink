@@ -175,20 +175,30 @@ func Validate(cfg Config) error {
 	}
 	secretRefs := make(map[string]string, len(cfg.Bindings))
 	for id, binding := range cfg.Bindings {
-		if id != binding.ID || !validBindingSlot(binding) {
+		if id != binding.ID {
 			return fmt.Errorf("invalid binding slot %q", id)
+		}
+		if err := ValidateBindingRef(binding); err != nil {
+			return err
 		}
 		if _, exists := cfg.Principals[binding.PrincipalID]; !exists {
 			return fmt.Errorf("binding %q references missing principal", id)
-		}
-		wantRef := "keychain://dev.mlink/identity/binding/" + id
-		if binding.SecretRef != wantRef || binding.Source != "feishu" || binding.Status != BindingActive && binding.Status != BindingRevoked {
-			return fmt.Errorf("invalid binding %q", id)
 		}
 		if previous, exists := secretRefs[binding.SecretRef]; exists {
 			return fmt.Errorf("bindings %q and %q share one secret", previous, id)
 		}
 		secretRefs[binding.SecretRef] = id
+	}
+	return nil
+}
+
+func ValidateBindingRef(binding BindingRef) error {
+	if !validBindingSlot(binding) {
+		return fmt.Errorf("invalid binding slot %q", binding.ID)
+	}
+	wantRef := "keychain://dev.mlink/identity/binding/" + binding.ID
+	if binding.SecretRef != wantRef || binding.Source != "feishu" || binding.Status != BindingActive && binding.Status != BindingRevoked {
+		return fmt.Errorf("invalid binding %q", binding.ID)
 	}
 	return nil
 }

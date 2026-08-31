@@ -63,8 +63,7 @@ func (k Keychain) Get(ctx context.Context, account string) ([]byte, error) {
 	}
 	output, err := k.runner().Run(ctx, args, nil)
 	if err != nil {
-		var exitError interface{ ExitCode() int }
-		if errors.As(err, &exitError) && exitError.ExitCode() == 44 {
+		if keychainItemNotFound(err) {
 			return nil, fs.ErrNotExist
 		}
 		return nil, fmt.Errorf("read MLink secret for %q: %w", account, err)
@@ -83,9 +82,17 @@ func (k Keychain) Delete(ctx context.Context, account string) error {
 		"-a", account,
 	}
 	if _, err := k.runner().Run(ctx, args, nil); err != nil {
+		if keychainItemNotFound(err) {
+			return fs.ErrNotExist
+		}
 		return fmt.Errorf("delete MLink secret for %q: %w", account, err)
 	}
 	return nil
+}
+
+func keychainItemNotFound(err error) bool {
+	var exitError interface{ ExitCode() int }
+	return errors.As(err, &exitError) && exitError.ExitCode() == 44
 }
 
 func (k Keychain) runner() Runner {
