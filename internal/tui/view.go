@@ -71,12 +71,22 @@ func (model Model) stepView(width int) []string {
 			model.token.View(),
 		}
 	case StepIdentity:
-		return []string{
-			model.row("Tenant", model.request.Connection.TenantID),
-			model.row("Agent", model.request.Connection.AgentID),
-			model.row("Local user", model.request.Connection.UserID),
-			model.row("Hermes users", "Feishu stable ID → private hash"),
+		lines := []string{
+			model.row("Owner", model.request.OwnerSlug),
+			model.mutedStyle().Render("Select the Feishu identity that shares the local owner memory."),
 		}
+		for index, candidate := range model.candidates {
+			cursor := "  "
+			if index == model.identityCursor {
+				cursor = "> "
+			}
+			selected := "[ ]"
+			if index == model.identitySelected {
+				selected = "[x]"
+			}
+			lines = append(lines, cursor+fmt.Sprintf("%s %s · %s · …%s", selected, candidate.DisplayName, candidate.Kind, candidate.Suffix))
+		}
+		return lines
 	case StepAgents:
 		var lines []string
 		for index, agent := range orderedAgents() {
@@ -92,7 +102,12 @@ func (model Model) stepView(width int) []string {
 		}
 		return lines
 	case StepPreview:
-		lines := []string{model.row("Plan", model.plan.PlanID)}
+		lines := []string{
+			model.row("Plan", model.plan.PlanID),
+			model.row("personal-owner", "Codex · Pi · owner Feishu DM · L1/L2/L3"),
+			model.row("hermes-private", "other Feishu DMs · L1"),
+			model.row("hermes-groups", "Feishu groups and topics · group L1"),
+		}
 		for _, operation := range model.plan.Operations {
 			lines = append(lines, model.row(string(operation.Action), operation.Target))
 			if len(lines) >= 12 && width < 100 {
@@ -135,6 +150,8 @@ func (model Model) footer() string {
 	switch model.step {
 	case StepConnection:
 		return "Enter continue · Ctrl+C quit"
+	case StepIdentity:
+		return "↑/↓ move · Space select · Enter continue · q quit"
 	case StepAgents:
 		return "↑/↓ move · Space toggle · Enter preview · q quit"
 	case StepApply:

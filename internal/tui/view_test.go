@@ -3,8 +3,11 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"mlink/internal/identity"
 )
 
 func TestNarrowViewHasNoOverflow(t *testing.T) {
@@ -14,6 +17,19 @@ func TestNarrowViewHasNoOverflow(t *testing.T) {
 	for _, line := range strings.Split(model.View(), "\n") {
 		if width := lipgloss.Width(line); width > 72 {
 			t.Fatalf("line width = %d: %q", width, line)
+		}
+	}
+}
+
+func TestViewNeverRendersRawCandidateID(t *testing.T) {
+	application := &fakeApplication{candidates: []identity.Candidate{identity.NewCandidate("陈科良", "union_id", "on_actual_union_id", time.Unix(20, 0))}}
+	model := New(application, fixtureRequest())
+	model.step = StepIdentity
+	model.candidates = application.candidates
+	for _, width := range []int{72, 100, 140} {
+		model.width = width
+		if strings.Contains(model.View(), "on_actual_union_id") {
+			t.Fatalf("width %d leaked ID", width)
 		}
 	}
 }

@@ -426,6 +426,15 @@ func (runtime *runtimeApplication) IdentityList(ctx context.Context) ([]app.Iden
 	return runtime.identityService(previewLedger{}).IdentityList(ctx)
 }
 
+func (runtime *runtimeApplication) DetectIdentityCandidates(ctx context.Context) ([]identity.Candidate, error) {
+	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
+	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
+	if err != nil {
+		return nil, err
+	}
+	return hermes.DetectIdentityCandidates(ctx, install.LocalTarget{}, machine, detection.HermesHome, 200)
+}
+
 func (runtime *runtimeApplication) ExportIdentity(ctx context.Context, passphrase []byte) ([]byte, error) {
 	return runtime.identityService(previewLedger{}).ExportIdentity(ctx, passphrase, rand.Reader)
 }

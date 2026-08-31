@@ -3,22 +3,34 @@ package tui
 import (
 	"context"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"mlink/internal/app"
 	"mlink/internal/config"
 	"mlink/internal/doctor"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 )
 
 type fakeApplication struct {
 	plan       install.ChangeSet
 	applyCalls int
+	planCalls  int
+	candidates []identity.Candidate
 }
 
 func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
+	application.planCalls++
 	return application.plan, nil
+}
+
+func (application *fakeApplication) DetectIdentityCandidates(context.Context) ([]identity.Candidate, error) {
+	if application.candidates == nil {
+		return []identity.Candidate{identity.NewCandidate("Owner", "union_id", "on_owner", time.Unix(20, 0))}, nil
+	}
+	return append([]identity.Candidate(nil), application.candidates...), nil
 }
 
 func (application *fakeApplication) ApplyInstall(context.Context, string, app.InstallRequest) error {
@@ -43,8 +55,9 @@ func TestWizardCannotApplyBeforeDedicatedConfirmation(t *testing.T) {
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // detect
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // provider
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // connection
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // identity candidates
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeySpace}) // select identity
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // identity
-	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // agents
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // agents -> preview
 	if model.step != StepPreview || application.applyCalls != 0 {
 		t.Fatalf("step/apply = %d/%d", model.step, application.applyCalls)
@@ -60,6 +73,25 @@ func TestWizardCannotApplyBeforeDedicatedConfirmation(t *testing.T) {
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	if application.applyCalls != 1 {
 		t.Fatalf("apply calls = %d", application.applyCalls)
+	}
+}
+
+func TestWizardRequiresExplicitOwnerSelection(t *testing.T) {
+	application := &fakeApplication{candidates: []identity.Candidate{
+		identity.NewCandidate("陈科良", "union_id", "on_owner", time.Unix(20, 0)),
+		identity.NewCandidate("陈科良", "user_id", "u_other", time.Unix(10, 0)),
+	}}
+	model := New(application, fixtureRequest())
+	model.token.SetValue("memorycore-token")
+	model = driveToIdentity(t, model)
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepIdentity || application.planCalls != 0 {
+		t.Fatalf("auto-selected duplicate name: step=%d calls=%d", model.step, application.planCalls)
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeySpace})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepAgents || model.request.OwnerBindingSlot.ID != "owner-feishu-union-1" || string(model.request.SecretInputs[app.OwnerBindingSecret]) != "on_owner" {
+		t.Fatalf("selection = step:%d request:%#v", model.step, model.request)
 	}
 }
 
@@ -86,4 +118,13 @@ func advance(t *testing.T, model Model, message tea.Msg) Model {
 		}
 	}
 	return result
+}
+
+func driveToIdentity(t *testing.T, model Model) Model {
+	t.Helper()
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	return model
 }

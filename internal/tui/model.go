@@ -8,7 +8,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"mlink/internal/app"
+	"mlink/internal/config"
 	"mlink/internal/doctor"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 )
 
@@ -31,23 +33,27 @@ type Application interface {
 	ApplyInstall(context.Context, string, app.InstallRequest) error
 	Status(context.Context) (app.Status, error)
 	Doctor(context.Context, []app.Agent) (doctor.Report, error)
+	DetectIdentityCandidates(context.Context) ([]identity.Candidate, error)
 }
 
 type Model struct {
-	application Application
-	request     app.InstallRequest
-	step        Step
-	width       int
-	height      int
-	cursor      int
-	selected    map[app.Agent]bool
-	token       textinput.Model
-	status      app.Status
-	plan        install.ChangeSet
-	report      doctor.Report
-	confirmed   bool
-	busy        bool
-	err         error
+	application      Application
+	request          app.InstallRequest
+	step             Step
+	width            int
+	height           int
+	cursor           int
+	selected         map[app.Agent]bool
+	token            textinput.Model
+	status           app.Status
+	plan             install.ChangeSet
+	report           doctor.Report
+	candidates       []identity.Candidate
+	identityCursor   int
+	identitySelected int
+	confirmed        bool
+	busy             bool
+	err              error
 }
 
 type statusMsg struct {
@@ -67,6 +73,11 @@ type doctorMsg struct {
 	err    error
 }
 
+type candidatesMsg struct {
+	values []identity.Candidate
+	err    error
+}
+
 func New(application Application, request app.InstallRequest) Model {
 	token := textinput.New()
 	token.Placeholder = "MemoryCore token"
@@ -82,7 +93,8 @@ func New(application Application, request app.InstallRequest) Model {
 		selected: map[app.Agent]bool{
 			app.Codex: true, app.Pi: true, app.Hermes: true,
 		},
-		token: token,
+		token:            token,
+		identitySelected: -1,
 	}
 }
 
@@ -114,6 +126,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case doctorMsg:
 		model.busy = false
 		model.report, model.err = value.report, value.err
+		return model, nil
+	case candidatesMsg:
+		model.busy = false
+		model.candidates, model.err = value.values, value.err
+		model.identityCursor = 0
+		model.identitySelected = -1
+		if value.err == nil && len(value.values) == 0 {
+			model.err = errors.New("no Hermes Feishu identity candidates were detected")
+		}
 		return model, nil
 	case tea.KeyMsg:
 		if value.String() == "ctrl+c" || value.String() == "q" && model.step != StepConnection {
@@ -155,13 +176,35 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			model.token.Blur()
 			model.step = StepIdentity
-			return model, nil
+			model.busy = true
+			return model, model.candidatesCommand()
 		}
 		var command tea.Cmd
 		model.token, command = model.token.Update(key)
 		return model, command
 	case StepIdentity:
-		if key.Type == tea.KeyEnter {
+		switch key.String() {
+		case "up", "k":
+			if model.identityCursor > 0 {
+				model.identityCursor--
+			}
+		case "down", "j":
+			if model.identityCursor+1 < len(model.candidates) {
+				model.identityCursor++
+			}
+		case " ":
+			if len(model.candidates) != 0 {
+				model.identitySelected = model.identityCursor
+			}
+		case "enter":
+			if model.identitySelected < 0 || model.identitySelected >= len(model.candidates) {
+				model.err = errors.New("select the Feishu identity that belongs to the local owner")
+				return model, nil
+			}
+			if err := model.selectOwnerBinding(); err != nil {
+				model.err = err
+				return model, nil
+			}
 			model.step = StepAgents
 		}
 	case StepAgents:
@@ -225,6 +268,7 @@ func (model Model) planCommand() tea.Cmd {
 	return func() tea.Msg {
 		plan, err := model.application.PlanInstall(context.Background(), request)
 		wipe(request.SecretInputs[app.MemoryCoreTokenSecret])
+		wipe(request.SecretInputs[app.OwnerBindingSecret])
 		return planMsg{plan: plan, err: err}
 	}
 }
@@ -235,7 +279,15 @@ func (model Model) applyCommand() tea.Cmd {
 	return func() tea.Msg {
 		err := model.application.ApplyInstall(context.Background(), planID, request)
 		wipe(request.SecretInputs[app.MemoryCoreTokenSecret])
+		wipe(request.SecretInputs[app.OwnerBindingSecret])
 		return applyMsg{err: err}
+	}
+}
+
+func (model Model) candidatesCommand() tea.Cmd {
+	return func() tea.Msg {
+		values, err := model.application.DetectIdentityCandidates(context.Background())
+		return candidatesMsg{values: values, err: err}
 	}
 }
 
@@ -251,6 +303,9 @@ func (model Model) installRequest() app.InstallRequest {
 	request := cloneRequest(model.request)
 	request.Agents = model.selectedAgents()
 	request.SecretInputs = map[string][]byte{app.MemoryCoreTokenSecret: []byte(model.token.Value())}
+	if owner := model.request.SecretInputs[app.OwnerBindingSecret]; len(owner) != 0 {
+		request.SecretInputs[app.OwnerBindingSecret] = append([]byte(nil), owner...)
+	}
 	return request
 }
 
@@ -261,7 +316,32 @@ func (model *Model) wipeToken() {
 	if model.request.SecretInputs != nil {
 		wipe(model.request.SecretInputs[app.MemoryCoreTokenSecret])
 		delete(model.request.SecretInputs, app.MemoryCoreTokenSecret)
+		wipe(model.request.SecretInputs[app.OwnerBindingSecret])
+		delete(model.request.SecretInputs, app.OwnerBindingSecret)
 	}
+	for index := range model.candidates {
+		model.candidates[index].Wipe()
+	}
+	model.candidates = nil
+}
+
+func (model *Model) selectOwnerBinding() error {
+	candidate := model.candidates[model.identitySelected]
+	token := map[string]string{"union_id": "union", "user_id": "user", "open_id": "open"}[candidate.Kind]
+	if token == "" || len(candidate.Value) == 0 {
+		return errors.New("selected Feishu identity candidate is invalid")
+	}
+	if model.request.SecretInputs == nil {
+		model.request.SecretInputs = make(map[string][]byte)
+	}
+	wipe(model.request.SecretInputs[app.OwnerBindingSecret])
+	model.request.SecretInputs[app.OwnerBindingSecret] = append([]byte(nil), candidate.Value...)
+	slot := "owner-feishu-" + token + "-1"
+	model.request.OwnerBindingSlot = config.BindingRef{
+		ID: slot, Source: "feishu", Kind: candidate.Kind, PrincipalID: "owner",
+		SecretRef: "keychain://dev.mlink/identity/binding/" + slot, Status: config.BindingActive,
+	}
+	return nil
 }
 
 func (model Model) selectedAgents() []app.Agent {
