@@ -1,55 +1,106 @@
-# MLink Real-Machine Read-Only Preview
+# MLink Principal Routing Real-Machine Preview
 
-Date: 2026-08-28
+Date: 2026-08-31
 
-Status: previewed; not applied
+Status: previewed and reproducible; awaiting explicit approval; not applied
 
-## Candidate
+## Approval Identity
 
+- Final ChangeSet: `plan_840c3a08543ba520b2462228e6`
+- Invalidated ChangeSets: `plan_5b496cbe0ed3a1c09525934f9c`, `plan_3fccddff2c44b2e0b90fdfd41d`
+- Candidate path: `/tmp/mlink-principal-routing-preview`
+- Candidate SHA-256: `63a15caf9790f0092e4d7d66d6eefabe70cadf999488d866cbe7e886c5b704c0`
 - Git branch: `feat_product_design`
-- Candidate path: `/tmp/mlink-user-layer-preview`
-- Candidate SHA-256: `e40373afdbb78ccd3d55bc8694d2155af6ec320c6612e79db71b1ad6df468f9b`
-- ChangeSet: `plan_5b496cbe0ed3a1c09525934f9c`
 - Provider: `dev.mlink.tencentdb@0.1.0`
 - MemoryCore endpoint: `http://127.0.0.1:8420`
-- Hermes target: `hermes-agent-env`, Hermes Agent `v0.20.5`
-- Auto-detected private Orb bridge: `192.168.139.3:8097`
+- Selected Agents: Codex, Pi, Hermes
+- Selected Connection: `local`
 
-The existing MemoryCore Gateway credential was supplied to the preview through stdin. It was not printed, placed in argv, written to the repository, or stored in Keychain.
+The existing MemoryCore credential and selected Feishu identity were supplied to each preview through the bounded `--install-secrets-stdin` JSON channel. Neither value was printed, placed in argv, written to the repository, or stored in Keychain.
 
-## Proposed ChangeSet
+## Owner Candidate
 
-| Action | Target | Owned change |
+Hermes candidates were read from `/home/keliang/.hermes/state.db` using SQLite URI read-only mode. The explicit owner selection is:
+
+| Display name | Kind | Redacted value | Last seen |
+|---|---|---|---|
+| 陈科良 | `union_id` | `…779a` | 2026-08-31 11:44 |
+
+The older `user_id …3614` candidate was not selected. MLink stores the raw selected value only in the macOS Keychain account `identity/binding/owner-feishu-union-1` when an approved Apply occurs.
+
+## MLink Schema and Routing
+
+The proposed `~/.mlink/config.yaml` is Schema v2 and contains one stable Owner Principal plus three Memory Spaces:
+
+| Item | Proposed behavior |
+|---|---|
+| `principal:owner` | stable canonical owner; independent of any Feishu ID |
+| `binding:owner-feishu-union-1` | redacted `union_id` alias maps to Owner |
+| `personal-owner` | Owner L1/L2/L3; shared by Codex, Pi, and Owner Hermes DM; `include_agent_shared=true` |
+| `hermes-private` | isolated per-user Hermes DM L1 only; no L2/L3; `include_agent_shared=false` |
+| `hermes-groups` | isolated per-group L1 only; topics share the group Principal; no member personal memory; `include_agent_shared=false` |
+| Codex route | fixed `personal-owner` |
+| Pi route | fixed `personal-owner` |
+| Hermes route | dynamic Owner/private/group authorization route |
+
+## Exact Proposed Operations
+
+| # | Action | Target | Proposed SHA-256 / semantic result | Rollback |
+|---:|---|---|---|---|
+| 1 | create | `/Users/keliang/.local/bin/mlink` | `63a15caf9790f0092e4d7d66d6eefabe70cadf999488d866cbe7e886c5b704c0` | remove created file |
+| 2 | create | `/Users/keliang/.mlink/config.yaml` | `9fde5087c73671c5403ed736233ed8d509c80bfddb912392ab0f6f5a0b6c0161`; Schema v2 routing above | remove created file |
+| 3 | create | `/Users/keliang/.codex/hooks.json` | MLink lifecycle Hooks; existing Hooks preserved | remove created file |
+| 4 | create | `/Users/keliang/.pi/agent/extensions/mlink.ts` | official Pi lifecycle Extension | remove created file |
+| 5 | create | `/home/keliang/.hermes/plugins/mlink/plugin.yaml` | Hermes user Provider manifest | remove created file |
+| 6 | create | `/home/keliang/.hermes/plugins/mlink/__init__.py` | Hermes `MemoryProvider` bridge | remove created file |
+| 7 | create | `/home/keliang/.hermes/mlink.json` | private delegated Broker grant | remove created file |
+| 8 | semantic merge | `/home/keliang/.hermes/config.yaml` | before `dc88cec33f11785e4605dd2bbbfe7c38d37d07f9aa93e63587b3ba039788995b`; proposed `ce5d0d530ca10010b5df2440211a3dd4f5dcb3065d17bff2575484eb62950f8d` | restore backup |
+| 9 | create | `/Users/keliang/Library/LaunchAgents/dev.mlink.broker.plist` | MLink Broker user service | remove created file |
+| 10 | service action | `service:bootstrap:dev.mlink.broker` | bootstrap LaunchAgent | compensating service action |
+| 11 | service action | `service:kickstart:dev.mlink.broker` | start Broker | compensating service action |
+
+An approved Apply also writes these four secrets transactionally to macOS Keychain service `dev.mlink`: `connection/local/token`, `identity/hmac-key`, `adapter/hermes/token`, and `identity/binding/owner-feishu-union-1`. Any later resource failure restores their prior state.
+
+## Exact Hermes Semantic Merge
+
+The current real Hermes values and proposed owned values are:
+
+| Path | Current | Proposed |
 |---|---|---|
-| create | `/Users/keliang/.local/bin/mlink` | install the verified candidate binary |
-| create | `/Users/keliang/.mlink/config.yaml` | create the non-secret TencentDB Connection with Keychain references |
-| create | `/Users/keliang/.codex/hooks.json` | add official Codex lifecycle Hooks |
-| create | `/Users/keliang/.pi/agent/extensions/mlink.ts` | add the Pi lifecycle Extension |
-| create | `/home/keliang/.hermes/plugins/mlink/plugin.yaml` | add the Hermes user Provider manifest |
-| create | `/home/keliang/.hermes/plugins/mlink/__init__.py` | add the Hermes MemoryProvider bridge |
-| create | `/home/keliang/.hermes/mlink.json` | add the private delegated Broker grant |
-| semantic merge | `/home/keliang/.hermes/config.yaml` | select `mlink`, disable built-in memory injection and user profile, and disable the built-in `memory` toolset |
-| create | `/Users/keliang/Library/LaunchAgents/dev.mlink.broker.plist` | install the user Broker service |
-| service | `dev.mlink.broker` | bootstrap and kick-start the user LaunchAgent |
+| `group_sessions_per_user` | explicit `true` | explicit `false` |
+| `thread_sessions_per_user` | absent, Hermes default `false` | explicit `false` |
+| `memory.memory_enabled` | `true` | `false` |
+| `memory.user_profile_enabled` | `true` | `false` |
+| `memory.provider` | `hy-memory` | `mlink` |
+| `agent.disabled_toolsets[memory]` | absent | present |
 
-The Hermes semantic merge changes only these owned values:
+Hermes model, provider, Base URL, authentication, gateway, and every unowned setting are covered by `hermes.model_auth_and_unowned_config`. Its before and proposed hash is `06c3e152f2caac987c60076ec9ed87de522c6e2945ba7f966cefb197024d3ee3`; `preserved=true`.
 
-- `memory.memory_enabled`: configured value → `false`
-- `memory.user_profile_enabled`: configured value → `false`
-- `memory.provider`: existing Provider → `mlink`
-- `agent.disabled_toolsets[memory]`: absent/preserved → present
+## Reproducibility and No-Write Proof
 
-Hermes model, model-provider, model Base URL, authentication, gateway, and all other unowned configuration are protected by the invariant `hermes.model_auth_and_unowned_config`. Its before and proposed hashes are both `392f67d6cc66d84e7472deeb8e6680f73a2a760c0a04191d2740113b1f03a194`; `preserved=true`.
+Two independent final preview processes returned the same `plan_840c3a08543ba520b2462228e6`. A controlled before/after window around two more previews produced:
 
-## No-Write Proof
+| Protected state | Before | After | Result |
+|---|---|---|---|
+| Codex `config.toml` | `3ac101d346cc3a6e35825a0a6b8e4b224c1ff050faab3ba3cb1a87b44ba8b13f` | same, same mtime | unchanged |
+| Pi `settings.json` | `da7ec5c4f3e914491b1177093756e8bf36d29084817c318f6b47fc43da1bc8dd` | same | unchanged |
+| Hermes `config.yaml` | `dc88cec33f11785e4605dd2bbbfe7c38d37d07f9aa93e63587b3ba039788995b` | same | unchanged |
 
-Before and after the final preview:
+Codex had independently changed its config hash from an earlier `b618…` observation to `3ac1…` before the controlled final window. MLink neither reads nor targets `config.toml`; the final before/after hash and mtime prove the preview did not cause that external change.
 
-- Codex model configuration SHA-256 remained `b61810bf92641faa1329eba34b598c121571a9438745f1edfa0806b303b28732`.
-- Pi settings SHA-256 remained `da7ec5c4f3e914491b1177093756e8bf36d29084817c318f6b47fc43da1bc8dd`.
-- Hermes configuration SHA-256 remained `dc88cec33f11785e4605dd2bbbfe7c38d37d07f9aa93e63587b3ba039788995b`.
-- No Codex Hook file, Pi MLink Extension, installed MLink binary, LaunchAgent plist, MLink Journal, Hermes MLink Provider, or Hermes grant file existed.
-- All three `dev.mlink` Keychain accounts returned macOS Security item-not-found code `44`.
-- Re-running the preview produced the same ChangeSet ID.
+After the final preview:
 
-No Agent, LaunchAgent, Keychain, OrbStack file, or MemoryCore state was changed by the preview.
+- the installed MLink binary, MLink config, Journal, Unix socket, Codex Hook, Pi Extension, LaunchAgent plist, Hermes Provider files, and Hermes grant file were all absent;
+- `launchctl` had no `dev.mlink.broker` service;
+- all four proposed `dev.mlink` Keychain accounts returned macOS Security item-not-found exit code `44`;
+- no encrypted `*.mlink` identity bundle existed under `~/.mlink`;
+- no Agent, LaunchAgent, Keychain, OrbStack file, or MemoryCore state was changed.
+
+## Verification
+
+- `go test ./...`: pass
+- `go test -shuffle=on -count=2 ./...`: pass
+- `go vet ./...`: pass
+- the install-preview disclosure regression test first failed against the incomplete output, then passed after Schema, Principal, Binding, Space, and Agent-route diffs were added
+
+No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_840c3a08543ba520b2462228e6` after this exact ChangeSet is shown.
