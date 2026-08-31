@@ -426,6 +426,23 @@ func (runtime *runtimeApplication) IdentityList(ctx context.Context) ([]app.Iden
 	return runtime.identityService(previewLedger{}).IdentityList(ctx)
 }
 
+func (runtime *runtimeApplication) ExportIdentity(ctx context.Context, passphrase []byte) ([]byte, error) {
+	return runtime.identityService(previewLedger{}).ExportIdentity(ctx, passphrase, rand.Reader)
+}
+
+func (runtime *runtimeApplication) PlanIdentityImport(ctx context.Context, bundle identity.BundleV1) (install.ChangeSet, error) {
+	return runtime.identityService(previewLedger{}).PlanIdentityImport(ctx, bundle)
+}
+
+func (runtime *runtimeApplication) ApplyIdentityImport(ctx context.Context, planID string, bundle identity.BundleV1) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.identityService(ledger).ApplyIdentityImport(ctx, planID, bundle)
+}
+
 func (runtime *runtimeApplication) identityService(ledger install.Ledger) *app.Service {
 	service := runtime.baseService
 	service.Target = install.LocalTarget{}

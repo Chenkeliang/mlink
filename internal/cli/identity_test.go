@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"mlink/internal/app"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 )
 
@@ -16,6 +19,26 @@ type identityFakeApplication struct {
 	identityPlan  install.ChangeSet
 	identityApply int
 	lastBind      app.IdentityBindRequest
+}
+
+type identityBundleFakeApplication struct {
+	identityFakeApplication
+	encrypted   []byte
+	importPlan  install.ChangeSet
+	importApply int
+}
+
+func (application *identityBundleFakeApplication) ExportIdentity(context.Context, []byte) ([]byte, error) {
+	return append([]byte(nil), application.encrypted...), nil
+}
+
+func (application *identityBundleFakeApplication) PlanIdentityImport(context.Context, identity.BundleV1) (install.ChangeSet, error) {
+	return application.importPlan, nil
+}
+
+func (application *identityBundleFakeApplication) ApplyIdentityImport(context.Context, string, identity.BundleV1) error {
+	application.importApply++
+	return nil
 }
 
 func (application *identityFakeApplication) PlanIdentityBind(_ context.Context, request app.IdentityBindRequest) (install.ChangeSet, error) {
@@ -82,5 +105,31 @@ func TestInstallSecretsJSONCarriesTokenAndOwnerBindingWithoutEcho(t *testing.T) 
 	})
 	if code != 0 || bytes.Contains(stdout.Bytes(), []byte("token-secret")) || bytes.Contains(stdout.Bytes(), []byte("on_owner")) {
 		t.Fatalf("code/output = %d/%s", code, stdout.Bytes())
+	}
+}
+
+func TestIdentityExportReadsPassphraseFromStdinAndWritesPrivateFile(t *testing.T) {
+	application := &identityBundleFakeApplication{encrypted: []byte("encrypted-bundle")}
+	path := filepath.Join(t.TempDir(), "identity.mlink")
+	code := Run(context.Background(), []string{"identity", "export", "--output", path, "--passphrase-stdin"}, Dependencies{
+		App: application, Stdin: strings.NewReader("passphrase-12\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "encrypted-bundle" {
+		t.Fatalf("bundle = %q, %v", data, err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestIdentityRejectsPassphraseInArgv(t *testing.T) {
+	code := Run(context.Background(), []string{"identity", "export", "--output", "/tmp/identity", "--passphrase", "secret"}, Dependencies{Stderr: io.Discard})
+	if code != 2 {
+		t.Fatalf("code = %d", code)
 	}
 }

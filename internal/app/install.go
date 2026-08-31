@@ -451,6 +451,7 @@ type managedSecret struct {
 	previous []byte
 	existed  bool
 	written  bool
+	delete   bool
 }
 
 func (service *Service) installSecrets(ctx context.Context, request InstallRequest) ([]managedSecret, error) {
@@ -503,7 +504,16 @@ func agentSelected(agents []Agent, want Agent) bool {
 
 func (service *Service) putManagedSecrets(ctx context.Context, values []managedSecret) error {
 	for index := range values {
-		if err := service.Secrets.Put(ctx, values[index].account, values[index].value); err != nil {
+		var err error
+		if values[index].delete {
+			if !values[index].existed {
+				continue
+			}
+			err = service.Secrets.Delete(ctx, values[index].account)
+		} else {
+			err = service.Secrets.Put(ctx, values[index].account, values[index].value)
+		}
+		if err != nil {
 			return err
 		}
 		values[index].written = true

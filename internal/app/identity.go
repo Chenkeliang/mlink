@@ -3,10 +3,13 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"sort"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -16,6 +19,7 @@ import (
 )
 
 var ErrIdentityMutationConflict = errors.New("MLink identity mutation conflicts with current state")
+var ErrIdentityImportConflict = errors.New("MLink identity import conflicts with current identity")
 
 type IdentityBindRequest struct {
 	SlotID      string
@@ -189,6 +193,150 @@ func (service *Service) IdentityList(ctx context.Context) ([]IdentityDescriptor,
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].SlotID < result[right].SlotID })
 	return result, nil
+}
+
+func (service *Service) ExportIdentity(ctx context.Context, passphrase []byte, randomSource io.Reader) ([]byte, error) {
+	configuration, err := service.loadIdentityConfiguration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	identityKey, err := service.loadIdentityKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe(identityKey)
+	bindings, err := (identity.Repository{Secrets: service.Secrets, IdentityKey: identityKey}).Load(ctx, configuration.Bindings)
+	if err != nil {
+		return nil, err
+	}
+	defer bindings.Wipe()
+	exported := make([]identity.BindingExport, 0, len(bindings.Values))
+	for _, binding := range bindings.Values {
+		exported = append(exported, identity.BindingExport{Ref: configuration.Bindings[binding.RefID], Value: append([]byte(nil), binding.Value...)})
+	}
+	bundle := identity.BundleV1{
+		SchemaVersion: 1, Principals: clonePrincipals(configuration.Principals), Spaces: cloneSpaces(configuration.Spaces),
+		IdentityKey: append([]byte(nil), identityKey...), Bindings: exported, CreatedAt: time.Now().UTC(),
+	}
+	defer bundle.Wipe()
+	if randomSource == nil {
+		randomSource = rand.Reader
+	}
+	return identity.EncryptBundle(bundle, passphrase, randomSource)
+}
+
+func (service *Service) PlanIdentityImport(ctx context.Context, bundle identity.BundleV1) (install.ChangeSet, error) {
+	if err := identity.ValidateBundle(bundle); err != nil {
+		return install.ChangeSet{}, err
+	}
+	configuration, err := service.loadIdentityConfiguration(ctx)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	currentOwner, currentExists := configuration.Principals["owner"]
+	incomingOwner, incomingExists := bundle.Principals["owner"]
+	if !currentExists || !incomingExists || currentOwner.CanonicalUserID != incomingOwner.CanonicalUserID {
+		return install.ChangeSet{}, ErrIdentityImportConflict
+	}
+	bindings := make(map[string]config.BindingRef, len(bundle.Bindings))
+	for _, binding := range bundle.Bindings {
+		if _, exists := bindings[binding.Ref.ID]; exists {
+			return install.ChangeSet{}, ErrIdentityImportConflict
+		}
+		bindings[binding.Ref.ID] = binding.Ref
+	}
+	configuration.Principals = clonePrincipals(bundle.Principals)
+	configuration.Spaces = cloneSpaces(bundle.Spaces)
+	configuration.Bindings = bindings
+	if err := config.Validate(configuration); err != nil {
+		return install.ChangeSet{}, ErrIdentityImportConflict
+	}
+	content, err := yaml.Marshal(configuration)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	for _, binding := range bundle.Bindings {
+		if bytes.Contains(content, binding.Value) {
+			return install.ChangeSet{}, errors.New("identity import leaked a Binding into config")
+		}
+	}
+	return install.BuildChangeSet(service.Target, []install.DesiredResource{{
+		OwnerID: "dev.mlink.identity", Target: service.Paths.Config, Content: content, Mode: fs.FileMode(0o600),
+		SemanticDiff: []install.SemanticDiff{{Path: "identity-bundle", Before: "current stable identity", After: "verified imported identity"}},
+	}})
+}
+
+func (service *Service) ApplyIdentityImport(ctx context.Context, planID string, bundle identity.BundleV1) error {
+	plan, err := service.PlanIdentityImport(ctx, bundle)
+	if err != nil {
+		return err
+	}
+	if plan.PlanID != planID {
+		return fmt.Errorf("%w: identity import plan changed", install.ErrPlanStale)
+	}
+	current, err := service.loadIdentityConfiguration(ctx)
+	if err != nil {
+		return err
+	}
+	desired := map[string][]byte{"identity/hmac-key": append([]byte(nil), bundle.IdentityKey...)}
+	for _, binding := range bundle.Bindings {
+		account, err := identity.BindingAccount(binding.Ref.ID)
+		if err != nil {
+			return err
+		}
+		desired[account] = append([]byte(nil), binding.Value...)
+	}
+	var values []managedSecret
+	for account, value := range desired {
+		values = append(values, managedSecret{account: account, value: value})
+	}
+	for _, binding := range current.Bindings {
+		account, err := identity.BindingAccount(binding.ID)
+		if err != nil {
+			wipeManagedSecrets(values)
+			return err
+		}
+		if _, exists := desired[account]; !exists {
+			values = append(values, managedSecret{account: account, delete: true})
+		}
+	}
+	sort.Slice(values, func(left, right int) bool { return values[left].account < values[right].account })
+	for index := range values {
+		previous, err := service.Secrets.Get(ctx, values[index].account)
+		if err == nil {
+			values[index].previous = previous
+			values[index].existed = true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			wipeManagedSecrets(values)
+			return err
+		}
+	}
+	if err := service.putManagedSecrets(ctx, values); err != nil {
+		_ = service.restoreManagedSecrets(ctx, values)
+		wipeManagedSecrets(values)
+		return err
+	}
+	defer wipeManagedSecrets(values)
+	if err := install.NewTransaction(service.Target, service.Ledger).Apply(ctx, plan); err != nil {
+		return errors.Join(err, service.restoreManagedSecrets(ctx, values))
+	}
+	return nil
+}
+
+func clonePrincipals(input map[string]config.Principal) map[string]config.Principal {
+	output := make(map[string]config.Principal, len(input))
+	for id, principal := range input {
+		output[id] = principal
+	}
+	return output
+}
+
+func cloneSpaces(input map[string]config.MemorySpace) map[string]config.MemorySpace {
+	output := make(map[string]config.MemorySpace, len(input))
+	for id, space := range input {
+		output[id] = space
+	}
+	return output
 }
 
 func (service *Service) loadIdentityConfiguration(ctx context.Context) (config.Config, error) {

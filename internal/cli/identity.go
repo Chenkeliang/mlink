@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"mlink/internal/app"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 )
 
@@ -20,6 +22,12 @@ type identityApplication interface {
 	PlanIdentityRevoke(context.Context, app.IdentityRevokeRequest) (install.ChangeSet, error)
 	ApplyIdentityRevoke(context.Context, string, app.IdentityRevokeRequest) error
 	IdentityList(context.Context) ([]app.IdentityDescriptor, error)
+}
+
+type identityBundleApplication interface {
+	ExportIdentity(context.Context, []byte) ([]byte, error)
+	PlanIdentityImport(context.Context, identity.BundleV1) (install.ChangeSet, error)
+	ApplyIdentityImport(context.Context, string, identity.BundleV1) error
 }
 
 type identityOptions struct {
@@ -42,6 +50,9 @@ func runIdentity(ctx context.Context, args []string, deps Dependencies, input *b
 			return 1
 		}
 		return runIdentityList(ctx, args[1:], deps, application)
+	}
+	if args[0] == "export" || args[0] == "import" {
+		return runIdentityBundle(ctx, args[0], args[1:], deps, input)
 	}
 	if args[0] != "bind" && args[0] != "rebind" && args[0] != "revoke" {
 		writeLine(deps.Stderr, "invalid mlink identity command")
@@ -95,6 +106,114 @@ func runIdentity(ctx context.Context, args []string, deps Dependencies, input *b
 		writeLine(deps.Stderr, "invalid mlink identity command")
 		return 2
 	}
+}
+
+func runIdentityBundle(ctx context.Context, command string, args []string, deps Dependencies, input *bufio.Reader) int {
+	var path, applyPlan string
+	var passphraseStdin, dryRun, jsonOutput, yes bool
+	var positionals []string
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--output", "--apply-plan":
+			flag := args[index]
+			index++
+			if index >= len(args) || strings.HasPrefix(args[index], "--") {
+				return 2
+			}
+			if flag == "--output" {
+				path = args[index]
+			} else {
+				applyPlan = args[index]
+			}
+		case "--passphrase-stdin":
+			passphraseStdin = true
+		case "--dry-run":
+			dryRun = true
+		case "--json":
+			jsonOutput = true
+		case "--yes":
+			yes = true
+		default:
+			if strings.HasPrefix(args[index], "-") {
+				return 2
+			}
+			positionals = append(positionals, args[index])
+		}
+	}
+	application, ok := deps.App.(identityBundleApplication)
+	if !ok {
+		writeLine(deps.Stderr, "mlink identity bundle is unavailable")
+		return 1
+	}
+	if !passphraseStdin {
+		return 2
+	}
+	passphrase, err := readBoundedLine(input, 4096)
+	if err != nil || len(passphrase) < 12 {
+		wipeBytes(passphrase)
+		return 2
+	}
+	defer wipeBytes(passphrase)
+	if command == "export" {
+		if path == "" || len(positionals) != 0 || dryRun || jsonOutput || yes || applyPlan != "" {
+			return 2
+		}
+		encrypted, err := application.ExportIdentity(ctx, passphrase)
+		if err != nil {
+			writeLine(deps.Stderr, "mlink identity export failed")
+			return 1
+		}
+		defer wipeBytes(encrypted)
+		if err := identity.WriteBundleAtomic(path, encrypted); err != nil {
+			writeLine(deps.Stderr, "mlink identity export failed")
+			return 1
+		}
+		return 0
+	}
+	if len(positionals) != 1 || path != "" || dryRun && applyPlan != "" || yes && applyPlan == "" {
+		return 2
+	}
+	info, err := os.Stat(positionals[0])
+	if err != nil || info.Size() <= 0 || info.Size() > 4<<20 {
+		return 2
+	}
+	encrypted, err := os.ReadFile(positionals[0])
+	if err != nil {
+		return 1
+	}
+	defer wipeBytes(encrypted)
+	bundle, err := identity.DecryptBundle(encrypted, passphrase)
+	if err != nil {
+		writeLine(deps.Stderr, "mlink identity import failed")
+		return 1
+	}
+	defer bundle.Wipe()
+	plan, err := application.PlanIdentityImport(ctx, bundle)
+	if err != nil {
+		writeLine(deps.Stderr, "mlink identity import planning failed")
+		return exitCodeFor(err)
+	}
+	if err := renderPlan(deps.Stdout, plan, jsonOutput); err != nil {
+		return 1
+	}
+	if dryRun || jsonOutput && applyPlan == "" {
+		return 0
+	}
+	if applyPlan != "" {
+		if !yes || applyPlan != plan.PlanID {
+			return 3
+		}
+	} else {
+		confirmed, err := confirmApply(input, deps.Stdout)
+		if err != nil || !confirmed {
+			return 0
+		}
+	}
+	if err := application.ApplyIdentityImport(ctx, plan.PlanID, bundle); err != nil {
+		writeLine(deps.Stderr, "mlink identity import failed")
+		return exitCodeFor(err)
+	}
+	return 0
 }
 
 func runIdentityList(ctx context.Context, args []string, deps Dependencies, application identityApplication) int {

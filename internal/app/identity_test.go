@@ -3,8 +3,12 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"mlink/internal/config"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 )
 
@@ -25,6 +29,37 @@ func TestIdentityBindPreviewDoesNotWriteOrExposeValue(t *testing.T) {
 	}
 	if got := string(secrets.values["identity/binding/owner-feishu-union-2"]); got != "on_new" {
 		t.Fatalf("binding = %q", got)
+	}
+}
+
+func TestIdentityImportRefusesCanonicalUserCollision(t *testing.T) {
+	service, _, _ := installedIdentityFixture(t)
+	bundle := identity.BundleV1{
+		SchemaVersion: 1,
+		Principals:    map[string]config.Principal{"owner": {ID: "owner", CanonicalUserID: "usr_other", Kind: config.PrincipalPerson}},
+		Spaces: map[string]config.MemorySpace{
+			"personal-owner": {ID: "personal-owner", ConnectionID: "local", TenantID: "personal", AgentID: "keliang-personal", IncludeAgentShared: true, PrincipalPolicy: config.PolicyFixed, PrincipalID: "owner"},
+		},
+		IdentityKey: bytes.Repeat([]byte{0x2a}, 32), CreatedAt: time.Now().UTC(),
+	}
+	if _, err := service.PlanIdentityImport(context.Background(), bundle); !errors.Is(err, ErrIdentityImportConflict) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestIdentityExportRoundTripPreservesOwnerAndBinding(t *testing.T) {
+	service, _, _ := installedIdentityFixture(t)
+	encrypted, err := service.ExportIdentity(context.Background(), []byte("passphrase-12"), bytes.NewReader(bytes.Repeat([]byte{0x31}, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := identity.DecryptBundle(encrypted, []byte("passphrase-12"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Wipe()
+	if bundle.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(bundle.Bindings) != 1 || string(bundle.Bindings[0].Value) != "on_owner" {
+		t.Fatal("exported identity does not match installed owner")
 	}
 }
 
