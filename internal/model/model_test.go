@@ -137,3 +137,18 @@ func TestTurnFragmentJSONDoesNotExposeCanonicalUserOverride(t *testing.T) {
 		t.Fatalf("fragment permits canonical user override: %s", data)
 	}
 }
+
+func TestTurnActorDigestIsLocalOnly(t *testing.T) {
+	turn := Turn{
+		Identity:    IdentityScope{TenantID: "team", AgentID: "agent", UserID: "user", SessionID: "session", TurnID: "turn"},
+		ActorDigest: "actor_safe",
+		Messages:    []Message{{Role: "user", Content: "hello"}},
+	}
+	raw, err := json.Marshal(turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "actor_safe") || strings.Contains(string(raw), "actor_digest") {
+		t.Fatalf("actor digest leaked into Provider turn: %s", raw)
+	}
+}

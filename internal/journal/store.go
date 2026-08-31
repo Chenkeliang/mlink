@@ -20,6 +20,9 @@ var initialMigration string
 //go:embed migrations/002_fragment_routes.sql
 var fragmentRoutesMigration string
 
+//go:embed migrations/003_actor_digest.sql
+var actorDigestMigration string
+
 type Store struct {
 	db *sql.DB
 }
@@ -94,7 +97,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	migrations := []struct {
 		version int
 		sql     string
-	}{{version: 1, sql: initialMigration}, {version: 2, sql: fragmentRoutesMigration}}
+	}{{version: 1, sql: initialMigration}, {version: 2, sql: fragmentRoutesMigration}, {version: 3, sql: actorDigestMigration}}
 	for _, migration := range migrations {
 		var applied int
 		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version = ?", migration.version).Scan(&applied); err != nil {

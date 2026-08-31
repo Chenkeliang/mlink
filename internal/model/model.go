@@ -57,8 +57,9 @@ type Message struct {
 }
 
 type Turn struct {
-	Identity IdentityScope `json:"identity"`
-	Messages []Message     `json:"messages"`
+	Identity    IdentityScope `json:"identity"`
+	Messages    []Message     `json:"messages"`
+	ActorDigest string        `json:"-"`
 }
 
 // AdapterIdentity is the non-canonical identity asserted by an Adapter. The

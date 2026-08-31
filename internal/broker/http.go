@@ -159,7 +159,8 @@ func (s Server) handleTurn(local bool) http.HandlerFunc {
 					SessionID:    authorization.Identity.SessionID,
 					TurnID:       s.Authorizer.CanonicalTurnID(authorization.Identity.ActorDigest, input.TurnID),
 				},
-				Messages: input.Messages,
+				Messages:    input.Messages,
+				ActorDigest: authorization.Identity.ActorDigest,
 			},
 		})
 		if err != nil {
@@ -196,9 +197,10 @@ func (s Server) handleFragment(local bool) http.HandlerFunc {
 				SessionID:    authorization.Identity.SessionID,
 				TurnID:       s.Authorizer.CanonicalTurnID(authorization.Identity.ActorDigest, input.TurnID),
 			},
-			Role:       input.Role,
-			Content:    input.Content,
-			OccurredAt: input.OccurredAt,
+			ActorDigest: authorization.Identity.ActorDigest,
+			Role:        input.Role,
+			Content:     input.Content,
+			OccurredAt:  input.OccurredAt,
 		})
 		if err != nil {
 			if errors.Is(err, journal.ErrTurnConflict) {

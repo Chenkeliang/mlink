@@ -1,12 +1,14 @@
 package journal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"mlink/internal/connection"
+	"mlink/internal/identity"
 	"mlink/internal/model"
 )
 
@@ -30,6 +32,45 @@ func fixtureEnvelope(userID, turnID, content string) Envelope {
 			},
 			Messages: []model.Message{{Role: "user", Content: content, OccurredAt: time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)}},
 		},
+	}
+}
+
+func TestGroupActorsWithSameIncomingTurnDoNotCollide(t *testing.T) {
+	store := openTestStore(t)
+	key := bytes.Repeat([]byte{0x2a}, 32)
+	first := fixtureEnvelope("grp_same", identity.CanonicalTurnID(key, "actor_a", "turn_same"), "hello")
+	first.Turn.ActorDigest = "actor_a"
+	second := fixtureEnvelope("grp_same", identity.CanonicalTurnID(key, "actor_b", "turn_same"), "hello")
+	second.Turn.ActorDigest = "actor_b"
+	a, insertedA, err := store.EnqueueTurn(context.Background(), first)
+	if err != nil || !insertedA {
+		t.Fatalf("first = %#v %v", a, err)
+	}
+	b, insertedB, err := store.EnqueueTurn(context.Background(), second)
+	if err != nil || !insertedB || a.ID == b.ID {
+		t.Fatalf("second = %#v %v", b, err)
+	}
+	loaded, err := store.Event(context.Background(), a.ID)
+	if err != nil || loaded.Turn.ActorDigest != "actor_a" {
+		t.Fatalf("loaded actor = %#v %v", loaded, err)
+	}
+}
+
+func TestJournalPersistsActorDigestOutsidePayload(t *testing.T) {
+	store := openTestStore(t)
+	envelope := fixtureEnvelope("grp_same", "turn_actor", "content")
+	envelope.Turn.ActorDigest = "actor_safe"
+	event, _, err := store.EnqueueTurn(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actor string
+	var payload []byte
+	if err := store.db.QueryRow("SELECT actor_digest, payload FROM journal_events WHERE id = ?", event.ID).Scan(&actor, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "actor_safe" || bytes.Contains(payload, []byte("actor_safe")) || bytes.Contains(payload, []byte("actor_digest")) {
+		t.Fatalf("actor/payload = %q/%s", actor, payload)
 	}
 }
 

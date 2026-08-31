@@ -40,12 +40,13 @@ type Envelope struct {
 }
 
 type Fragment struct {
-	AdapterID  string
-	Route      connection.RouteKey
-	Identity   model.IdentityScope
-	Role       string
-	Content    string
-	OccurredAt time.Time
+	AdapterID   string
+	Route       connection.RouteKey
+	Identity    model.IdentityScope
+	ActorDigest string
+	Role        string
+	Content     string
+	OccurredAt  time.Time
 }
 
 type Event struct {
@@ -79,11 +80,12 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO turn_fragments(
 			adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
-			role, content, content_hash, occurred_at, provider_id, provider_version, config_revision
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id, role)
 		DO UPDATE SET occurred_at = excluded.occurred_at
-		WHERE turn_fragments.content_hash = excluded.content_hash`,
+		WHERE turn_fragments.content_hash = excluded.content_hash
+		  AND turn_fragments.actor_digest = excluded.actor_digest`,
 		fragment.AdapterID,
 		fragment.Route.ConnectionID,
 		fragment.Identity.TenantID,
@@ -98,6 +100,7 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 		fragment.Route.ProviderID,
 		fragment.Route.ProviderVersion,
 		fragment.Route.ConfigRevision,
+		fragment.ActorDigest,
 	)
 	if err != nil {
 		return fmt.Errorf("record turn fragment: %w", err)
@@ -136,7 +139,7 @@ func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
 
 func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT role, content, occurred_at, provider_id, provider_version, config_revision
+		SELECT role, content, occurred_at, provider_id, provider_version, config_revision, actor_digest
 		FROM turn_fragments
 		WHERE adapter_id = ? AND connection_id = ? AND tenant_id = ? AND agent_id = ?
 		  AND user_id = ? AND session_id = ? AND turn_id = ?`,
@@ -154,9 +157,10 @@ func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, 
 	defer rows.Close()
 	messages := make(map[string]model.Message, 2)
 	var route connection.RouteKey
+	actorDigest := ""
 	for rows.Next() {
-		var role, content, occurredAt, providerID, providerVersion, configRevision string
-		if err := rows.Scan(&role, &content, &occurredAt, &providerID, &providerVersion, &configRevision); err != nil {
+		var role, content, occurredAt, providerID, providerVersion, configRevision, currentActorDigest string
+		if err := rows.Scan(&role, &content, &occurredAt, &providerID, &providerVersion, &configRevision, &currentActorDigest); err != nil {
 			return Envelope{}, false, fmt.Errorf("scan turn fragment: %w", err)
 		}
 		parsed, err := parseTime(occurredAt)
@@ -172,7 +176,11 @@ func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, 
 		if route.ConnectionID != "" && route != currentRoute {
 			return Envelope{}, false, ErrTurnConflict
 		}
+		if actorDigest != "" && actorDigest != currentActorDigest {
+			return Envelope{}, false, ErrTurnConflict
+		}
 		route = currentRoute
+		actorDigest = currentActorDigest
 		messages[role] = model.Message{Role: role, Content: content, OccurredAt: parsed}
 	}
 	if err := rows.Err(); err != nil {
@@ -187,8 +195,9 @@ func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, 
 		AdapterID: fragment.AdapterID,
 		Route:     route,
 		Turn: model.Turn{
-			Identity: fragment.Identity,
-			Messages: []model.Message{user, assistant},
+			Identity:    fragment.Identity,
+			Messages:    []model.Message{user, assistant},
+			ActorDigest: actorDigest,
 		},
 	}, true, nil
 }
@@ -222,6 +231,7 @@ func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool
 		identity.UserID,
 		identity.SessionID,
 		identity.TurnID,
+		envelope.Turn.ActorDigest,
 		contentHash,
 	)
 	payload, err := json.Marshal(envelope.Turn)
@@ -259,9 +269,9 @@ func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool
 		INSERT INTO journal_events(
 			id, idempotency_key, adapter_id, session_id, turn_id,
 			connection_id, provider_id, provider_version, config_revision,
-			tenant_id, agent_id, user_id, content_hash, payload, state,
+			tenant_id, agent_id, user_id, actor_digest, content_hash, payload, state,
 			created_at, updated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		event.IdempotencyKey,
 		event.AdapterID,
@@ -274,6 +284,7 @@ func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool
 		identity.TenantID,
 		identity.AgentID,
 		identity.UserID,
+		envelope.Turn.ActorDigest,
 		event.ContentHash,
 		payload,
 		event.State,
@@ -501,7 +512,7 @@ func (s *Store) ListStateDeletionBlockers(ctx context.Context) ([]Event, error) 
 const selectEvent = `SELECT
 	id, idempotency_key, adapter_id, session_id, turn_id,
 	connection_id, provider_id, provider_version, config_revision,
-	tenant_id, agent_id, user_id, content_hash, payload, state,
+	tenant_id, agent_id, user_id, actor_digest, content_hash, payload, state,
 	attempt_count, next_attempt_at, receipt_json, error_code, created_at, updated_at
 	FROM journal_events`
 
@@ -512,6 +523,7 @@ type rowScanner interface {
 func scanEvent(row rowScanner) (Event, error) {
 	var event Event
 	var sessionID, turnID string
+	var actorDigest string
 	var payload, receiptJSON []byte
 	var nextAttempt, errorCode sql.NullString
 	var createdAt, updatedAt string
@@ -528,6 +540,7 @@ func scanEvent(row rowScanner) (Event, error) {
 		&event.Turn.Identity.TenantID,
 		&event.Turn.Identity.AgentID,
 		&event.Turn.Identity.UserID,
+		&actorDigest,
 		&event.ContentHash,
 		&payload,
 		&event.State,
@@ -544,11 +557,13 @@ func scanEvent(row rowScanner) (Event, error) {
 	event.Turn.Identity.ConnectionID = event.Route.ConnectionID
 	event.Turn.Identity.SessionID = sessionID
 	event.Turn.Identity.TurnID = turnID
+	event.Turn.ActorDigest = actorDigest
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &event.Turn); err != nil {
 			return Event{}, fmt.Errorf("decode journal payload: %w", err)
 		}
 	}
+	event.Turn.ActorDigest = actorDigest
 	if len(receiptJSON) > 0 {
 		if err := json.Unmarshal(receiptJSON, &event.Receipt); err != nil {
 			return Event{}, fmt.Errorf("decode journal receipt: %w", err)
