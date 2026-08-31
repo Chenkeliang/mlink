@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,16 +23,15 @@ func (s Store) Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("decode MLink config: %w", err)
-	}
-	return cfg, nil
+	return Decode(data)
 }
 
 func (s Store) SaveAtomic(cfg Config) error {
 	if s.Path == "" {
 		return errors.New("config path is required")
+	}
+	if err := Validate(cfg); err != nil {
+		return err
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -78,4 +81,127 @@ func (s Store) SaveAtomic(cfg Config) error {
 		return fmt.Errorf("sync config directory: %w", err)
 	}
 	return nil
+}
+
+var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func Decode(data []byte) (Config, error) {
+	var header struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return Config{}, fmt.Errorf("decode MLink config header: %w", err)
+	}
+	if header.SchemaVersion == 1 {
+		return Config{}, ErrMigrationRequired
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	var cfg Config
+	if err := decoder.Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("decode MLink config: %w", err)
+	}
+	if err := Validate(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func Validate(cfg Config) error {
+	if cfg.SchemaVersion != 2 {
+		return fmt.Errorf("unsupported MLink config schema %d", cfg.SchemaVersion)
+	}
+	if !safeIDPattern.MatchString(cfg.NamespaceID) || !safeIDPattern.MatchString(cfg.ActiveConnectionID) {
+		return errors.New("valid namespace and active connection are required")
+	}
+	if _, exists := cfg.Connections[cfg.ActiveConnectionID]; !exists {
+		return errors.New("active connection is missing")
+	}
+	for id, connection := range cfg.Connections {
+		if id != connection.ID || !safeIDPattern.MatchString(id) || connection.ProviderID == "" || connection.ProviderVersion == "" || connection.ConfigRevision == "" {
+			return fmt.Errorf("invalid connection %q", id)
+		}
+		if connection.TenantID != "" || connection.AgentID != "" || connection.UserID != "" || connection.IncludeAgentShared {
+			return fmt.Errorf("connection %q contains legacy identity fields", id)
+		}
+	}
+	for id, principal := range cfg.Principals {
+		if id != principal.ID || !safeIDPattern.MatchString(id) || !safeIDPattern.MatchString(principal.CanonicalUserID) || principal.Kind != PrincipalPerson {
+			return fmt.Errorf("invalid principal %q", id)
+		}
+	}
+	for id, space := range cfg.Spaces {
+		if id != space.ID || !safeIDPattern.MatchString(id) || !safeIDPattern.MatchString(space.TenantID) || !safeIDPattern.MatchString(space.AgentID) {
+			return fmt.Errorf("invalid memory space %q", id)
+		}
+		if _, exists := cfg.Connections[space.ConnectionID]; !exists {
+			return fmt.Errorf("memory space %q references missing connection", id)
+		}
+		switch space.PrincipalPolicy {
+		case PolicyFixed:
+			if _, exists := cfg.Principals[space.PrincipalID]; !exists {
+				return fmt.Errorf("memory space %q references missing principal", id)
+			}
+		case PolicyExternalHMAC, PolicyGroupHMAC:
+			if space.PrincipalID != "" {
+				return fmt.Errorf("dynamic memory space %q has a fixed principal", id)
+			}
+		default:
+			return fmt.Errorf("memory space %q has invalid principal policy", id)
+		}
+		if space.IncludeAgentShared && id != "personal-owner" {
+			return fmt.Errorf("memory space %q cannot enable Agent-shared memory", id)
+		}
+	}
+	for id, adapter := range cfg.Adapters {
+		if id != adapter.ID || !safeIDPattern.MatchString(id) {
+			return fmt.Errorf("invalid adapter %q", id)
+		}
+		if adapter.ConnectionID != "" || len(adapter.Config) != 0 {
+			return fmt.Errorf("adapter %q contains legacy routing fields", id)
+		}
+		if adapter.HermesRouting != nil {
+			for _, spaceID := range []string{adapter.HermesRouting.OwnerSpaceID, adapter.HermesRouting.PrivateSpaceID, adapter.HermesRouting.GroupSpaceID} {
+				if _, exists := cfg.Spaces[spaceID]; !exists {
+					return fmt.Errorf("adapter %q references missing memory space", id)
+				}
+			}
+			if adapter.SpaceID != "" {
+				return fmt.Errorf("adapter %q mixes fixed and delegated routing", id)
+			}
+		} else if _, exists := cfg.Spaces[adapter.SpaceID]; !exists {
+			return fmt.Errorf("adapter %q references missing memory space", id)
+		}
+	}
+	secretRefs := make(map[string]string, len(cfg.Bindings))
+	for id, binding := range cfg.Bindings {
+		if id != binding.ID || !validBindingSlot(binding) {
+			return fmt.Errorf("invalid binding slot %q", id)
+		}
+		if _, exists := cfg.Principals[binding.PrincipalID]; !exists {
+			return fmt.Errorf("binding %q references missing principal", id)
+		}
+		wantRef := "keychain://dev.mlink/identity/binding/" + id
+		if binding.SecretRef != wantRef || binding.Source != "feishu" || binding.Status != BindingActive && binding.Status != BindingRevoked {
+			return fmt.Errorf("invalid binding %q", id)
+		}
+		if previous, exists := secretRefs[binding.SecretRef]; exists {
+			return fmt.Errorf("bindings %q and %q share one secret", previous, id)
+		}
+		secretRefs[binding.SecretRef] = id
+	}
+	return nil
+}
+
+func validBindingSlot(binding BindingRef) bool {
+	token := map[string]string{"union_id": "union", "user_id": "user", "open_id": "open"}[binding.Kind]
+	if token == "" || !safeIDPattern.MatchString(binding.ID) || !safeIDPattern.MatchString(binding.PrincipalID) {
+		return false
+	}
+	prefix := binding.PrincipalID + "-feishu-" + token + "-"
+	if !strings.HasPrefix(binding.ID, prefix) {
+		return false
+	}
+	index, err := strconv.Atoi(strings.TrimPrefix(binding.ID, prefix))
+	return err == nil && index > 0
 }
