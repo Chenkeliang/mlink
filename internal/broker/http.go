@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"mlink/internal/identity"
 	"mlink/internal/journal"
 	"mlink/internal/model"
 )
@@ -17,41 +18,70 @@ import (
 const defaultMaxBodyBytes = 1 << 20
 
 type RecallInput struct {
-	AdapterID     string `json:"adapter_id"`
-	Source        string `json:"source,omitempty"`
-	SourceSubject string `json:"source_subject,omitempty"`
-	UserID        string `json:"user_id,omitempty"`
-	Query         string `json:"query"`
-	MaxItems      int    `json:"max_items,omitempty"`
+	AdapterID        string `json:"adapter_id"`
+	Source           string `json:"source,omitempty"`
+	ChatType         string `json:"chat_type,omitempty"`
+	ChatID           string `json:"chat_id,omitempty"`
+	ThreadID         string `json:"thread_id,omitempty"`
+	PrimarySubject   string `json:"primary_subject,omitempty"`
+	AlternateSubject string `json:"alternate_subject,omitempty"`
+	SourceSubject    string `json:"source_subject,omitempty"`
+	UserID           string `json:"user_id,omitempty"`
+	Query            string `json:"query"`
+	MaxItems         int    `json:"max_items,omitempty"`
 }
 
 type TurnInput struct {
-	AdapterID     string          `json:"adapter_id"`
-	Source        string          `json:"source,omitempty"`
-	SourceSubject string          `json:"source_subject,omitempty"`
-	UserID        string          `json:"user_id,omitempty"`
-	SessionID     string          `json:"session_id"`
-	TurnID        string          `json:"turn_id"`
-	Messages      []model.Message `json:"messages"`
+	AdapterID        string          `json:"adapter_id"`
+	Source           string          `json:"source,omitempty"`
+	ChatType         string          `json:"chat_type,omitempty"`
+	ChatID           string          `json:"chat_id,omitempty"`
+	ThreadID         string          `json:"thread_id,omitempty"`
+	PrimarySubject   string          `json:"primary_subject,omitempty"`
+	AlternateSubject string          `json:"alternate_subject,omitempty"`
+	SourceSubject    string          `json:"source_subject,omitempty"`
+	UserID           string          `json:"user_id,omitempty"`
+	SessionID        string          `json:"session_id"`
+	TurnID           string          `json:"turn_id"`
+	Messages         []model.Message `json:"messages"`
 }
 
 type FragmentInput struct {
-	AdapterID     string    `json:"adapter_id"`
-	Source        string    `json:"source,omitempty"`
-	SourceSubject string    `json:"source_subject,omitempty"`
-	UserID        string    `json:"user_id,omitempty"`
-	SessionID     string    `json:"session_id"`
-	TurnID        string    `json:"turn_id"`
-	Role          string    `json:"role"`
-	Content       string    `json:"content"`
-	OccurredAt    time.Time `json:"occurred_at"`
+	AdapterID        string    `json:"adapter_id"`
+	Source           string    `json:"source,omitempty"`
+	ChatType         string    `json:"chat_type,omitempty"`
+	ChatID           string    `json:"chat_id,omitempty"`
+	ThreadID         string    `json:"thread_id,omitempty"`
+	PrimarySubject   string    `json:"primary_subject,omitempty"`
+	AlternateSubject string    `json:"alternate_subject,omitempty"`
+	SourceSubject    string    `json:"source_subject,omitempty"`
+	UserID           string    `json:"user_id,omitempty"`
+	SessionID        string    `json:"session_id"`
+	TurnID           string    `json:"turn_id"`
+	Role             string    `json:"role"`
+	Content          string    `json:"content"`
+	OccurredAt       time.Time `json:"occurred_at"`
 }
 
 type FlushInput struct {
-	AdapterID     string `json:"adapter_id"`
-	Source        string `json:"source,omitempty"`
-	SourceSubject string `json:"source_subject,omitempty"`
-	UserID        string `json:"user_id,omitempty"`
+	AdapterID        string `json:"adapter_id"`
+	Source           string `json:"source,omitempty"`
+	ChatType         string `json:"chat_type,omitempty"`
+	ChatID           string `json:"chat_id,omitempty"`
+	ThreadID         string `json:"thread_id,omitempty"`
+	PrimarySubject   string `json:"primary_subject,omitempty"`
+	AlternateSubject string `json:"alternate_subject,omitempty"`
+	SourceSubject    string `json:"source_subject,omitempty"`
+	UserID           string `json:"user_id,omitempty"`
+}
+
+type ExternalContextInput struct {
+	Source           string `json:"source,omitempty"`
+	ChatType         string `json:"chat_type,omitempty"`
+	ChatID           string `json:"chat_id,omitempty"`
+	ThreadID         string `json:"thread_id,omitempty"`
+	PrimarySubject   string `json:"primary_subject,omitempty"`
+	AlternateSubject string `json:"alternate_subject,omitempty"`
 }
 
 func (s Server) Handler(local bool) http.Handler {
@@ -81,22 +111,22 @@ func (s Server) handleRecall(local bool) http.HandlerFunc {
 		if err := s.decodeJSON(response, request, &input); err != nil {
 			return
 		}
-		grant, userID, err := s.authorizeIdentity(request, input.AdapterID, input.Source, input.SourceSubject, input.UserID, local)
+		authorization, err := s.authorizeIdentity(request, input.AdapterID, input.externalContext(), input.UserID, "recall", local)
 		if err != nil {
 			s.writeAuthorizationError(response, err)
 			return
 		}
 		identityScope := model.IdentityScope{
-			ConnectionID: grant.Route.ConnectionID,
-			TenantID:     grant.TenantID,
-			AgentID:      grant.AgentID,
-			UserID:       userID,
+			ConnectionID: authorization.Route.ConnectionID,
+			TenantID:     authorization.Identity.TenantID,
+			AgentID:      authorization.Identity.AgentID,
+			UserID:       authorization.Identity.UserID,
 		}
-		bundle, err := s.Service.Recall(request.Context(), grant.Route, recallKey(input, userID), model.RecallRequest{
+		bundle, err := s.Service.Recall(request.Context(), authorization.Route, recallKey(input, authorization.Identity.UserID), model.RecallRequest{
 			Identity:           identityScope,
 			Query:              input.Query,
 			MaxItems:           input.MaxItems,
-			IncludeAgentShared: grant.IncludeAgentShared,
+			IncludeAgentShared: authorization.IncludeAgentShared,
 		})
 		if err != nil {
 			writeAPIError(response, http.StatusServiceUnavailable, "provider_unavailable")
@@ -112,22 +142,22 @@ func (s Server) handleTurn(local bool) http.HandlerFunc {
 		if err := s.decodeJSON(response, request, &input); err != nil {
 			return
 		}
-		grant, userID, err := s.authorizeIdentity(request, input.AdapterID, input.Source, input.SourceSubject, input.UserID, local)
+		authorization, err := s.authorizeIdentity(request, input.AdapterID, input.externalContext(), input.UserID, input.SessionID, local)
 		if err != nil {
 			s.writeAuthorizationError(response, err)
 			return
 		}
 		receipt, err := s.Service.SubmitTurn(request.Context(), journal.Envelope{
 			AdapterID: input.AdapterID,
-			Route:     grant.Route,
+			Route:     authorization.Route,
 			Turn: model.Turn{
 				Identity: model.IdentityScope{
-					ConnectionID: grant.Route.ConnectionID,
-					TenantID:     grant.TenantID,
-					AgentID:      grant.AgentID,
-					UserID:       userID,
-					SessionID:    input.SessionID,
-					TurnID:       input.TurnID,
+					ConnectionID: authorization.Route.ConnectionID,
+					TenantID:     authorization.Identity.TenantID,
+					AgentID:      authorization.Identity.AgentID,
+					UserID:       authorization.Identity.UserID,
+					SessionID:    authorization.Identity.SessionID,
+					TurnID:       s.Authorizer.CanonicalTurnID(authorization.Identity.ActorDigest, input.TurnID),
 				},
 				Messages: input.Messages,
 			},
@@ -150,21 +180,21 @@ func (s Server) handleFragment(local bool) http.HandlerFunc {
 		if err := s.decodeJSON(response, request, &input); err != nil {
 			return
 		}
-		grant, userID, err := s.authorizeIdentity(request, input.AdapterID, input.Source, input.SourceSubject, input.UserID, local)
+		authorization, err := s.authorizeIdentity(request, input.AdapterID, input.externalContext(), input.UserID, input.SessionID, local)
 		if err != nil {
 			s.writeAuthorizationError(response, err)
 			return
 		}
 		err = s.Service.SubmitFragment(request.Context(), journal.Fragment{
 			AdapterID: input.AdapterID,
-			Route:     grant.Route,
+			Route:     authorization.Route,
 			Identity: model.IdentityScope{
-				ConnectionID: grant.Route.ConnectionID,
-				TenantID:     grant.TenantID,
-				AgentID:      grant.AgentID,
-				UserID:       userID,
-				SessionID:    input.SessionID,
-				TurnID:       input.TurnID,
+				ConnectionID: authorization.Route.ConnectionID,
+				TenantID:     authorization.Identity.TenantID,
+				AgentID:      authorization.Identity.AgentID,
+				UserID:       authorization.Identity.UserID,
+				SessionID:    authorization.Identity.SessionID,
+				TurnID:       s.Authorizer.CanonicalTurnID(authorization.Identity.ActorDigest, input.TurnID),
 			},
 			Role:       input.Role,
 			Content:    input.Content,
@@ -188,11 +218,12 @@ func (s Server) handleFlush(local bool) http.HandlerFunc {
 		if err := s.decodeJSON(response, request, &input); err != nil {
 			return
 		}
-		if _, _, err := s.authorizeIdentity(request, input.AdapterID, input.Source, input.SourceSubject, input.UserID, local); err != nil {
+		authorization, err := s.authorizeIdentity(request, input.AdapterID, input.externalContext(), input.UserID, request.PathValue("session_id"), local)
+		if err != nil {
 			s.writeAuthorizationError(response, err)
 			return
 		}
-		pending, err := s.Service.Flush(request.Context(), input.AdapterID, request.PathValue("session_id"))
+		pending, err := s.Service.Flush(request.Context(), input.AdapterID, authorization.Identity.SessionID)
 		if err != nil {
 			writeAPIError(response, http.StatusServiceUnavailable, "journal_unavailable")
 			return
@@ -201,13 +232,12 @@ func (s Server) handleFlush(local bool) http.HandlerFunc {
 	}
 }
 
-func (s Server) authorizeIdentity(request *http.Request, adapterID, source, subject, directUserID string, local bool) (Grant, string, error) {
+func (s Server) authorizeIdentity(request *http.Request, adapterID string, external identity.ExternalContext, directUserID, sessionID string, local bool) (Authorization, error) {
 	grant, err := s.authorizeGrant(request, adapterID, local)
 	if err != nil {
-		return Grant{}, "", err
+		return Authorization{}, err
 	}
-	userID, err := s.Authorizer.CanonicalUser(grant, source, subject, directUserID)
-	return grant, userID, err
+	return s.Authorizer.Resolve(grant, external, directUserID, sessionID)
 }
 
 func (s Server) authorizeGrant(request *http.Request, adapterID string, local bool) (Grant, error) {
@@ -258,6 +288,32 @@ func (s Server) writeAuthorizationError(response http.ResponseWriter, err error)
 func recallKey(input RecallInput, userID string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{input.AdapterID, userID, input.Query}, "\x00")))
 	return "recall_" + hex.EncodeToString(sum[:13])
+}
+
+func (input RecallInput) externalContext() identity.ExternalContext {
+	return externalIdentity(ExternalContextInput{Source: input.Source, ChatType: input.ChatType, ChatID: input.ChatID, ThreadID: input.ThreadID, PrimarySubject: input.PrimarySubject, AlternateSubject: input.AlternateSubject}, input.SourceSubject)
+}
+
+func (input TurnInput) externalContext() identity.ExternalContext {
+	return externalIdentity(ExternalContextInput{Source: input.Source, ChatType: input.ChatType, ChatID: input.ChatID, ThreadID: input.ThreadID, PrimarySubject: input.PrimarySubject, AlternateSubject: input.AlternateSubject}, input.SourceSubject)
+}
+
+func (input FragmentInput) externalContext() identity.ExternalContext {
+	return externalIdentity(ExternalContextInput{Source: input.Source, ChatType: input.ChatType, ChatID: input.ChatID, ThreadID: input.ThreadID, PrimarySubject: input.PrimarySubject, AlternateSubject: input.AlternateSubject}, input.SourceSubject)
+}
+
+func (input FlushInput) externalContext() identity.ExternalContext {
+	return externalIdentity(ExternalContextInput{Source: input.Source, ChatType: input.ChatType, ChatID: input.ChatID, ThreadID: input.ThreadID, PrimarySubject: input.PrimarySubject, AlternateSubject: input.AlternateSubject}, input.SourceSubject)
+}
+
+func externalIdentity(input ExternalContextInput, legacySubject string) identity.ExternalContext {
+	if input.AlternateSubject == "" && input.PrimarySubject == "" {
+		input.AlternateSubject = legacySubject
+	}
+	return identity.ExternalContext{
+		Source: input.Source, ChatType: input.ChatType, ChatID: input.ChatID, ThreadID: input.ThreadID,
+		PrimarySubject: input.PrimarySubject, AlternateSubject: input.AlternateSubject,
+	}
 }
 
 func writeAPIError(response http.ResponseWriter, status int, code string) {
