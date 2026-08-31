@@ -223,6 +223,26 @@ func TestPlanInstallCreatesThreeSpacesAndStableOwner(t *testing.T) {
 	if connection.TenantID != "" || connection.AgentID != "" || connection.UserID != "" || connection.IncludeAgentShared {
 		t.Fatalf("legacy identity leaked into Connection: %#v", connection)
 	}
+	wantDiffs := map[string]string{
+		"schema_version":               "2",
+		"principal:owner":              "stable canonical owner",
+		"binding:owner-feishu-union-1": "redacted union_id alias -> owner",
+		"space:personal-owner":         "owner L1/L2/L3; Codex/Pi/owner Hermes",
+		"space:hermes-private":         "per-user L1 only; no agent-shared",
+		"space:hermes-groups":          "per-group L1 only; topics share group principal",
+		"adapter:codex.route":          "fixed personal-owner",
+		"adapter:pi.route":             "fixed personal-owner",
+		"adapter:hermes.route":         "dynamic owner/private/group",
+	}
+	for path, after := range wantDiffs {
+		found := false
+		for _, diff := range configOperation.SemanticDiff {
+			found = found || diff.Path == path && diff.After == after
+		}
+		if !found {
+			t.Fatalf("MLink config ChangeSet missing %q -> %q: %#v", path, after, configOperation.SemanticDiff)
+		}
+	}
 }
 
 func TestPlanIdentityDoesNotDependOnTokenBindingOrIdentityKey(t *testing.T) {

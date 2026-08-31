@@ -72,9 +72,31 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if err != nil {
 		return install.ChangeSet{}, fmt.Errorf("render MLink config: %w", err)
 	}
+	configDiff := []install.SemanticDiff{
+		{Path: "schema_version", Before: "absent or owned", After: "2"},
+		{Path: "connection:" + request.Connection.ID, Before: "absent or owned", After: "TencentDB with Keychain secret reference"},
+		{Path: "principal:owner", Before: "absent or owned", After: "stable canonical owner"},
+		{Path: "space:personal-owner", Before: "absent or owned", After: "owner L1/L2/L3; Codex/Pi/owner Hermes"},
+		{Path: "space:hermes-private", Before: "absent or owned", After: "per-user L1 only; no agent-shared"},
+		{Path: "space:hermes-groups", Before: "absent or owned", After: "per-group L1 only; topics share group principal"},
+	}
+	if agentSelected(agents, Hermes) {
+		configDiff = append(configDiff, install.SemanticDiff{
+			Path: "binding:" + request.OwnerBindingSlot.ID, Before: "absent or owned", After: "redacted " + request.OwnerBindingSlot.Kind + " alias -> owner",
+		})
+	}
+	for _, agent := range agents {
+		after := "fixed personal-owner"
+		if agent == Hermes {
+			after = "dynamic owner/private/group"
+		}
+		configDiff = append(configDiff, install.SemanticDiff{
+			Path: "adapter:" + string(agent) + ".route", Before: "absent or owned", After: after,
+		})
+	}
 	resources = append(resources, install.DesiredResource{
 		OwnerID: "dev.mlink.config", Target: service.Paths.Config, Content: configData, Mode: 0o600,
-		SemanticDiff: []install.SemanticDiff{{Path: "connection:" + request.Connection.ID, Before: "absent or owned", After: "TencentDB with Keychain secret reference"}},
+		SemanticDiff: configDiff,
 		Verify: func(content []byte) error {
 			if bytes.Contains(content, request.SecretInputs[MemoryCoreTokenSecret]) {
 				return errors.New("MemoryCore token leaked into MLink config")
