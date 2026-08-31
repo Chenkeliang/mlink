@@ -1,6 +1,6 @@
 # MLink 稳定主体、多别名绑定与 Hermes 空间路由设计规格
 
-状态：待用户审阅  
+状态：已确认，待实施  
 日期：2026-08-31  
 依赖规格：
 
@@ -111,11 +111,13 @@ MemorySpace
 ```text
 Principal
   id             # MLink 管理 ID，例如 principal_owner
-  canonical_user # 发给 MemoryCore，例如 usr_owner_<random>
+  canonical_user # 发给 MemoryCore，例如 usr_owner_keliang
   kind           # person | external_user | group
 ```
 
-`canonical_user` 在首次 Apply 时生成一次，之后重装、换绑、Broker 重启和配置恢复均不得改变。
+`canonical_user` 在首次 Preview 中根据用户明确确认的稳定 owner 标识生成并进入 ChangeSet；默认 owner 标识来自本机用户名，但 TUI 必须展示并允许修改。它不是秘密，写入配置并随加密 Identity Bundle 迁移。之后重装、换绑、Broker 重启和配置恢复均不得改变。
+
+首次 Preview 不得为 Principal 或 Binding 创建本地状态。Plan 中的 Principal ID、canonical user 和 Binding 槽位 ID 必须只依赖非秘密输入，使独立 CLI 进程中的 Preview 与 Apply 得到同一 Plan ID。
 
 ### 3.3 Binding
 
@@ -123,6 +125,7 @@ Principal
 
 ```text
 Binding
+  id           # 与值无关的稳定槽位，例如 owner-feishu-union-1
   source       # local | feishu
   kind         # codex | pi | union_id | user_id | open_id
   value        # 原始稳定外部 ID，仅存 Keychain
@@ -140,6 +143,8 @@ feishu:union_id:new    ─┘
 ```
 
 换飞书 ID 只增加或撤销 Binding，不改变 `canonical_user`，也不复制 MemoryCore 数据。
+
+撤销 Binding 时保留其原始值在 Keychain 中作为拒绝匹配项；运行时命中 revoked Binding 后本轮不召回、不捕获，不得退回普通 `hermes-private`。只有从未绑定过的外部身份才可进入普通隔离私聊空间。完整卸载或经确认的身份清除才删除 revoked Keychain 值。
 
 ## 4. 三类空间与路由
 
@@ -255,7 +260,7 @@ MLink Journal 可记录当前发言人的短 HMAC `actor_digest` 以便事件冲
 
 - Principal ID 与 canonical user ID
 - Memory Space 与 Connection 路由
-- Binding 的 Keychain 引用、类型、状态和非敏感指纹
+- Binding 的 Keychain 引用、类型和状态；运行时指纹按需计算，不持久化
 
 macOS Keychain 保存：
 
@@ -282,6 +287,7 @@ mlink identity import <path>
 
 - Secret 或原始外部 ID 只通过 masked TTY/stdin，不接受 argv 明文。
 - `list` 只显示 Binding 指纹和末四位。
+- Binding 指纹只在读取 Keychain 后以内存中的 Identity Key 计算；不得进入配置、ChangeSet、Journal 或日志。
 - `bind/rebind/revoke/import` 使用 ChangeSet、预览、确认、备份、Apply 和回滚。
 - 安装 TUI 从 Hermes `state.db` 与 `gateway_routing` 只读提取去重候选，用户明确选择“陈科良”；不得按昵称自动绑定。
 
@@ -327,6 +333,7 @@ MLinkIdentityBundleV1
 
 - 未绑定 owner ID：该 Feishu 私聊作为普通隔离用户，不得自动合并 owner。
 - owner ID 变化：显示未绑定候选；用户显式 rebind 后恢复访问原 Principal。
+- 命中 revoked Binding：本轮不召回、不捕获，记录 `binding_revoked`，不降级为普通私聊身份。
 - Keychain Identity Key 缺失或长度错误：Broker 拒绝启动，不生成新 Key 代替。
 - Binding 冲突到两个 Principal：拒绝加载配置和 Apply。
 - 群缺失 `chat_id`：本轮不召回、不捕获，记录 `group_identity_missing`。
