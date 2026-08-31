@@ -6,10 +6,10 @@ Status: previewed and reproducible; awaiting explicit approval; not applied
 
 ## Approval Identity
 
-- Final ChangeSet: `plan_1e78ad2f7ca2232a424c44d69c`
-- Invalidated ChangeSets: `plan_5b496cbe0ed3a1c09525934f9c`, `plan_3fccddff2c44b2e0b90fdfd41d`, `plan_840c3a08543ba520b2462228e6`
+- Final ChangeSet: `plan_76854bd9e1bec07ad484485824`
+- Invalidated ChangeSets: `plan_5b496cbe0ed3a1c09525934f9c`, `plan_3fccddff2c44b2e0b90fdfd41d`, `plan_840c3a08543ba520b2462228e6`, `plan_1e78ad2f7ca2232a424c44d69c`
 - Candidate path: `/tmp/mlink-principal-routing-preview`
-- Candidate SHA-256: `bb7376875072da2f2e49cf128c15ce108556584b53e7d05bdd32005b9a0027e6`
+- Candidate SHA-256: `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256`
 - Git branch: `feat_product_design`
 - Provider: `dev.mlink.tencentdb@0.1.0`
 - MemoryCore endpoint: `http://127.0.0.1:8420`
@@ -47,7 +47,7 @@ The proposed `~/.mlink/config.yaml` is Schema v2 and contains one stable Owner P
 
 | # | Action | Target | Proposed SHA-256 / semantic result | Rollback |
 |---:|---|---|---|---|
-| 1 | create | `/Users/keliang/.local/bin/mlink` | `bb7376875072da2f2e49cf128c15ce108556584b53e7d05bdd32005b9a0027e6` | remove created file |
+| 1 | create | `/Users/keliang/.local/bin/mlink` | `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256` | remove created file |
 | 2 | create | `/Users/keliang/.mlink/config.yaml` | `9fde5087c73671c5403ed736233ed8d509c80bfddb912392ab0f6f5a0b6c0161`; Schema v2 routing above | remove created file |
 | 3 | create | `/Users/keliang/.codex/hooks.json` | MLink lifecycle Hooks; existing Hooks preserved | remove created file |
 | 4 | create | `/Users/keliang/.pi/agent/extensions/mlink.ts` | official Pi lifecycle Extension | remove created file |
@@ -78,7 +78,7 @@ Hermes model, provider, Base URL, authentication, gateway, and every unowned set
 
 ## Reproducibility and No-Write Proof
 
-Two independent final preview processes returned the same `plan_1e78ad2f7ca2232a424c44d69c`. A controlled preview kept these protected Agent configuration hashes identical before and after:
+Two independent final preview processes returned the same `plan_76854bd9e1bec07ad484485824`. A controlled preview kept these protected Agent configuration hashes identical before and after:
 
 | Protected state | SHA-256 | Result |
 |---|---|---|
@@ -93,11 +93,11 @@ After the final preview:
 - the installed MLink binary, MLink config, Unix socket, Codex Hook, Pi Extension, LaunchAgent plist, Hermes Provider files, and Hermes grant file were all absent;
 - `launchctl` had no `dev.mlink.broker` service;
 - all four proposed `dev.mlink` Keychain accounts returned macOS Security item-not-found exit code `44`;
-- the failed `plan_840c…` attempt created `~/.mlink/journal.db`, but `owned_resources`, `adapter_installations`, `backup_artifacts`, and `journal_events` all contained zero rows;
+- `~/.mlink/journal.db` retains the recovery audit and marks the previous installation `removed`; it has no queued memory event and no active installation;
 - no encrypted `*.mlink` identity bundle existed under `~/.mlink`;
 - no Agent, LaunchAgent, Keychain, OrbStack file, or MemoryCore state was changed.
 
-## Failed Apply Remediation
+## Failed Apply and Recovery
 
 The first user-driven Apply of `plan_840c3a08543ba520b2462228e6` exposed that macOS `security add-generic-password -w` opens the controlling terminal and requests the secret twice instead of consuming ordinary process stdin. The attempt stopped before any managed file or formal Keychain item was written. The obsolete TUI process was terminated after its exact command was verified.
 
@@ -109,6 +109,20 @@ Commit `0876ecd` replaces ordinary stdin with a bounded protected pseudo-termina
 
 A real macOS integration test wrote and read a uniquely named temporary Keychain item, deleted it, and confirmed that no `dev.mlink.integration*` item remained. The four formal `dev.mlink` accounts remain absent.
 
+The next manual Apply of `plan_1e78ad2f7ca2232a424c44d69c` completed its file transaction, but Doctor correctly reported `identity.key: invalid`, an unavailable Broker Socket/Provider, and a Hermes bridge timeout. Read-only diagnosis found two independent defects:
+
+- raw random 32-byte HMAC and Broker Grant values were interpreted as terminal control bytes, while ordinary text Token and owner Binding values remained intact;
+- the LaunchAgent invoked `mlink broker serve` with unsupported `--config`, `--journal`, and `--socket` flags, causing repeated exit code 2 and `unsupported MLink command` logs.
+
+The failed Broker was stopped. Approved recovery ChangeSet `plan_b4b6a25ef6e838e8ac125f0035` restored the exact pre-install Hermes hash, removed all MLink Agent files, deleted all four formal Keychain items, and marked the Ledger installation `removed`. Its first execution stopped before file mutation because `launchctl bootout` is not idempotent after an already-stopped service; the existing plist was re-bootstrapped and the same exact recovery Plan then completed. Post-recovery checks confirmed:
+
+- Codex, Pi, and Hermes protected hashes equal their pre-install values;
+- all MLink Hook, Extension, Provider, grant, config, binary, socket, and LaunchAgent files are absent;
+- all four formal Keychain accounts return item-not-found exit code `44`;
+- MemoryCore `/health` is `ok` and its persisted memory data was not removed.
+
+Commit `b597c4f` adds versioned Base64 URL encoding for every Keychain value, with strict decoding and legacy text fallback; the binary round-trip test includes NUL, newline, carriage return, high-bit, and `0xff` bytes. It also emits the Hermes Broker Grant as URL-safe text and removes the unsupported LaunchAgent flags. The real temporary Keychain binary round trip, CLI tests, LaunchAgent tests, and full regression matrix pass.
+
 ## Verification
 
 - `go test ./...`: pass
@@ -118,4 +132,4 @@ A real macOS integration test wrote and read a uniquely named temporary Keychain
 - real temporary-login-Keychain PTY write/read/delete integration: pass
 - the install-preview disclosure regression test first failed against the incomplete output, then passed after Schema, Principal, Binding, Space, and Agent-route diffs were added
 
-No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_1e78ad2f7ca2232a424c44d69c` after this exact ChangeSet is shown.
+No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_76854bd9e1bec07ad484485824` after this exact ChangeSet is shown.
