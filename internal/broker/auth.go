@@ -1,13 +1,17 @@
 package broker
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"strings"
 
+	"mlink/internal/config"
 	"mlink/internal/connection"
+	"mlink/internal/controlplane"
 	"mlink/internal/identity"
+	"mlink/internal/journal"
 )
 
 var (
@@ -37,9 +41,16 @@ type Grant struct {
 }
 
 type Authorizer struct {
-	Resolver identity.Resolver
-	Grants   []Grant
-	Router   *identity.Router
+	Resolver      identity.Resolver
+	Grants        []Grant
+	Router        *identity.Router
+	ConnectionID  string
+	ControlPlane  *config.ControlPlane
+	DynamicAgents DynamicAgentProvisioner
+}
+
+type DynamicAgentProvisioner interface {
+	ResolveOrCreate(context.Context, controlplane.PrincipalIntent) (journal.PrincipalAgent, error)
 }
 
 type Authorization struct {
@@ -103,10 +114,17 @@ func (a Authorizer) CanonicalUser(grant Grant, source, subject, directUserID str
 	}
 }
 
-func (a Authorizer) Resolve(grant Grant, external identity.ExternalContext, directUserID, sessionID string) (Authorization, error) {
+func (a Authorizer) Resolve(ctx context.Context, grant Grant, external identity.ExternalContext, directUserID, sessionID string) (Authorization, error) {
 	if directUserID != "" {
 		return Authorization{}, ErrForbidden
 	}
+	if a.ControlPlane != nil {
+		return a.resolveControlPlane(ctx, grant, external, sessionID)
+	}
+	return a.resolveLegacy(grant, external, directUserID, sessionID)
+}
+
+func (a Authorizer) resolveLegacy(grant Grant, external identity.ExternalContext, directUserID, sessionID string) (Authorization, error) {
 	if a.Router == nil {
 		userID, err := a.CanonicalUser(grant, external.Source, stableExternalSubject(external), directUserID)
 		if err != nil {
@@ -139,6 +157,66 @@ func (a Authorizer) Resolve(grant Grant, external identity.ExternalContext, dire
 	}
 	connectionConfig, exists := a.Router.Connections[resolved.ConnectionID]
 	if !exists {
+		return Authorization{}, ErrForbidden
+	}
+	route := connection.RouteKey{
+		ConnectionID: connectionConfig.ID, ProviderID: connectionConfig.ProviderID,
+		ProviderVersion: connectionConfig.ProviderVersion, ConfigRevision: connectionConfig.ConfigRevision,
+	}
+	return Authorization{Grant: grant, Route: route, Identity: resolved, IncludeAgentShared: resolved.IncludeAgentShared}, nil
+}
+
+func (a Authorizer) resolveControlPlane(ctx context.Context, grant Grant, external identity.ExternalContext, sessionID string) (Authorization, error) {
+	if a.Router == nil || strings.TrimSpace(a.ConnectionID) == "" || a.ControlPlane == nil {
+		return Authorization{}, ErrForbidden
+	}
+	control := a.ControlPlane
+	connectionConfig, exists := a.Router.Connections[a.ConnectionID]
+	if !exists || connectionConfig.ProviderID != control.ProviderID {
+		return Authorization{}, ErrForbidden
+	}
+	intent := identity.RouteIntent{Kind: identity.RouteOwner, SessionID: sessionID, IncludeAgentShared: true}
+	if grant.Mode == IdentityDelegated {
+		if external.Source != grant.Source {
+			return Authorization{}, ErrForbidden
+		}
+		resolved, err := a.Router.ResolveHermesIntent(external)
+		if err != nil {
+			return Authorization{}, ErrForbidden
+		}
+		intent = resolved
+	} else if grant.Mode != IdentityFixed {
+		return Authorization{}, ErrForbidden
+	}
+
+	resolved := identity.ResolvedIdentity{
+		ConnectionID: a.ConnectionID, SpaceID: "owner", TenantID: control.OwnerTeamID,
+		AgentID: control.OwnerAgentID, UserID: control.OwnerUserID, SessionID: intent.SessionID,
+		IncludeAgentShared: intent.Kind == identity.RouteOwner, ActorDigest: intent.ActorDigest,
+	}
+	if intent.Kind != identity.RouteOwner {
+		if a.DynamicAgents == nil {
+			return Authorization{}, ErrForbidden
+		}
+		displayLabel := "Feishu DM"
+		if intent.Kind == identity.RouteGroup {
+			displayLabel = "Feishu Group"
+		}
+		mapping, err := a.DynamicAgents.ResolveOrCreate(ctx, controlplane.PrincipalIntent{
+			Fingerprint: intent.PrincipalFingerprint, RouteKind: string(intent.Kind), DisplayLabel: displayLabel,
+		})
+		if err != nil || mapping.State != "active" || mapping.RouteKind != string(intent.Kind) ||
+			mapping.BackendUserID != control.OwnerUserID || mapping.BackendTeamID != control.OwnerTeamID || strings.TrimSpace(mapping.BackendAgentID) == "" {
+			return Authorization{}, ErrForbidden
+		}
+		resolved.AgentID = mapping.BackendAgentID
+		resolved.IncludeAgentShared = false
+		resolved.SpaceID = "hermes-private"
+		if intent.Kind == identity.RouteGroup {
+			resolved.SpaceID = "hermes-groups"
+		}
+	}
+	if len(grant.AllowedSpaceIDs) != 0 && !grant.AllowedSpaceIDs[resolved.SpaceID] {
 		return Authorization{}, ErrForbidden
 	}
 	route := connection.RouteKey{

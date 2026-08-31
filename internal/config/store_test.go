@@ -104,9 +104,10 @@ func TestStoreRoundTripsV3ControlPlane(t *testing.T) {
 
 func TestValidateV3RoutingPolicies(t *testing.T) {
 	tests := map[string]func(*Config){
-		"missing owner id":   func(cfg *Config) { cfg.ControlPlane.OwnerUserID = "" },
-		"non-loopback panel": func(cfg *Config) { cfg.ControlPlane.PanelURL = "http://0.0.0.0:8125" },
-		"wrong provider":     func(cfg *Config) { cfg.ControlPlane.ProviderID = "mem0" },
+		"missing owner id":    func(cfg *Config) { cfg.ControlPlane.OwnerUserID = "" },
+		"missing Agent limit": func(cfg *Config) { cfg.ControlPlane.DynamicAgentLimit = 0 },
+		"non-loopback panel":  func(cfg *Config) { cfg.ControlPlane.PanelURL = "http://0.0.0.0:8125" },
+		"wrong provider":      func(cfg *Config) { cfg.ControlPlane.ProviderID = "mem0" },
 		"private L2": func(cfg *Config) {
 			policy := cfg.RoutingPolicies["hermes-private"]
 			policy.Layers = []MemoryLayer{LayerL1, LayerL2}
@@ -126,6 +127,20 @@ func TestValidateV3RoutingPolicies(t *testing.T) {
 				t.Fatal("Validate() error = nil")
 			}
 		})
+	}
+}
+
+func TestValidateV3AdaptersReferencePoliciesWithoutLegacySpaces(t *testing.T) {
+	cfg := fixtureV3Config()
+	cfg.Adapters = map[string]Adapter{
+		"codex": {ID: "codex", Enabled: true, SpaceID: "owner"},
+		"pi":    {ID: "pi", Enabled: true, SpaceID: "owner"},
+		"hermes": {ID: "hermes", Enabled: true, HermesRouting: &HermesRouting{
+			OwnerSpaceID: "owner", PrivateSpaceID: "hermes-private", GroupSpaceID: "hermes-groups",
+		}},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -196,7 +211,7 @@ func fixtureV3Config() Config {
 		ControlPlane: &ControlPlane{
 			ProviderID: "dev.mlink.tencentdb", InstanceID: "default", PanelURL: "http://127.0.0.1:8125",
 			OwnerUserID: "usr-generated", OwnerTeamID: "team-generated", OwnerAgentID: "agt-owner",
-			OwnerAssetID: "chat_memory-team-generated-agt-owner",
+			OwnerAssetID: "chat_memory-team-generated-agt-owner", DynamicAgentLimit: 500,
 		},
 		RoutingPolicies: map[string]RoutingPolicy{
 			"owner":          {ID: "owner", Layers: []MemoryLayer{LayerL1, LayerL2, LayerL3}, AgentPolicy: AgentFixed},

@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"mlink/internal/broker"
 	"mlink/internal/cli"
 	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/identity"
 	"mlink/internal/install"
 	"mlink/internal/journal"
@@ -124,6 +126,10 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 	}
 	defer wipeRuntimeSecret(router.Key)
 	defer router.Bindings.Wipe()
+	authorizer, err := runtimeAuthorizer(ctx, configuration, keychain, journalStore, router, grants, hermesEnabled)
+	if err != nil {
+		return err
+	}
 	providerRuntime := backend.NewRuntime(backend.RuntimeConfig{
 		Secrets:          keychain,
 		Manifest:         tencentdb.BundledManifest(),
@@ -140,7 +146,7 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 	}()
 	server := broker.Server{
 		Service:    broker.Service{Journal: journalStore, Provider: providerRuntime},
-		Authorizer: broker.Authorizer{Router: router, Grants: grants},
+		Authorizer: authorizer,
 	}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -205,10 +211,11 @@ func runtimeRouter(ctx context.Context, configuration config.Config, secrets sec
 		if !enabled || !adapter.Enabled {
 			continue
 		}
-		grants = append(grants, broker.Grant{
-			AdapterID: adapterID, Mode: broker.IdentityFixed, FixedSpaceID: adapter.SpaceID,
-			AllowedSpaceIDs: map[string]bool{adapter.SpaceID: true},
-		})
+		spaceID := adapter.SpaceID
+		if configuration.SchemaVersion == 3 {
+			spaceID = "owner"
+		}
+		grants = append(grants, broker.Grant{AdapterID: adapterID, Mode: broker.IdentityFixed, FixedSpaceID: spaceID, AllowedSpaceIDs: map[string]bool{spaceID: true}})
 	}
 	hermesAdapter, hermesEnabled := configuration.Adapters["hermes"]
 	if !hermesEnabled || !hermesAdapter.Enabled {
@@ -222,13 +229,64 @@ func runtimeRouter(ctx context.Context, configuration config.Config, secrets sec
 	}
 	defer wipeRuntimeSecret(token)
 	digest := sha256.Sum256(token)
+	allowedSpaces := map[string]bool{
+		hermesRouting.OwnerSpaceID: true, hermesRouting.PrivateSpaceID: true, hermesRouting.GroupSpaceID: true,
+	}
+	if configuration.SchemaVersion == 3 {
+		allowedSpaces = map[string]bool{"owner": true, "hermes-private": true, "hermes-groups": true}
+	}
 	grants = append(grants, broker.Grant{
 		TokenDigest: digest[:], AdapterID: "hermes", Mode: broker.IdentityDelegated, Source: "feishu",
-		AllowedSpaceIDs: map[string]bool{
-			hermesRouting.OwnerSpaceID: true, hermesRouting.PrivateSpaceID: true, hermesRouting.GroupSpaceID: true,
-		},
+		AllowedSpaceIDs: allowedSpaces,
 	})
 	return router, grants, true, nil
+}
+
+func runtimeAuthorizer(ctx context.Context, configuration config.Config, secrets secret.Store, states controlplane.PrincipalAgentStore, router *identity.Router, grants []broker.Grant, hermesEnabled bool) (broker.Authorizer, error) {
+	authorizer := broker.Authorizer{Router: router, Grants: grants}
+	if configuration.SchemaVersion != 3 {
+		return authorizer, nil
+	}
+	if configuration.ControlPlane == nil {
+		return broker.Authorizer{}, errors.New("MLink control plane is missing")
+	}
+	authorizer.ConnectionID = configuration.ActiveConnectionID
+	authorizer.ControlPlane = configuration.ControlPlane
+	if !hermesEnabled {
+		return authorizer, nil
+	}
+	connectionConfig := configuration.Connections[configuration.ActiveConnectionID]
+	baseURL, baseOK := connectionConfig.ProviderConfig["base_url"].(string)
+	serviceID, serviceOK := connectionConfig.ProviderConfig["service_id"].(string)
+	timeoutMS, timeoutOK := connectionConfig.ProviderConfig["timeout_ms"].(int)
+	if !baseOK || !serviceOK || !timeoutOK || timeoutMS < 100 || timeoutMS > 30_000 {
+		return broker.Authorizer{}, errors.New("TencentDB control-plane connection configuration is invalid")
+	}
+	const keychainPrefix = "keychain://dev.mlink/"
+	tokenRef := connectionConfig.SecretRefs["token"]
+	if !strings.HasPrefix(tokenRef, keychainPrefix) || len(tokenRef) == len(keychainPrefix) {
+		return broker.Authorizer{}, errors.New("TencentDB control-plane token reference is invalid")
+	}
+	token, err := secrets.Get(ctx, strings.TrimPrefix(tokenRef, keychainPrefix))
+	if err != nil {
+		return broker.Authorizer{}, errors.New("load TencentDB control-plane token")
+	}
+	defer wipeRuntimeSecret(token)
+	timeout := time.Duration(timeoutMS) * time.Millisecond
+	client, err := tencentdb.NewClient(tencentdb.Config{
+		BaseURL: baseURL, Token: string(token), ServiceID: serviceID,
+		HTTPClient: &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+	})
+	if err != nil {
+		return broker.Authorizer{}, err
+	}
+	authorizer.DynamicAgents = &controlplane.AgentProvisioner{
+		Metadata: tencentdb.NewMetadataClient(client), Secrets: secrets, Store: states,
+		MaxDynamicAgents: configuration.ControlPlane.DynamicAgentLimit, Timeout: timeout,
+	}
+	return authorizer, nil
 }
 
 func privateListener(address string) (net.Listener, error) {

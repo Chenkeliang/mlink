@@ -36,13 +36,14 @@ type SessionPolicy string
 const SessionPerTopic SessionPolicy = "per_topic"
 
 type ControlPlane struct {
-	ProviderID   string `yaml:"provider_id"`
-	InstanceID   string `yaml:"instance_id"`
-	PanelURL     string `yaml:"panel_url"`
-	OwnerUserID  string `yaml:"owner_user_id"`
-	OwnerTeamID  string `yaml:"owner_team_id"`
-	OwnerAgentID string `yaml:"owner_agent_id"`
-	OwnerAssetID string `yaml:"owner_asset_id"`
+	ProviderID        string `yaml:"provider_id"`
+	InstanceID        string `yaml:"instance_id"`
+	PanelURL          string `yaml:"panel_url"`
+	OwnerUserID       string `yaml:"owner_user_id"`
+	OwnerTeamID       string `yaml:"owner_team_id"`
+	OwnerAgentID      string `yaml:"owner_agent_id"`
+	OwnerAssetID      string `yaml:"owner_asset_id"`
+	DynamicAgentLimit int    `yaml:"dynamic_agent_limit"`
 }
 
 type RoutingPolicy struct {

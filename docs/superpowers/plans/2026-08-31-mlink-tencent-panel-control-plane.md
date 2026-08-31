@@ -485,6 +485,8 @@ type PrincipalIntent struct {
 }
 ```
 
+The provisioner also requires an explicit positive local dynamic-Agent limit because the pinned official Core quota response has no Agent-count field. Reconciliation of an existing remote marker occurs before applying this limit.
+
 Tests cover mapping hit, metadata reconciliation, first create, two concurrent creates, timeout, quota failure, wrong owner/team response, duplicate metadata marker, create success followed by local persistence failure, restart reconciliation, and forbidden raw-ID scanning.
 
 - [ ] **Step 2: Run provisioner tests and observe failure**

@@ -279,6 +279,7 @@ control_plane:
   owner_team_id: <Core-generated>
   owner_agent_id: <Core-generated>
   owner_asset_id: <Core-generated>
+  dynamic_agent_limit: 500 # explicit operator-confirmed local safety limit
 
 routing_policies:
   owner:
@@ -321,7 +322,7 @@ If cutover fails, restore local config and restart Broker/Hermes. Newly created 
 
 ## 12. Quotas and Concurrency
 
-Before creating an Agent, MLink checks Core instance quota. A quota failure blocks memory only for the new principal and does not affect existing mappings.
+The official instance-quota response currently exposes User and Team limits but no Agent limit. MLink therefore requires an explicit positive `dynamic_agent_limit` (the TUI presents and confirms the value) and fails closed when it is absent or reached. A capacity failure blocks memory only for the new principal and does not affect existing mappings.
 
 Concurrent first messages for the same principal must result in one active mapping. Tests cover:
 

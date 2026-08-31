@@ -239,7 +239,7 @@ func (s Server) authorizeIdentity(request *http.Request, adapterID string, exter
 	if err != nil {
 		return Authorization{}, err
 	}
-	return s.Authorizer.Resolve(grant, external, directUserID, sessionID)
+	return s.Authorizer.Resolve(request.Context(), grant, external, directUserID, sessionID)
 }
 
 func (s Server) authorizeGrant(request *http.Request, adapterID string, local bool) (Grant, error) {

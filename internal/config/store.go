@@ -161,6 +161,18 @@ func Validate(cfg Config) error {
 		if adapter.ConnectionID != "" || len(adapter.Config) != 0 {
 			return fmt.Errorf("adapter %q contains legacy routing fields", id)
 		}
+		if cfg.SchemaVersion == 3 {
+			if id == "hermes" {
+				routing := adapter.HermesRouting
+				if adapter.SpaceID != "" || routing == nil || routing.OwnerSpaceID != "owner" ||
+					routing.PrivateSpaceID != "hermes-private" || routing.GroupSpaceID != "hermes-groups" {
+					return errors.New("Hermes adapter must reference schema v3 routing policies")
+				}
+			} else if adapter.HermesRouting != nil || adapter.SpaceID != "owner" {
+				return fmt.Errorf("adapter %q must reference the Owner routing policy", id)
+			}
+			continue
+		}
 		if adapter.HermesRouting != nil {
 			for _, spaceID := range []string{adapter.HermesRouting.OwnerSpaceID, adapter.HermesRouting.PrivateSpaceID, adapter.HermesRouting.GroupSpaceID} {
 				if _, exists := cfg.Spaces[spaceID]; !exists {
@@ -206,7 +218,8 @@ func validateControlPlane(cfg Config) error {
 	control := cfg.ControlPlane
 	if control == nil || control.ProviderID != "dev.mlink.tencentdb" || !safeIDPattern.MatchString(control.InstanceID) ||
 		!safeIDPattern.MatchString(control.OwnerUserID) || !safeIDPattern.MatchString(control.OwnerTeamID) ||
-		!safeIDPattern.MatchString(control.OwnerAgentID) || !safeIDPattern.MatchString(control.OwnerAssetID) {
+		!safeIDPattern.MatchString(control.OwnerAgentID) || !safeIDPattern.MatchString(control.OwnerAssetID) ||
+		control.DynamicAgentLimit <= 0 || control.DynamicAgentLimit > 10_000 {
 		return errors.New("valid TencentDB control plane is required")
 	}
 	connection := cfg.Connections[cfg.ActiveConnectionID]

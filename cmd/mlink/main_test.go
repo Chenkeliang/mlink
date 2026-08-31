@@ -15,6 +15,7 @@ import (
 	"mlink/internal/doctor"
 	"mlink/internal/identity"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 )
 
 type runtimeSecretStore map[string][]byte
@@ -62,6 +63,48 @@ func TestBrokerGrantsSeparateFixedAndDelegatedIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeAuthorizerV3UsesGeneratedOwnerControlPlane(t *testing.T) {
+	ctx := context.Background()
+	configuration := fixtureRuntimeConfigV3()
+	secrets := runtimeSecretStore{
+		"identity/hmac-key":                     bytes.Repeat([]byte{0x2a}, 32),
+		"identity/binding/owner-feishu-union-1": []byte("on_owner"),
+		"adapter/hermes/token":                  []byte("hermes-token"),
+		"connection/local/token":                []byte("gateway-token"),
+		"control/tencentdb/owner-user-key":      []byte("owner-key"),
+	}
+	router, grants, hermesEnabled, err := runtimeRouter(ctx, configuration, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.Open(ctx, t.TempDir()+"/journal.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	authorizer, err := runtimeAuthorizer(ctx, configuration, secrets, store, router, grants, hermesEnabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizer.ControlPlane != configuration.ControlPlane || authorizer.DynamicAgents == nil {
+		t.Fatalf("authorizer = %#v", authorizer)
+	}
+	fixed, err := authorizer.Resolve(ctx, grants[0], identity.ExternalContext{}, "", "codex-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixed.Identity.UserID != "usr-owner-generated" || fixed.Identity.TenantID != "team-owner-generated" ||
+		fixed.Identity.AgentID != "agt-owner-generated" || !fixed.IncludeAgentShared {
+		t.Fatalf("fixed authorization = %#v", fixed)
+	}
+	owner, err := authorizer.Resolve(ctx, grants[2], identity.ExternalContext{
+		Source: "feishu", ChatType: "dm", ChatID: "oc_dm", AlternateSubject: "on_owner",
+	}, "", "")
+	if err != nil || owner.Identity.UserID != fixed.Identity.UserID || owner.Identity.AgentID != fixed.Identity.AgentID || !owner.IncludeAgentShared {
+		t.Fatalf("Owner Hermes authorization = %#v, %v", owner, err)
+	}
+}
+
 func fixtureRuntimeConfigV2() config.Config {
 	return config.Config{
 		SchemaVersion: 2, NamespaceID: "personal", ActiveConnectionID: "local",
@@ -81,6 +124,39 @@ func fixtureRuntimeConfigV2() config.Config {
 			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
 			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
 		}},
+	}
+}
+
+func fixtureRuntimeConfigV3() config.Config {
+	return config.Config{
+		SchemaVersion: 3, NamespaceID: "installation-1", ActiveConnectionID: "local",
+		Connections: map[string]config.Connection{"local": {
+			ID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-3",
+			ProviderConfig: map[string]any{"base_url": "http://127.0.0.1:8420", "service_id": "default", "timeout_ms": 5000},
+			SecretRefs:     map[string]string{"token": "keychain://dev.mlink/connection/local/token"},
+		}},
+		Principals: map[string]config.Principal{"owner": {ID: "owner", CanonicalUserID: "usr-owner-generated", Kind: config.PrincipalPerson}},
+		Adapters: map[string]config.Adapter{
+			"codex": {ID: "codex", Enabled: true, SpaceID: "owner"},
+			"pi":    {ID: "pi", Enabled: true, SpaceID: "owner"},
+			"hermes": {ID: "hermes", Enabled: true, HermesRouting: &config.HermesRouting{
+				OwnerSpaceID: "owner", PrivateSpaceID: "hermes-private", GroupSpaceID: "hermes-groups",
+			}},
+		},
+		Bindings: map[string]config.BindingRef{"owner-feishu-union-1": {
+			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
+			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
+		}},
+		ControlPlane: &config.ControlPlane{
+			ProviderID: "dev.mlink.tencentdb", InstanceID: "default", PanelURL: "http://127.0.0.1:8125",
+			OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated", OwnerAgentID: "agt-owner-generated",
+			OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", DynamicAgentLimit: 500,
+		},
+		RoutingPolicies: map[string]config.RoutingPolicy{
+			"owner":          {ID: "owner", Layers: []config.MemoryLayer{config.LayerL1, config.LayerL2, config.LayerL3}, AgentPolicy: config.AgentFixed},
+			"hermes-private": {ID: "hermes-private", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicPrincipal},
+			"hermes-groups":  {ID: "hermes-groups", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicGroup, SessionPolicy: config.SessionPerTopic},
+		},
 	}
 }
 
