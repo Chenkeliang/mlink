@@ -27,6 +27,7 @@ type memoryTarget struct {
 	writes      int
 	runs        int
 	failAtWrite int
+	failAtRun   int
 }
 
 func newMemoryTarget(files map[string]memoryFile) *memoryTarget {
@@ -61,6 +62,9 @@ func (target *memoryTarget) Remove(_ context.Context, path string) error {
 
 func (target *memoryTarget) Run(context.Context, []string, io.Reader) ([]byte, error) {
 	target.runs++
+	if target.failAtRun > 0 && target.runs == target.failAtRun {
+		return nil, errors.New("injected run failure")
+	}
 	return nil, nil
 }
 

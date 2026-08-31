@@ -56,6 +56,11 @@ type ActiveInstallStore interface {
 	MarkInstallRemoved(context.Context) error
 }
 
+type ControlPlaneStateStore interface {
+	LoadControlPlane(context.Context) (journal.ControlPlaneState, error)
+	MarkControlPlaneState(context.Context, string) error
+}
+
 type Service struct {
 	Paths               layout.Paths
 	UID                 int
@@ -67,4 +72,5 @@ type Service struct {
 	HermesListenAddress string
 	HermesGrantToken    []byte
 	IdentityKey         []byte
+	ControlPlaneStates  ControlPlaneStateStore
 }

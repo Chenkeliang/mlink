@@ -216,7 +216,7 @@ func Validate(cfg Config) error {
 
 func validateControlPlane(cfg Config) error {
 	control := cfg.ControlPlane
-	if control == nil || control.ProviderID != "dev.mlink.tencentdb" || !safeIDPattern.MatchString(control.InstanceID) ||
+	if control == nil || len(cfg.Spaces) != 0 || control.ProviderID != "dev.mlink.tencentdb" || !safeIDPattern.MatchString(control.InstanceID) ||
 		!safeIDPattern.MatchString(control.OwnerUserID) || !safeIDPattern.MatchString(control.OwnerTeamID) ||
 		!safeIDPattern.MatchString(control.OwnerAgentID) || !safeIDPattern.MatchString(control.OwnerAssetID) ||
 		control.DynamicAgentLimit <= 0 || control.DynamicAgentLimit > 10_000 {

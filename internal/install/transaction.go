@@ -18,17 +18,35 @@ func NewTransaction(target Target, ledger Ledger) Transaction {
 }
 
 func (t Transaction) Apply(ctx context.Context, changeSet ChangeSet) error {
+	applied, err := t.ApplyDeferredOwnership(ctx, changeSet)
+	if err != nil {
+		return err
+	}
+	if err := t.RecordOwnership(ctx, applied); err != nil {
+		rollbackErr := t.rollbackOperations(ctx, changeSet.PlanID, applied)
+		if rollbackErr != nil {
+			return errors.Join(fmt.Errorf("record ownership: %w", err), fmt.Errorf("rollback: %w", rollbackErr))
+		}
+		return fmt.Errorf("record ownership: %w", err)
+	}
+	return nil
+}
+
+// ApplyDeferredOwnership applies an exact ChangeSet but leaves ownership
+// recording to the caller. It is intended for multi-system transactions that
+// must complete external restarts before the local state is committed.
+func (t Transaction) ApplyDeferredOwnership(ctx context.Context, changeSet ChangeSet) ([]Operation, error) {
 	if t.target == nil || t.ledger == nil {
-		return errors.New("transaction target and ledger are required")
+		return nil, errors.New("transaction target and ledger are required")
 	}
 	if err := validateInvariants(changeSet); err != nil {
-		return err
+		return nil, err
 	}
 	if err := t.ensureFresh(ctx, changeSet); err != nil {
-		return err
+		return nil, err
 	}
 	if err := t.backupAll(ctx, changeSet); err != nil {
-		return err
+		return nil, err
 	}
 	var applied []Operation
 	for _, operation := range changeSet.Operations {
@@ -38,11 +56,18 @@ func (t Transaction) Apply(ctx context.Context, changeSet ChangeSet) error {
 		if err := t.applyOperation(ctx, operation); err != nil {
 			rollbackErr := t.rollbackOperations(ctx, changeSet.PlanID, applied)
 			if rollbackErr != nil {
-				return errors.Join(fmt.Errorf("apply %q: %w", operation.Target, err), fmt.Errorf("rollback: %w", rollbackErr))
+				return nil, errors.Join(fmt.Errorf("apply %q: %w", operation.Target, err), fmt.Errorf("rollback: %w", rollbackErr))
 			}
-			return fmt.Errorf("apply %q: %w", operation.Target, err)
+			return nil, fmt.Errorf("apply %q: %w", operation.Target, err)
 		}
 		applied = append(applied, operation)
+	}
+	return applied, nil
+}
+
+func (t Transaction) RecordOwnership(ctx context.Context, applied []Operation) error {
+	if t.ledger == nil {
+		return errors.New("transaction ledger is required")
 	}
 	for _, operation := range applied {
 		resource := OwnedResource{
@@ -52,11 +77,7 @@ func (t Transaction) Apply(ctx context.Context, changeSet ChangeSet) error {
 			PostApplyHash:       operation.ProposedHash,
 		}
 		if err := t.ledger.RecordOwned(ctx, resource); err != nil {
-			rollbackErr := t.rollbackOperations(ctx, changeSet.PlanID, applied)
-			if rollbackErr != nil {
-				return errors.Join(fmt.Errorf("record ownership: %w", err), fmt.Errorf("rollback: %w", rollbackErr))
-			}
-			return fmt.Errorf("record ownership: %w", err)
+			return err
 		}
 	}
 	return nil

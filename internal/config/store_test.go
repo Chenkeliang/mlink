@@ -106,8 +106,11 @@ func TestValidateV3RoutingPolicies(t *testing.T) {
 	tests := map[string]func(*Config){
 		"missing owner id":    func(cfg *Config) { cfg.ControlPlane.OwnerUserID = "" },
 		"missing Agent limit": func(cfg *Config) { cfg.ControlPlane.DynamicAgentLimit = 0 },
-		"non-loopback panel":  func(cfg *Config) { cfg.ControlPlane.PanelURL = "http://0.0.0.0:8125" },
-		"wrong provider":      func(cfg *Config) { cfg.ControlPlane.ProviderID = "mem0" },
+		"legacy spaces": func(cfg *Config) {
+			cfg.Spaces = fixtureV2Config().Spaces
+		},
+		"non-loopback panel": func(cfg *Config) { cfg.ControlPlane.PanelURL = "http://0.0.0.0:8125" },
+		"wrong provider":     func(cfg *Config) { cfg.ControlPlane.ProviderID = "mem0" },
 		"private L2": func(cfg *Config) {
 			policy := cfg.RoutingPolicies["hermes-private"]
 			policy.Layers = []MemoryLayer{LayerL1, LayerL2}
