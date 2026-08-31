@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -122,7 +123,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.busy = true
 			return model, model.doctorCommand()
 		}
-		return model, nil
+		model.confirmed = false
+		model.step = StepConnection
+		model.token.Focus()
+		return model, textinput.Blink
 	case doctorMsg:
 		model.busy = false
 		model.report, model.err = value.report, value.err
@@ -170,10 +174,12 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case StepConnection:
 		if key.Type == tea.KeyEnter {
-			if model.token.Value() == "" {
+			token := strings.TrimSpace(model.token.Value())
+			if token == "" {
 				model.err = errors.New("MemoryCore token is required")
 				return model, nil
 			}
+			model.token.SetValue(token)
 			model.token.Blur()
 			model.step = StepIdentity
 			model.busy = true

@@ -22,6 +22,23 @@ type fakeRunner struct {
 	err    error
 }
 
+type secretWriterCall struct {
+	args   []string
+	secret []byte
+}
+
+type fakeSecretWriter struct {
+	calls []secretWriterCall
+	err   error
+}
+
+func (writer *fakeSecretWriter) Write(_ context.Context, args []string, secret []byte) error {
+	writer.calls = append(writer.calls, secretWriterCall{
+		args: append([]string(nil), args...), secret: append([]byte(nil), secret...),
+	})
+	return writer.err
+}
+
 type exitCodeError int
 
 func (err exitCodeError) Error() string { return "command failed" }
@@ -36,23 +53,23 @@ func (r *fakeRunner) Run(_ context.Context, args []string, stdin io.Reader) ([]b
 	return append([]byte(nil), r.output...), r.err
 }
 
-func TestKeychainPutPassesSecretOnlyOnStdin(t *testing.T) {
-	runner := &fakeRunner{}
-	store := Keychain{Runner: runner}
+func TestKeychainPutPassesSecretOnlyToProtectedWriter(t *testing.T) {
+	writer := &fakeSecretWriter{}
+	store := Keychain{Writer: writer}
 	secret := []byte("actual-secret")
 	if err := store.Put(context.Background(), "connection/local/token", secret); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("calls = %d, want 1", len(runner.calls))
+	if len(writer.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(writer.calls))
 	}
-	call := runner.calls[0]
+	call := writer.calls[0]
 	wantArgs := []string{"/usr/bin/security", "add-generic-password", "-U", "-s", "dev.mlink", "-a", "connection/local/token", "-w"}
 	if !reflect.DeepEqual(call.args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", call.args, wantArgs)
 	}
-	if call.stdin != "actual-secret\n" {
-		t.Fatalf("stdin = %q", call.stdin)
+	if string(call.secret) != "actual-secret" {
+		t.Fatalf("secret = %q", call.secret)
 	}
 	if strings.Contains(strings.Join(call.args, " "), string(secret)) {
 		t.Fatal("secret leaked into command arguments")
@@ -87,16 +104,16 @@ func TestKeychainGetAndDeleteUseAccountOnly(t *testing.T) {
 }
 
 func TestKeychainRejectsInvalidInputBeforeRunner(t *testing.T) {
-	runner := &fakeRunner{}
-	store := Keychain{Runner: runner}
+	writer := &fakeSecretWriter{}
+	store := Keychain{Writer: writer}
 	if err := store.Put(context.Background(), "", []byte("token")); err == nil {
 		t.Fatal("Put() error = nil for empty account")
 	}
 	if err := store.Put(context.Background(), "account", []byte("line-one\nline-two")); err == nil {
 		t.Fatal("Put() error = nil for multiline secret")
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	if len(writer.calls) != 0 {
+		t.Fatalf("writer calls = %d, want 0", len(writer.calls))
 	}
 }
 
@@ -114,17 +131,17 @@ func TestKeychainDeleteMapsSecurityItemNotFound(t *testing.T) {
 	}
 }
 
-func TestKeychainBindingValueAppearsOnlyOnStdin(t *testing.T) {
-	runner := &fakeRunner{}
-	store := Keychain{Runner: runner}
+func TestKeychainBindingValueNeverAppearsInArgv(t *testing.T) {
+	writer := &fakeSecretWriter{}
+	store := Keychain{Writer: writer}
 	value := []byte("on_actual_binding")
 	if err := store.Put(context.Background(), "identity/binding/owner-feishu-union-1", value); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 1 || runner.calls[0].stdin != "on_actual_binding\n" {
-		t.Fatalf("calls = %#v", runner.calls)
+	if len(writer.calls) != 1 || string(writer.calls[0].secret) != "on_actual_binding" {
+		t.Fatalf("calls = %#v", writer.calls)
 	}
-	if strings.Contains(strings.Join(runner.calls[0].args, " "), string(value)) {
+	if strings.Contains(strings.Join(writer.calls[0].args, " "), string(value)) {
 		t.Fatal("binding value leaked into argv")
 	}
 }

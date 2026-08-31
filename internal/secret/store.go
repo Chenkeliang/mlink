@@ -21,8 +21,13 @@ type Runner interface {
 	Run(context.Context, []string, io.Reader) ([]byte, error)
 }
 
+type Writer interface {
+	Write(context.Context, []string, []byte) error
+}
+
 type Keychain struct {
 	Runner Runner
+	Writer Writer
 }
 
 func (k Keychain) Put(ctx context.Context, account string, secret []byte) error {
@@ -35,7 +40,6 @@ func (k Keychain) Put(ctx context.Context, account string, secret []byte) error 
 	if bytes.ContainsAny(secret, "\r\n") {
 		return errors.New("keychain secret must be a single line")
 	}
-	input := append(append([]byte(nil), secret...), '\n')
 	args := []string{
 		"/usr/bin/security",
 		"add-generic-password",
@@ -44,7 +48,7 @@ func (k Keychain) Put(ctx context.Context, account string, secret []byte) error 
 		"-a", account,
 		"-w",
 	}
-	if _, err := k.runner().Run(ctx, args, bytes.NewReader(input)); err != nil {
+	if err := k.writer().Write(ctx, args, secret); err != nil {
 		return fmt.Errorf("store MLink secret for %q: %w", account, err)
 	}
 	return nil
@@ -100,4 +104,11 @@ func (k Keychain) runner() Runner {
 		return k.Runner
 	}
 	return defaultRunner()
+}
+
+func (k Keychain) writer() Writer {
+	if k.Writer != nil {
+		return k.Writer
+	}
+	return defaultWriter()
 }

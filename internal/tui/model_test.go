@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,14 +16,17 @@ import (
 )
 
 type fakeApplication struct {
-	plan       install.ChangeSet
-	applyCalls int
-	planCalls  int
-	candidates []identity.Candidate
+	plan        install.ChangeSet
+	applyCalls  int
+	planCalls   int
+	candidates  []identity.Candidate
+	planRequest app.InstallRequest
+	applyErr    error
 }
 
-func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
+func (application *fakeApplication) PlanInstall(_ context.Context, request app.InstallRequest) (install.ChangeSet, error) {
 	application.planCalls++
+	application.planRequest = cloneRequest(request)
 	return application.plan, nil
 }
 
@@ -35,7 +39,7 @@ func (application *fakeApplication) DetectIdentityCandidates(context.Context) ([
 
 func (application *fakeApplication) ApplyInstall(context.Context, string, app.InstallRequest) error {
 	application.applyCalls++
-	return nil
+	return application.applyErr
 }
 
 func (application *fakeApplication) Status(context.Context) (app.Status, error) {
@@ -92,6 +96,38 @@ func TestWizardRequiresExplicitOwnerSelection(t *testing.T) {
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	if model.step != StepAgents || model.request.OwnerBindingSlot.ID != "owner-feishu-union-1" || string(model.request.SecretInputs[app.OwnerBindingSecret]) != "on_owner" {
 		t.Fatalf("selection = step:%d request:%#v", model.step, model.request)
+	}
+}
+
+func TestWizardTrimsTokenBeforePlanning(t *testing.T) {
+	application := &fakeApplication{plan: install.ChangeSet{PlanID: "plan_test"}}
+	model := New(application, fixtureRequest())
+	model.token.SetValue("  memorycore-token \r\n")
+	model = driveToIdentity(t, model)
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeySpace})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := string(application.planRequest.SecretInputs[app.MemoryCoreTokenSecret]); got != "memorycore-token" {
+		t.Fatalf("planned token = %q", got)
+	}
+}
+
+func TestWizardApplyErrorReturnsToCredentialEntry(t *testing.T) {
+	application := &fakeApplication{
+		plan:     install.ChangeSet{PlanID: "plan_test"},
+		applyErr: errors.New("keychain unavailable"),
+	}
+	model := New(application, fixtureRequest())
+	model.token.SetValue("memorycore-token")
+	model = driveToIdentity(t, model)
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeySpace})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepConnection || model.confirmed || model.token.Value() != "" {
+		t.Fatalf("step/confirmed/token = %d/%t/%q", model.step, model.confirmed, model.token.Value())
 	}
 }
 

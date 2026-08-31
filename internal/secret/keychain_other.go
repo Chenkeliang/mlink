@@ -16,3 +16,13 @@ func (unsupportedRunner) Run(context.Context, []string, io.Reader) ([]byte, erro
 func defaultRunner() Runner {
 	return unsupportedRunner{}
 }
+
+type unsupportedWriter struct{}
+
+func (unsupportedWriter) Write(context.Context, []string, []byte) error {
+	return ErrUnsupported
+}
+
+func defaultWriter() Writer {
+	return unsupportedWriter{}
+}
