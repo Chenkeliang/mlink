@@ -18,6 +18,13 @@ type Application interface {
 	ApplyRestore(context.Context, string, app.RestoreRequest) error
 	PlanUninstall(context.Context, app.UninstallRequest) (install.ChangeSet, error)
 	ApplyUninstall(context.Context, string, app.UninstallRequest) error
+	PlanPanelProvision(context.Context) (install.ChangeSet, error)
+	ApplyPanelProvision(context.Context, string) error
+	PlanPanelCutover(context.Context, app.ControlPlaneCutoverRequest) (install.ChangeSet, error)
+	ApplyPanelCutover(context.Context, string, app.ControlPlaneCutoverRequest) error
+	PanelControlStatus(context.Context) (app.PanelControlStatus, error)
+	OpenPanel(context.Context) error
+	CopyPanelOwnerKey(context.Context) error
 }
 
 type Dependencies struct {
@@ -75,6 +82,9 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	}
 	if len(args) > 0 && args[0] == "identity" {
 		return runIdentity(ctx, args[1:], deps, input)
+	}
+	if len(args) > 0 && args[0] == "panel" {
+		return runPanel(ctx, args[1:], deps, input)
 	}
 	if len(args) == 3 && args[0] == "hook" && args[1] == "codex" {
 		if deps.RunCodexHook == nil || deps.RunCodexHook(ctx, args[2]) != nil {

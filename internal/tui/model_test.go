@@ -16,12 +16,17 @@ import (
 )
 
 type fakeApplication struct {
-	plan        install.ChangeSet
-	applyCalls  int
-	planCalls   int
-	candidates  []identity.Candidate
-	planRequest app.InstallRequest
-	applyErr    error
+	plan           install.ChangeSet
+	applyCalls     int
+	planCalls      int
+	candidates     []identity.Candidate
+	planRequest    app.InstallRequest
+	applyErr       error
+	panelPlan      install.ChangeSet
+	cutoverPlan    install.ChangeSet
+	panelApplies   int
+	cutoverApplies int
+	cutoverRequest app.ControlPlaneCutoverRequest
 }
 
 func (application *fakeApplication) PlanInstall(_ context.Context, request app.InstallRequest) (install.ChangeSet, error) {
@@ -48,6 +53,31 @@ func (application *fakeApplication) Status(context.Context) (app.Status, error) 
 
 func (application *fakeApplication) Doctor(context.Context, []app.Agent) (doctor.Report, error) {
 	return doctor.Report{Checks: []doctor.Check{{ID: "broker.socket", State: doctor.StatePassed, Code: "reachable"}}}, nil
+}
+
+func (application *fakeApplication) PlanPanelProvision(context.Context) (install.ChangeSet, error) {
+	if application.panelPlan.PlanID != "" {
+		return application.panelPlan, nil
+	}
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyPanelProvision(context.Context, string) error {
+	application.panelApplies++
+	return nil
+}
+func (application *fakeApplication) PlanPanelCutover(context.Context, app.ControlPlaneCutoverRequest) (install.ChangeSet, error) {
+	if application.cutoverPlan.PlanID != "" {
+		return application.cutoverPlan, nil
+	}
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyPanelCutover(_ context.Context, _ string, request app.ControlPlaneCutoverRequest) error {
+	application.cutoverApplies++
+	application.cutoverRequest = request
+	return nil
+}
+func (application *fakeApplication) PanelControlStatus(context.Context) (app.PanelControlStatus, error) {
+	return app.PanelControlStatus{}, nil
 }
 
 func TestWizardCannotApplyBeforeDedicatedConfirmation(t *testing.T) {
@@ -128,6 +158,41 @@ func TestWizardApplyErrorReturnsToCredentialEntry(t *testing.T) {
 	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	if model.step != StepConnection || model.confirmed || model.token.Value() != "" {
 		t.Fatalf("step/confirmed/token = %d/%t/%q", model.step, model.confirmed, model.token.Value())
+	}
+}
+
+func TestWizardUsesSeparatePanelAndCutoverConfirmations(t *testing.T) {
+	application := &fakeApplication{
+		panelPlan: install.ChangeSet{PlanID: "plan_stage_a"}, cutoverPlan: install.ChangeSet{PlanID: "plan_stage_b"},
+	}
+	model := New(application, fixtureRequest())
+	model.step = StepVerify
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepPanelPreview || model.panelPlan.PlanID != "plan_stage_a" {
+		t.Fatalf("Panel preview = step:%d plan:%q", model.step, model.panelPlan.PlanID)
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if application.panelApplies != 0 {
+		t.Fatal("Panel applied before Enter")
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepCapacity || application.panelApplies != 1 {
+		t.Fatalf("Panel apply = step:%d calls:%d", model.step, application.panelApplies)
+	}
+	model.capacity.SetValue("500")
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepCutoverPreview || model.cutoverPlan.PlanID != "plan_stage_b" || model.cutoverPlan.PlanID == model.panelPlan.PlanID {
+		t.Fatalf("cutover preview = step:%d plans:%q/%q", model.step, model.panelPlan.PlanID, model.cutoverPlan.PlanID)
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if application.cutoverApplies != 0 {
+		t.Fatal("cutover applied before Enter")
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != StepComplete || application.cutoverApplies != 1 || application.cutoverRequest.DynamicAgentLimit != 500 {
+		t.Fatalf("cutover apply = step:%d calls:%d request:%#v", model.step, application.cutoverApplies, application.cutoverRequest)
 	}
 }
 

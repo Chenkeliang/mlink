@@ -56,6 +56,28 @@ func (application *fakeApplication) ApplyUninstall(context.Context, string, app.
 	return nil
 }
 
+func (application *fakeApplication) PlanPanelProvision(context.Context) (install.ChangeSet, error) {
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyPanelProvision(_ context.Context, planID string) error {
+	application.applyCalls++
+	application.appliedPlan = planID
+	return nil
+}
+func (application *fakeApplication) PlanPanelCutover(context.Context, app.ControlPlaneCutoverRequest) (install.ChangeSet, error) {
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyPanelCutover(_ context.Context, planID string, _ app.ControlPlaneCutoverRequest) error {
+	application.applyCalls++
+	application.appliedPlan = planID
+	return nil
+}
+func (application *fakeApplication) PanelControlStatus(context.Context) (app.PanelControlStatus, error) {
+	return app.PanelControlStatus{}, nil
+}
+func (application *fakeApplication) OpenPanel(context.Context) error         { return nil }
+func (application *fakeApplication) CopyPanelOwnerKey(context.Context) error { return nil }
+
 func (application *fakeApplication) Status(context.Context) (app.Status, error) {
 	return application.status, nil
 }

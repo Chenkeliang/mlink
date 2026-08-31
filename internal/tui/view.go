@@ -10,9 +10,10 @@ import (
 
 	"mlink/internal/app"
 	"mlink/internal/doctor"
+	"mlink/internal/install"
 )
 
-var stepNames = []string{"Welcome", "Detect", "Provider", "Connection", "Identity", "Agents", "Preview", "Confirm", "Verify"}
+var stepNames = []string{"Welcome", "Detect", "Provider", "Connection", "Identity", "Agents", "Install Preview", "Install Confirm", "Install Verify", "Panel Preview", "Panel Confirm", "Capacity", "Cutover Preview", "Cutover Confirm", "Complete"}
 
 func (model Model) View() string {
 	width := model.width
@@ -22,7 +23,7 @@ func (model Model) View() string {
 	var lines []string
 	lines = append(lines, model.logo(width)...)
 	lines = append(lines, "")
-	lines = append(lines, model.titleStyle().Render(fmt.Sprintf("%02d / 09  %s", int(model.step)+1, stepNames[model.step])))
+	lines = append(lines, model.titleStyle().Render(fmt.Sprintf("%02d / %02d  %s", int(model.step)+1, len(stepNames), stepNames[model.step])))
 	lines = append(lines, "")
 	lines = append(lines, model.stepView(width)...)
 	if model.busy {
@@ -141,6 +142,27 @@ func (model Model) stepView(width int) []string {
 			lines = append(lines, model.row(check.ID, state))
 		}
 		return lines
+	case StepPanelPreview:
+		return append(model.planLines(model.panelPlan, width), "", model.mutedStyle().Render("Creates Core metadata and the official Panel only. Active routing is unchanged."))
+	case StepPanelApply:
+		return model.confirmationLines(model.panelPlan.PlanID, "Stage A creates Core IDs and the loopback Panel. It does not cut over memory routing.")
+	case StepCapacity:
+		return []string{
+			"Set the maximum number of dynamically created private/group Agents.",
+			model.mutedStyle().Render("TencentDB's official quota response does not expose an Agent limit."), "", model.capacity.View(),
+		}
+	case StepCutoverPreview:
+		lines := model.planLines(model.cutoverPlan, width)
+		lines = append(lines, "", model.okStyle().Render("Legacy memory is retained but inactive; no L0-L3 migration is performed."))
+		return lines
+	case StepCutoverApply:
+		return model.confirmationLines(model.cutoverPlan.PlanID, "Stage B switches routing to Core-generated IDs and restarts Broker/Hermes.")
+	case StepComplete:
+		return []string{
+			model.row("Control plane", model.panelStatus.ControlPlane.State),
+			model.row("Panel", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.Healthy]),
+			model.row("Legacy memory", "retained · inactive · not migrated"),
+		}
 	default:
 		return nil
 	}
@@ -157,10 +179,38 @@ func (model Model) footer() string {
 	case StepApply:
 		return "y confirm · n back · Enter apply · q quit"
 	case StepVerify:
+		return "Enter continue to Panel · r verify again · q quit"
+	case StepPanelPreview, StepCutoverPreview:
+		return "Enter continue · q quit"
+	case StepPanelApply, StepCutoverApply:
+		return "y confirm · n back · Enter apply · q quit"
+	case StepCapacity:
+		return "Type limit · Enter preview · Ctrl+C quit"
+	case StepComplete:
 		return "r verify again · q quit"
 	default:
 		return "Enter continue · q quit"
 	}
+}
+
+func (model Model) planLines(plan install.ChangeSet, width int) []string {
+	lines := []string{model.row("Plan", plan.PlanID)}
+	for _, operation := range plan.Operations {
+		lines = append(lines, model.row(string(operation.Action), operation.Target))
+		if len(lines) >= 10 && width < 100 {
+			lines = append(lines, model.mutedStyle().Render("More operations are included in this exact ChangeSet."))
+			break
+		}
+	}
+	return lines
+}
+
+func (model Model) confirmationLines(planID, description string) []string {
+	answer := "not confirmed"
+	if model.confirmed {
+		answer = "confirmed"
+	}
+	return []string{model.row("Exact plan", planID), description, model.row("Apply", answer), model.mutedStyle().Render("Press y, then Enter. Press n or Esc to go back.")}
 }
 
 func (model Model) row(label, value string) string {

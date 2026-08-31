@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -27,6 +28,12 @@ const (
 	StepPreview
 	StepApply
 	StepVerify
+	StepPanelPreview
+	StepPanelApply
+	StepCapacity
+	StepCutoverPreview
+	StepCutoverApply
+	StepComplete
 )
 
 type Application interface {
@@ -35,26 +42,36 @@ type Application interface {
 	Status(context.Context) (app.Status, error)
 	Doctor(context.Context, []app.Agent) (doctor.Report, error)
 	DetectIdentityCandidates(context.Context) ([]identity.Candidate, error)
+	PlanPanelProvision(context.Context) (install.ChangeSet, error)
+	ApplyPanelProvision(context.Context, string) error
+	PlanPanelCutover(context.Context, app.ControlPlaneCutoverRequest) (install.ChangeSet, error)
+	ApplyPanelCutover(context.Context, string, app.ControlPlaneCutoverRequest) error
+	PanelControlStatus(context.Context) (app.PanelControlStatus, error)
 }
 
 type Model struct {
-	application      Application
-	request          app.InstallRequest
-	step             Step
-	width            int
-	height           int
-	cursor           int
-	selected         map[app.Agent]bool
-	token            textinput.Model
-	status           app.Status
-	plan             install.ChangeSet
-	report           doctor.Report
-	candidates       []identity.Candidate
-	identityCursor   int
-	identitySelected int
-	confirmed        bool
-	busy             bool
-	err              error
+	application       Application
+	request           app.InstallRequest
+	step              Step
+	width             int
+	height            int
+	cursor            int
+	selected          map[app.Agent]bool
+	token             textinput.Model
+	capacity          textinput.Model
+	status            app.Status
+	plan              install.ChangeSet
+	panelPlan         install.ChangeSet
+	cutoverPlan       install.ChangeSet
+	panelStatus       app.PanelControlStatus
+	dynamicAgentLimit int
+	report            doctor.Report
+	candidates        []identity.Candidate
+	identityCursor    int
+	identitySelected  int
+	confirmed         bool
+	busy              bool
+	err               error
 }
 
 type statusMsg struct {
@@ -79,6 +96,25 @@ type candidatesMsg struct {
 	err    error
 }
 
+type panelPlanMsg struct {
+	plan install.ChangeSet
+	err  error
+}
+
+type panelApplyMsg struct{ err error }
+
+type cutoverPlanMsg struct {
+	plan install.ChangeSet
+	err  error
+}
+
+type cutoverApplyMsg struct{ err error }
+
+type panelStatusMsg struct {
+	status app.PanelControlStatus
+	err    error
+}
+
 func New(application Application, request app.InstallRequest) Model {
 	token := textinput.New()
 	token.Placeholder = "MemoryCore token"
@@ -86,6 +122,10 @@ func New(application Application, request app.InstallRequest) Model {
 	token.EchoMode = textinput.EchoPassword
 	token.EchoCharacter = '•'
 	token.CharLimit = 16 * 1024
+	capacity := textinput.New()
+	capacity.Placeholder = "500"
+	capacity.Prompt = "> "
+	capacity.CharLimit = 5
 	return Model{
 		application: application,
 		request:     cloneRequest(request),
@@ -95,6 +135,7 @@ func New(application Application, request app.InstallRequest) Model {
 			app.Codex: true, app.Pi: true, app.Hermes: true,
 		},
 		token:            token,
+		capacity:         capacity,
 		identitySelected: -1,
 	}
 }
@@ -139,6 +180,38 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if value.err == nil && len(value.values) == 0 {
 			model.err = errors.New("no Hermes Feishu identity candidates were detected")
 		}
+		return model, nil
+	case panelPlanMsg:
+		model.busy = false
+		model.panelPlan, model.err = value.plan, value.err
+		return model, nil
+	case panelApplyMsg:
+		model.busy = false
+		model.err = value.err
+		model.confirmed = false
+		if value.err == nil {
+			model.step = StepCapacity
+			model.capacity.Focus()
+			return model, textinput.Blink
+		}
+		return model, nil
+	case cutoverPlanMsg:
+		model.busy = false
+		model.cutoverPlan, model.err = value.plan, value.err
+		return model, nil
+	case cutoverApplyMsg:
+		model.busy = false
+		model.err = value.err
+		model.confirmed = false
+		if value.err == nil {
+			model.step = StepComplete
+			model.busy = true
+			return model, model.panelStatusCommand()
+		}
+		return model, nil
+	case panelStatusMsg:
+		model.busy = false
+		model.panelStatus, model.err = value.status, value.err
 		return model, nil
 	case tea.KeyMsg:
 		if value.String() == "ctrl+c" || value.String() == "q" && model.step != StepConnection {
@@ -258,6 +331,62 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.busy = true
 			return model, model.doctorCommand()
 		}
+		if key.Type == tea.KeyEnter && model.err == nil {
+			model.step = StepPanelPreview
+			model.busy = true
+			return model, model.panelPlanCommand()
+		}
+	case StepPanelPreview:
+		if key.Type == tea.KeyEnter && model.err == nil && model.panelPlan.PlanID != "" {
+			model.step = StepPanelApply
+			model.confirmed = false
+		}
+	case StepPanelApply:
+		return model.confirmationKey(key, StepPanelPreview, model.panelApplyCommand)
+	case StepCapacity:
+		if key.Type == tea.KeyEnter {
+			limit, err := strconv.Atoi(strings.TrimSpace(model.capacity.Value()))
+			if err != nil || limit <= 0 || limit > 10_000 {
+				model.err = errors.New("enter a dynamic Agent limit between 1 and 10000")
+				return model, nil
+			}
+			model.dynamicAgentLimit = limit
+			model.capacity.Blur()
+			model.step = StepCutoverPreview
+			model.busy = true
+			return model, model.cutoverPlanCommand()
+		}
+		var command tea.Cmd
+		model.capacity, command = model.capacity.Update(key)
+		return model, command
+	case StepCutoverPreview:
+		if key.Type == tea.KeyEnter && model.err == nil && model.cutoverPlan.PlanID != "" {
+			model.step = StepCutoverApply
+			model.confirmed = false
+		}
+	case StepCutoverApply:
+		return model.confirmationKey(key, StepCutoverPreview, model.cutoverApplyCommand)
+	case StepComplete:
+		if key.String() == "r" {
+			model.busy = true
+			return model, model.panelStatusCommand()
+		}
+	}
+	return model, nil
+}
+
+func (model Model) confirmationKey(key tea.KeyMsg, back Step, apply func() tea.Cmd) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "y", "Y":
+		model.confirmed = true
+	case "n", "N", "esc":
+		model.confirmed = false
+		model.step = back
+	case "enter":
+		if model.confirmed {
+			model.busy = true
+			return model, apply()
+		}
 	}
 	return model, nil
 }
@@ -302,6 +431,43 @@ func (model Model) doctorCommand() tea.Cmd {
 	return func() tea.Msg {
 		report, err := model.application.Doctor(context.Background(), agents)
 		return doctorMsg{report: report, err: err}
+	}
+}
+
+func (model Model) panelPlanCommand() tea.Cmd {
+	return func() tea.Msg {
+		plan, err := model.application.PlanPanelProvision(context.Background())
+		return panelPlanMsg{plan: plan, err: err}
+	}
+}
+
+func (model Model) panelApplyCommand() tea.Cmd {
+	planID := model.panelPlan.PlanID
+	return func() tea.Msg {
+		return panelApplyMsg{err: model.application.ApplyPanelProvision(context.Background(), planID)}
+	}
+}
+
+func (model Model) cutoverPlanCommand() tea.Cmd {
+	request := app.ControlPlaneCutoverRequest{DynamicAgentLimit: model.dynamicAgentLimit}
+	return func() tea.Msg {
+		plan, err := model.application.PlanPanelCutover(context.Background(), request)
+		return cutoverPlanMsg{plan: plan, err: err}
+	}
+}
+
+func (model Model) cutoverApplyCommand() tea.Cmd {
+	planID := model.cutoverPlan.PlanID
+	request := app.ControlPlaneCutoverRequest{DynamicAgentLimit: model.dynamicAgentLimit}
+	return func() tea.Msg {
+		return cutoverApplyMsg{err: model.application.ApplyPanelCutover(context.Background(), planID, request)}
+	}
+}
+
+func (model Model) panelStatusCommand() tea.Cmd {
+	return func() tea.Msg {
+		status, err := model.application.PanelControlStatus(context.Background())
+		return panelStatusMsg{status: status, err: err}
 	}
 }
 

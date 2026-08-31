@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -33,6 +34,7 @@ import (
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/layout"
+	"mlink/internal/panel"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
 	"mlink/internal/tui"
@@ -334,7 +336,7 @@ func defaultInstallRequest() app.InstallRequest {
 			ProviderVersion: "0.1.0",
 			ConfigRevision:  environmentDefault("MLINK_CONFIG_REVISION", "rev-local-1"),
 			ProviderConfig: map[string]any{
-				"base_url":   environmentDefault("MLINK_MEMORYCORE_BASE_URL", "http://127.0.0.1:8096"),
+				"base_url":   environmentDefault("MLINK_MEMORYCORE_BASE_URL", "http://127.0.0.1:8420"),
 				"service_id": environmentDefault("MLINK_MEMORYCORE_SERVICE_ID", "default"),
 				"timeout_ms": 5000,
 			},
@@ -440,6 +442,161 @@ func (runtime *runtimeApplication) ApplyUninstall(ctx context.Context, planID st
 	}
 	service.BlockingEvents = store
 	return service.ApplyUninstall(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) PlanPanelProvision(ctx context.Context) (install.ChangeSet, error) {
+	service, closeService, err := runtime.controlPanelService(ctx, false)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer closeService()
+	return service.PlanPanelProvision(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyPanelProvision(ctx context.Context, planID string) error {
+	service, closeService, err := runtime.controlPanelService(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer closeService()
+	return service.ApplyPanelProvision(ctx, planID)
+}
+
+func (runtime *runtimeApplication) PlanPanelCutover(ctx context.Context, request app.ControlPlaneCutoverRequest) (install.ChangeSet, error) {
+	service, closeService, err := runtime.controlPanelService(ctx, false)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer closeService()
+	return service.PlanControlPlaneCutover(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyPanelCutover(ctx context.Context, planID string, request app.ControlPlaneCutoverRequest) error {
+	service, closeService, err := runtime.controlPanelService(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer closeService()
+	return service.ApplyControlPlaneCutover(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) PanelControlStatus(ctx context.Context) (app.PanelControlStatus, error) {
+	service, closeService, err := runtime.controlPanelService(ctx, false)
+	if err != nil {
+		return app.PanelControlStatus{}, err
+	}
+	defer closeService()
+	return service.PanelControlStatus(ctx)
+}
+
+func (runtime *runtimeApplication) OpenPanel(ctx context.Context) error {
+	_, err := (install.LocalTarget{}).Run(ctx, []string{"open", "http://127.0.0.1:8125"}, nil)
+	return err
+}
+
+func (runtime *runtimeApplication) CopyPanelOwnerKey(ctx context.Context) error {
+	value, err := (secret.Keychain{}).Get(ctx, controlplane.OwnerUserKeyAccount)
+	if err != nil {
+		return err
+	}
+	defer wipeRuntimeSecret(value)
+	_, err = (install.LocalTarget{}).Run(ctx, []string{"pbcopy"}, bytes.NewReader(value))
+	return err
+}
+
+func (runtime *runtimeApplication) controlPanelService(ctx context.Context, writable bool) (*app.Service, func(), error) {
+	configuration, err := (config.Store{Path: runtime.paths.Config}).Load()
+	if err != nil {
+		return nil, func() {}, err
+	}
+	var store *journal.Store
+	var ledger install.Ledger = previewLedger{}
+	if writable {
+		var installationLedger *journal.InstallationLedger
+		store, installationLedger, err = runtime.openLedger(ctx)
+		ledger = installationLedger
+	} else {
+		store, err = journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	}
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeService := func() { _ = store.Close() }
+	keychain := secret.Keychain{}
+	var metadata tencentdb.MetadataClient
+	if writable {
+		client, clientErr := runtimeTencentClient(ctx, configuration, keychain)
+		if clientErr != nil {
+			closeService()
+			return nil, func() {}, clientErr
+		}
+		metadata = tencentdb.NewMetadataClient(client)
+	}
+	ownerName := "owner"
+	if owner, ok := configuration.Principals["owner"]; ok {
+		ownerName = strings.TrimPrefix(owner.CanonicalUserID, "usr_owner_")
+	}
+	localTarget := install.LocalTarget{}
+	sourceRoot := environmentDefault("MLINK_MEMORY_PANEL_SOURCE", filepath.Join(filepath.Dir(runtime.paths.Home), "projects", "mlink-lab", "TencentDB-Agent-Memory", "MemoryPanel"))
+	if err := verifyPinnedPanelSource(ctx, localTarget, sourceRoot); err != nil {
+		closeService()
+		return nil, func() {}, err
+	}
+	desired := panel.Desired{
+		SourceRoot: sourceRoot, RegistryPath: runtime.paths.PanelRegistry, HostAddress: "127.0.0.1", HostPort: 8125, ContainerPort: 8123,
+		InstanceID: "default", InstanceName: "MLink Local", GatewayEndpoint: "http://host.docker.internal:8420",
+	}
+	if configuration.ControlPlane != nil {
+		desired.InstanceID = configuration.ControlPlane.InstanceID
+	} else if connection := configuration.Connections[configuration.ActiveConnectionID]; connection.ProviderConfig != nil {
+		if instanceID, ok := connection.ProviderConfig["service_id"].(string); ok && instanceID != "" {
+			desired.InstanceID = instanceID
+		}
+	}
+	provisionRequest := controlplane.ProvisionRequest{
+		InstallationID: configuration.NamespaceID, InstanceID: desired.InstanceID,
+		AdminUsername: "mlink-admin", OwnerUsername: sanitizeStableID(ownerName), TeamName: "MLink", OwnerAgentName: "MLink Owner",
+	}
+	controlService := &controlplane.Service{Metadata: metadata, Secrets: keychain, States: store}
+	panelRuntime := &panel.Runtime{Runner: localTarget, Target: localTarget}
+	return &app.Service{
+		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: ledger, Secrets: keychain,
+		ControlPlaneStates: store, ControlProvisioner: controlService, ControlRequest: provisionRequest,
+		PanelRuntime: panelRuntime, PanelDesired: desired, PanelConnectionID: configuration.ActiveConnectionID,
+	}, closeService, nil
+}
+
+func runtimeTencentClient(ctx context.Context, configuration config.Config, secrets secret.Store) (*tencentdb.Client, error) {
+	connectionConfig := configuration.Connections[configuration.ActiveConnectionID]
+	baseURL, baseOK := connectionConfig.ProviderConfig["base_url"].(string)
+	serviceID, serviceOK := connectionConfig.ProviderConfig["service_id"].(string)
+	if !baseOK || !serviceOK || baseURL != "http://127.0.0.1:8420" {
+		return nil, errors.New("TencentDB connection configuration is invalid")
+	}
+	const prefix = "keychain://dev.mlink/"
+	ref := connectionConfig.SecretRefs["token"]
+	if !strings.HasPrefix(ref, prefix) {
+		return nil, errors.New("TencentDB token reference is invalid")
+	}
+	token, err := secrets.Get(ctx, strings.TrimPrefix(ref, prefix))
+	if err != nil {
+		return nil, errors.New("load TencentDB token")
+	}
+	defer wipeRuntimeSecret(token)
+	return tencentdb.NewClient(tencentdb.Config{BaseURL: baseURL, Token: string(token), ServiceID: serviceID})
+}
+
+func verifyPinnedPanelSource(ctx context.Context, runner install.CommandRunner, sourceRoot string) error {
+	root := filepath.Dir(sourceRoot)
+	revision, err := runner.Run(ctx, []string{"git", "-C", root, "rev-parse", "--short=7", "HEAD"}, nil)
+	if err != nil || strings.TrimSpace(string(revision)) != "a5dcbe6" {
+		return errors.New("official MemoryPanel source is not pinned to a5dcbe6")
+	}
+	status, err := runner.Run(ctx, []string{"git", "-C", root, "status", "--porcelain", "--", "MemoryPanel"}, nil)
+	if err != nil || strings.TrimSpace(string(status)) != "" {
+		return errors.New("official MemoryPanel source has uncommitted changes")
+	}
+	return nil
 }
 
 func (runtime *runtimeApplication) PlanIdentityBind(ctx context.Context, request app.IdentityBindRequest) (install.ChangeSet, error) {

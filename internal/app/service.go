@@ -4,9 +4,11 @@ import (
 	"context"
 
 	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/layout"
+	"mlink/internal/panel"
 	"mlink/internal/secret"
 )
 
@@ -73,4 +75,9 @@ type Service struct {
 	HermesGrantToken    []byte
 	IdentityKey         []byte
 	ControlPlaneStates  ControlPlaneStateStore
+	ControlProvisioner  *controlplane.Service
+	ControlRequest      controlplane.ProvisionRequest
+	PanelRuntime        *panel.Runtime
+	PanelDesired        panel.Desired
+	PanelConnectionID   string
 }
