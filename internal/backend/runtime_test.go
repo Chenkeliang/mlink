@@ -52,12 +52,14 @@ func (s *fakeSession) ExitEvent() (host.ExitEvent, bool) { return host.ExitEvent
 
 func TestRuntimeStartsPinnedConnectionWithKeychainSecrets(t *testing.T) {
 	var captured host.Config
+	starts := 0
 	runtime := NewRuntime(RuntimeConfig{
 		Secrets:          fakeSecretStore{values: map[string][]byte{"connection/local/token": []byte("secret-token")}},
 		Manifest:         tencentdb.BundledManifest(),
 		PackageDirectory: t.TempDir(),
 		RuntimeDirectory: t.TempDir(),
 		StartProvider: func(_ context.Context, cfg host.Config) (host.Session, error) {
+			starts++
 			captured = cfg
 			return &fakeSession{route: cfg.Snapshot.RouteKey()}, nil
 		},
@@ -73,6 +75,10 @@ func TestRuntimeStartsPinnedConnectionWithKeychainSecrets(t *testing.T) {
 	}
 	if session.RouteKey().ConfigRevision != "rev-1" || captured.Secrets["token"] != "secret-token" {
 		t.Fatalf("captured config = %#v", captured)
+	}
+	second, err := runtime.Start(context.Background(), connectionConfig)
+	if err != nil || second != session || starts != 1 {
+		t.Fatalf("Provider reuse = first:%p second:%p starts:%d error:%v", session, second, starts, err)
 	}
 	if _, err := runtime.CaptureTurn(context.Background(), connection.RouteKey{
 		ConnectionID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-other",

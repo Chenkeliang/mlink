@@ -22,6 +22,7 @@ import (
 	"mlink/internal/app"
 	"mlink/internal/config"
 	"mlink/internal/doctor"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/launchagent"
@@ -112,6 +113,18 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 		}
 	}
 	report := doctor.Report{}
+	if status.Installed {
+		keychain := secret.Keychain{}
+		identityKey, keyErr := keychain.Get(ctx, "identity/hmac-key")
+		bindingErr := keyErr
+		if keyErr == nil && len(identityKey) == 32 {
+			bindings, err := (identity.Repository{Secrets: keychain, IdentityKey: identityKey}).Load(ctx, configuration.Bindings)
+			bindingErr = err
+			bindings.Wipe()
+		}
+		report.Checks = append(report.Checks, doctor.IdentityChecks(configuration, identityKey, bindingErr)...)
+		wipeRuntimeSecret(identityKey)
+	}
 	report.Checks = append(report.Checks, runtime.checkLaunchAgent(ctx), runtime.checkBrokerSocket(ctx, agents))
 	if report.Checks[len(report.Checks)-1].State == doctor.StatePassed {
 		report.Checks = append(report.Checks, doctor.Check{ID: "provider.tencentdb", State: doctor.StatePassed, Code: "available"})
@@ -126,8 +139,8 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 		case app.Pi:
 			report.Checks = append(report.Checks, runtime.checkPi(ctx, activity))
 		case app.Hermes:
-			providerCheck, bridgeCheck := runtime.checkHermes(ctx, configuration)
-			report.Checks = append(report.Checks, providerCheck, bridgeCheck)
+			providerCheck, bridgeCheck, sessionCheck := runtime.checkHermes(ctx, configuration)
+			report.Checks = append(report.Checks, providerCheck, bridgeCheck, sessionCheck)
 		}
 	}
 	report.Checks = append(report.Checks, runtime.checkQueue(ctx))
@@ -233,23 +246,44 @@ func (runtime *runtimeApplication) checkPi(ctx context.Context, activity map[str
 	return doctor.Check{ID: "pi.extension", State: doctor.StatePassed, Code: "active"}
 }
 
-func (runtime *runtimeApplication) checkHermes(ctx context.Context, configuration config.Config) (doctor.Check, doctor.Check) {
+func (runtime *runtimeApplication) checkHermes(ctx context.Context, configuration config.Config) (doctor.Check, doctor.Check, doctor.Check) {
 	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
 	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
 	if err != nil {
 		failed := doctor.Check{ID: "hermes.provider", State: doctor.StateFailed, Code: "provider_mismatch"}
-		return failed, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "dns_failed"}
+		return failed, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "dns_failed"}, doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "unavailable"}
 	}
 	target, err := hermes.NewOrbTarget(machine, detection.HermesHome, nil)
 	if err != nil {
-		return doctor.Check{ID: "hermes.provider", State: doctor.StateFailed, Code: "provider_mismatch"}, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "dns_failed"}
+		return doctor.Check{ID: "hermes.provider", State: doctor.StateFailed, Code: "provider_mismatch"}, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "dns_failed"}, doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "unavailable"}
 	}
 	providerCheck := inspectHermesConfig(ctx, target, detection.HermesHome)
+	configContent, _, configErr := target.Read(ctx, filepath.Join(detection.HermesHome, "config.yaml"))
+	sessionCheck := inspectHermesSessionPolicy(configContent)
+	if configErr != nil {
+		sessionCheck = doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "unavailable"}
+	}
 	if providerCheck.State != doctor.StatePassed {
-		return providerCheck, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "timeout"}
+		return providerCheck, doctor.Check{ID: "hermes.bridge", State: doctor.StateFailed, Code: "timeout"}, sessionCheck
 	}
 	bridgeCheck := runtime.probeHermesBridge(ctx, machine, configuration)
-	return providerCheck, bridgeCheck
+	return providerCheck, bridgeCheck, sessionCheck
+}
+
+func inspectHermesSessionPolicy(content []byte) doctor.Check {
+	var document map[string]any
+	if yaml.Unmarshal(content, &document) != nil {
+		return doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "unavailable"}
+	}
+	groupShared, groupExists := document["group_sessions_per_user"].(bool)
+	threadShared, threadExists := document["thread_sessions_per_user"].(bool)
+	if !groupExists || groupShared {
+		return doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "group_session_split"}
+	}
+	if !threadExists || threadShared {
+		return doctor.Check{ID: "hermes.session_policy", State: doctor.StateFailed, Code: "thread_session_split"}
+	}
+	return doctor.Check{ID: "hermes.session_policy", State: doctor.StatePassed, Code: "active"}
 }
 
 func inspectHermesConfig(ctx context.Context, target install.Target, home string) doctor.Check {

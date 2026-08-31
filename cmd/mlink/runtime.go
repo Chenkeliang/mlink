@@ -26,7 +26,6 @@ import (
 	"mlink/internal/broker"
 	"mlink/internal/cli"
 	"mlink/internal/config"
-	"mlink/internal/connection"
 	"mlink/internal/identity"
 	"mlink/internal/install"
 	"mlink/internal/journal"
@@ -118,14 +117,12 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 	}
 	defer journalStore.Close()
 	keychain := secret.Keychain{}
-	identityKey, err := keychain.Get(ctx, "identity/hmac-key")
+	router, grants, hermesEnabled, err := runtimeRouter(ctx, configuration, keychain)
 	if err != nil {
 		return err
 	}
-	defer wipeRuntimeSecret(identityKey)
-	if len(identityKey) != 32 {
-		return errors.New("MLink identity key is invalid")
-	}
+	defer wipeRuntimeSecret(router.Key)
+	defer router.Bindings.Wipe()
 	providerRuntime := backend.NewRuntime(backend.RuntimeConfig{
 		Secrets:          keychain,
 		Manifest:         tencentdb.BundledManifest(),
@@ -140,16 +137,9 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 		defer cancel()
 		_ = providerRuntime.Shutdown(shutdownCtx)
 	}()
-	grants, hermesEnabled, err := runtime.brokerGrants(ctx, configuration, connectionConfig, keychain)
-	if err != nil {
-		return err
-	}
 	server := broker.Server{
-		Service: broker.Service{Journal: journalStore, Provider: providerRuntime},
-		Authorizer: broker.Authorizer{
-			Resolver: identity.Resolver{NamespaceID: configuration.NamespaceID, Key: identityKey},
-			Grants:   grants,
-		},
+		Service:    broker.Service{Journal: journalStore, Provider: providerRuntime},
+		Authorizer: broker.Authorizer{Router: router, Grants: grants},
 	}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -182,10 +172,31 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 	}
 }
 
-func (runtime *runtimeApplication) brokerGrants(ctx context.Context, configuration config.Config, connectionConfig config.Connection, keychain secret.Store) ([]broker.Grant, bool, error) {
-	route := connection.RouteKey{
-		ConnectionID: connectionConfig.ID, ProviderID: connectionConfig.ProviderID,
-		ProviderVersion: connectionConfig.ProviderVersion, ConfigRevision: connectionConfig.ConfigRevision,
+func runtimeRouter(ctx context.Context, configuration config.Config, secrets secret.Store) (*identity.Router, []broker.Grant, bool, error) {
+	if err := config.Validate(configuration); err != nil {
+		return nil, nil, false, err
+	}
+	identityKey, err := secrets.Get(ctx, "identity/hmac-key")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if len(identityKey) != 32 {
+		wipeRuntimeSecret(identityKey)
+		return nil, nil, false, errors.New("MLink identity key is invalid")
+	}
+	bindings, err := (identity.Repository{Secrets: secrets, IdentityKey: identityKey}).Load(ctx, configuration.Bindings)
+	if err != nil {
+		wipeRuntimeSecret(identityKey)
+		return nil, nil, false, err
+	}
+	hermesRouting := config.HermesRouting{}
+	if adapter := configuration.Adapters["hermes"]; adapter.HermesRouting != nil {
+		hermesRouting = *adapter.HermesRouting
+	}
+	router := &identity.Router{
+		NamespaceID: configuration.NamespaceID, Key: identityKey, Connections: configuration.Connections,
+		Spaces: configuration.Spaces, Principals: configuration.Principals, Adapters: configuration.Adapters,
+		Bindings: bindings, Hermes: hermesRouting,
 	}
 	var grants []broker.Grant
 	for _, adapterID := range []string{"codex", "pi"} {
@@ -194,26 +205,29 @@ func (runtime *runtimeApplication) brokerGrants(ctx context.Context, configurati
 			continue
 		}
 		grants = append(grants, broker.Grant{
-			AdapterID: adapterID, Mode: broker.IdentityFixed, Route: route,
-			TenantID: connectionConfig.TenantID, AgentID: connectionConfig.AgentID, UserID: connectionConfig.UserID,
-			IncludeAgentShared: connectionConfig.IncludeAgentShared,
+			AdapterID: adapterID, Mode: broker.IdentityFixed, FixedSpaceID: adapter.SpaceID,
+			AllowedSpaceIDs: map[string]bool{adapter.SpaceID: true},
 		})
 	}
 	hermesAdapter, hermesEnabled := configuration.Adapters["hermes"]
 	if !hermesEnabled || !hermesAdapter.Enabled {
-		return grants, false, nil
+		return router, grants, false, nil
 	}
-	token, err := keychain.Get(ctx, "adapter/hermes/token")
+	token, err := secrets.Get(ctx, "adapter/hermes/token")
 	if err != nil {
-		return nil, false, err
+		bindings.Wipe()
+		wipeRuntimeSecret(identityKey)
+		return nil, nil, false, err
 	}
 	defer wipeRuntimeSecret(token)
 	digest := sha256.Sum256(token)
 	grants = append(grants, broker.Grant{
-		TokenDigest: digest[:], AdapterID: "hermes", Mode: broker.IdentityDelegated, Source: "feishu", Route: route,
-		TenantID: connectionConfig.TenantID, AgentID: connectionConfig.AgentID, IncludeAgentShared: connectionConfig.IncludeAgentShared,
+		TokenDigest: digest[:], AdapterID: "hermes", Mode: broker.IdentityDelegated, Source: "feishu",
+		AllowedSpaceIDs: map[string]bool{
+			hermesRouting.OwnerSpaceID: true, hermesRouting.PrivateSpaceID: true, hermesRouting.GroupSpaceID: true,
+		},
 	})
-	return grants, true, nil
+	return router, grants, true, nil
 }
 
 func privateListener(address string) (net.Listener, error) {
@@ -254,6 +268,7 @@ func defaultInstallRequest() app.InstallRequest {
 	}
 	teamID := environmentDefault("MLINK_MEMORYCORE_TEAM_ID", "personal")
 	return app.InstallRequest{
+		OwnerSlug: username,
 		Connection: config.Connection{
 			ID:              environmentDefault("MLINK_CONNECTION_ID", "local"),
 			ProviderID:      "dev.mlink.tencentdb",
