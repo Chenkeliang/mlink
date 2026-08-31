@@ -69,6 +69,17 @@ func NewClient(config Config) (*Client, error) {
 }
 
 func (c *Client) post(ctx context.Context, path string, requestBody, responseData any) error {
+	return c.postWithOptionalUserKey(ctx, path, nil, requestBody, responseData)
+}
+
+func (c *Client) postWithUserKey(ctx context.Context, path string, userKey []byte, requestBody, responseData any) error {
+	if len(userKey) == 0 || bytes.ContainsAny(userKey, "\r\n") {
+		return errors.New("invalid TencentDB metadata user key")
+	}
+	return c.postWithOptionalUserKey(ctx, path, userKey, requestBody, responseData)
+}
+
+func (c *Client) postWithOptionalUserKey(ctx context.Context, path string, userKey []byte, requestBody, responseData any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -84,6 +95,9 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseDat
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-tdai-service-id", c.serviceID)
+	if len(userKey) != 0 {
+		req.Header.Set("x-tdai-user-key", string(userKey))
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
