@@ -383,6 +383,56 @@ func (runtime *runtimeApplication) ApplyUninstall(ctx context.Context, planID st
 	return service.ApplyUninstall(ctx, planID, request)
 }
 
+func (runtime *runtimeApplication) PlanIdentityBind(ctx context.Context, request app.IdentityBindRequest) (install.ChangeSet, error) {
+	return runtime.identityService(previewLedger{}).PlanIdentityBind(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyIdentityBind(ctx context.Context, planID string, request app.IdentityBindRequest) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.identityService(ledger).ApplyIdentityBind(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) PlanIdentityRebind(ctx context.Context, request app.IdentityRebindRequest) (install.ChangeSet, error) {
+	return runtime.identityService(previewLedger{}).PlanIdentityRebind(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyIdentityRebind(ctx context.Context, planID string, request app.IdentityRebindRequest) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.identityService(ledger).ApplyIdentityRebind(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) PlanIdentityRevoke(ctx context.Context, request app.IdentityRevokeRequest) (install.ChangeSet, error) {
+	return runtime.identityService(previewLedger{}).PlanIdentityRevoke(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyIdentityRevoke(ctx context.Context, planID string, request app.IdentityRevokeRequest) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.identityService(ledger).ApplyIdentityRevoke(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) IdentityList(ctx context.Context) ([]app.IdentityDescriptor, error) {
+	return runtime.identityService(previewLedger{}).IdentityList(ctx)
+}
+
+func (runtime *runtimeApplication) identityService(ledger install.Ledger) *app.Service {
+	service := runtime.baseService
+	service.Target = install.LocalTarget{}
+	service.Ledger = ledger
+	return &service
+}
+
 func (runtime *runtimeApplication) prepare(ctx context.Context, request app.InstallRequest, ledger install.Ledger) (*app.Service, app.InstallRequest, error) {
 	machine := request.HermesMachine
 	if machine == "" {

@@ -2,24 +2,28 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"mlink/internal/app"
+	"mlink/internal/config"
 	"mlink/internal/install"
 	"mlink/internal/journal"
 )
 
 type mutationOptions struct {
-	dryRun      bool
-	json        bool
-	yes         bool
-	applyPlan   string
-	tokenStdin  bool
-	positionals []string
+	dryRun              bool
+	json                bool
+	yes                 bool
+	applyPlan           string
+	tokenStdin          bool
+	installSecretsStdin bool
+	positionals         []string
 }
 
 func runInstall(ctx context.Context, args []string, deps Dependencies, input *bufio.Reader) int {
@@ -50,7 +54,49 @@ func runInstall(ctx context.Context, args []string, deps Dependencies, input *bu
 		}
 		request.SecretInputs[app.MemoryCoreTokenSecret] = token
 	}
+	if options.installSecretsStdin {
+		secretLine, err := readBoundedLine(input, 64*1024)
+		if err != nil || len(secretLine) == 0 {
+			wipeBytes(secretLine)
+			writeLine(deps.Stderr, "invalid MLink install secret input")
+			return 2
+		}
+		var envelope struct {
+			MemoryCoreToken string `json:"memorycore_token"`
+			OwnerBinding    struct {
+				Kind  string `json:"kind"`
+				Value string `json:"value"`
+			} `json:"owner_binding"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(secretLine))
+		decoder.DisallowUnknownFields()
+		decodeErr := decoder.Decode(&envelope)
+		if decodeErr == nil {
+			decodeErr = decoder.Decode(&struct{}{})
+			if errors.Is(decodeErr, io.EOF) {
+				decodeErr = nil
+			}
+		}
+		wipeBytes(secretLine)
+		if decodeErr != nil || envelope.MemoryCoreToken == "" || envelope.OwnerBinding.Value == "" {
+			writeLine(deps.Stderr, "invalid MLink install secret input")
+			return 2
+		}
+		slotToken := map[string]string{"union_id": "union", "user_id": "user", "open_id": "open"}[envelope.OwnerBinding.Kind]
+		if slotToken == "" {
+			return 2
+		}
+		request.SecretInputs[app.MemoryCoreTokenSecret] = []byte(envelope.MemoryCoreToken)
+		request.SecretInputs[app.OwnerBindingSecret] = []byte(envelope.OwnerBinding.Value)
+		request.OwnerBindingSlot = config.BindingRef{
+			ID: "owner-feishu-" + slotToken + "-1", Source: "feishu", Kind: envelope.OwnerBinding.Kind, PrincipalID: "owner",
+			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-" + slotToken + "-1", Status: config.BindingActive,
+		}
+		envelope.MemoryCoreToken = ""
+		envelope.OwnerBinding.Value = ""
+	}
 	defer wipeBytes(request.SecretInputs[app.MemoryCoreTokenSecret])
+	defer wipeBytes(request.SecretInputs[app.OwnerBindingSecret])
 
 	plan, err := deps.App.PlanInstall(ctx, request)
 	if err != nil {
@@ -109,6 +155,11 @@ func parseMutationOptions(args []string, allowToken bool) (mutationOptions, erro
 				return mutationOptions{}, errors.New("token input is not valid for this command")
 			}
 			options.tokenStdin = true
+		case "--install-secrets-stdin":
+			if !allowToken {
+				return mutationOptions{}, errors.New("install secret input is not valid for this command")
+			}
+			options.installSecretsStdin = true
 		case "--apply-plan":
 			index++
 			if index >= len(args) || strings.HasPrefix(args[index], "--") {
@@ -124,6 +175,9 @@ func parseMutationOptions(args []string, allowToken bool) (mutationOptions, erro
 	}
 	if options.dryRun && options.applyPlan != "" {
 		return mutationOptions{}, errors.New("dry-run cannot apply")
+	}
+	if options.tokenStdin && options.installSecretsStdin {
+		return mutationOptions{}, errors.New("install secret inputs are mutually exclusive")
 	}
 	return options, nil
 }

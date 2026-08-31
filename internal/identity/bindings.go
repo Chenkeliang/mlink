@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 )
 
@@ -61,6 +62,15 @@ func bindingDigest(key []byte, source string, value []byte) []byte {
 	_, _ = mac.Write([]byte("binding\x00" + source + "\x00"))
 	_, _ = mac.Write(value)
 	return mac.Sum(nil)
+}
+
+func BindingFingerprint(key []byte, source string, value []byte) string {
+	if len(key) != 32 || source == "" || len(value) == 0 {
+		return ""
+	}
+	digest := bindingDigest(key, source, value)
+	defer wipeDigest(digest)
+	return "bind_" + hex.EncodeToString(digest[:8])
 }
 
 func wipeDigest(value []byte) {
