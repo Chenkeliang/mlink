@@ -15,6 +15,8 @@ type Paths struct {
 	Run              string
 	Socket           string
 	Backups          string
+	PanelHome        string
+	PanelRegistry    string
 }
 
 // FromHome derives MLink's paths without reading process-global state.
@@ -24,6 +26,7 @@ func FromHome(home, executable string) (Paths, error) {
 	}
 	mlinkHome := filepath.Join(home, ".mlink")
 	run := filepath.Join(mlinkHome, "run")
+	panelHome := filepath.Join(mlinkHome, "panel")
 	return Paths{
 		Home:             mlinkHome,
 		Binary:           filepath.Join(home, ".local", "bin", "mlink"),
@@ -33,5 +36,7 @@ func FromHome(home, executable string) (Paths, error) {
 		Run:              run,
 		Socket:           filepath.Join(run, "mlink.sock"),
 		Backups:          filepath.Join(mlinkHome, "backups"),
+		PanelHome:        panelHome,
+		PanelRegistry:    filepath.Join(panelHome, "metadata-instances.json"),
 	}, nil
 }

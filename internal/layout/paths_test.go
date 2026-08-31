@@ -19,6 +19,9 @@ func TestFromHomeUsesStableUserPaths(t *testing.T) {
 	if p.SourceExecutable != "/tmp/mlink-build" {
 		t.Fatalf("SourceExecutable = %q", p.SourceExecutable)
 	}
+	if p.PanelHome != "/Users/test/.mlink/panel" || p.PanelRegistry != "/Users/test/.mlink/panel/metadata-instances.json" {
+		t.Fatalf("Panel paths = %q/%q", p.PanelHome, p.PanelRegistry)
+	}
 }
 
 func TestFromHomeRejectsRelativeInputs(t *testing.T) {
