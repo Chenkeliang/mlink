@@ -26,8 +26,8 @@ func TestOpenAppliesMigrationAndEnablesWAL(t *testing.T) {
 	if err := store.db.QueryRow("SELECT max(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("migration version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("migration version = %d, want 4", version)
 	}
 	var mode string
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
