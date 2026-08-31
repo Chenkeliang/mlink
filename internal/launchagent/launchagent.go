@@ -26,12 +26,6 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <string>{{xml .Binary}}</string>
     <string>broker</string>
     <string>serve</string>
-    <string>--config</string>
-    <string>{{xml .Config}}</string>
-    <string>--journal</string>
-    <string>{{xml .Journal}}</string>
-    <string>--socket</string>
-    <string>{{xml .Socket}}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -125,15 +119,12 @@ func renderPlist(paths layout.Paths) ([]byte, error) {
 	}
 	var output bytes.Buffer
 	err = tmpl.Execute(&output, struct {
-		Label   string
-		Binary  string
-		Config  string
-		Journal string
-		Socket  string
-		Stdout  string
-		Stderr  string
+		Label  string
+		Binary string
+		Stdout string
+		Stderr string
 	}{
-		Label: label, Binary: paths.Binary, Config: paths.Config, Journal: paths.Journal, Socket: paths.Socket,
+		Label: label, Binary: paths.Binary,
 		Stdout: filepath.Join(paths.Home, "logs", "broker.log"),
 		Stderr: filepath.Join(paths.Home, "logs", "broker.error.log"),
 	})

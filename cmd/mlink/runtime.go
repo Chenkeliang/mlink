@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -513,7 +514,11 @@ func (runtime *runtimeApplication) prepare(ctx context.Context, request app.Inst
 func deriveHermesGrant(memoryCoreToken []byte) []byte {
 	digest := hmac.New(sha256.New, memoryCoreToken)
 	_, _ = digest.Write([]byte("dev.mlink/hermes-broker-grant/v1"))
-	return digest.Sum(nil)
+	value := digest.Sum(nil)
+	encoded := make([]byte, base64.RawURLEncoding.EncodedLen(len(value)))
+	base64.RawURLEncoding.Encode(encoded, value)
+	wipeRuntimeSecret(value)
+	return encoded
 }
 
 func (runtime *runtimeApplication) openLedger(ctx context.Context) (*journal.Store, *journal.InstallationLedger, error) {

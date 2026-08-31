@@ -27,9 +27,14 @@ func TestPlanUsesInstalledBinaryAndDirectLaunchctlCommands(t *testing.T) {
 		t.Fatalf("plist resource = %#v", plist)
 	}
 	text := string(plist.Content)
-	for _, want := range []string{paths.Binary, "broker", "serve", paths.Config, paths.Journal, paths.Socket} {
+	for _, want := range []string{paths.Binary, "broker", "serve"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plist missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"--config", "--journal", "--socket", paths.Config, paths.Journal, paths.Socket} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("plist contains unsupported broker argument %q", forbidden)
 		}
 	}
 	if strings.Contains(text, paths.SourceExecutable) {

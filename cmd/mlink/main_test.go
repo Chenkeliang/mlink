@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"reflect"
@@ -113,8 +114,9 @@ func TestDeriveHermesGrantIsStableAndDomainSeparated(t *testing.T) {
 	first := deriveHermesGrant([]byte("memorycore-token"))
 	second := deriveHermesGrant([]byte("memorycore-token"))
 	different := deriveHermesGrant([]byte("other-memorycore-token"))
-	if len(first) != 32 {
-		t.Fatalf("grant length = %d, want 32", len(first))
+	decoded, err := base64.RawURLEncoding.DecodeString(string(first))
+	if err != nil || len(first) != 43 || len(decoded) != 32 {
+		t.Fatalf("grant encoding/length = %q/%d/%d, %v", first, len(first), len(decoded), err)
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("same MemoryCore token produced different Hermes grants")

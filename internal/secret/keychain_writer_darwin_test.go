@@ -4,6 +4,7 @@ package secret
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -34,20 +35,24 @@ func TestPromptedWriterAgainstTemporaryLoginKeychainItem(t *testing.T) {
 	t.Cleanup(func() {
 		_ = exec.Command("/usr/bin/security", "delete-generic-password", "-s", service, "-a", account).Run()
 	})
-	secret := []byte("scratch-secret-via-terminal")
+	secret := []byte{0x00, 0x01, '\n', '\r', 0x7f, 0x80, 0xff}
+	encoded := encodeKeychainSecret(secret)
+	defer wipeBytes(encoded)
 	args := []string{
 		"/usr/bin/security", "add-generic-password", "-U",
 		"-s", service, "-a", account, "-w",
 	}
-	if err := (promptedWriter{timeout: 5 * time.Second}).Write(context.Background(), args, secret); err != nil {
+	if err := (promptedWriter{timeout: 5 * time.Second}).Write(context.Background(), args, encoded); err != nil {
 		t.Fatal(err)
 	}
 	output, err := exec.Command(
 		"/usr/bin/security", "find-generic-password", "-s", service,
 		"-a", account, "-w",
 	).Output()
-	if err != nil || strings.TrimSpace(string(output)) != string(secret) {
-		t.Fatalf("read scratch secret: match=%t err=%v", strings.TrimSpace(string(output)) == string(secret), err)
+	stored := bytes.TrimSuffix(output, []byte{'\n'})
+	decoded, decodeErr := decodeKeychainSecret(stored)
+	if err != nil || decodeErr != nil || !bytes.Equal(decoded, secret) {
+		t.Fatalf("read scratch secret: match=%t read_err=%v decode_err=%v", bytes.Equal(decoded, secret), err, decodeErr)
 	}
 }
 

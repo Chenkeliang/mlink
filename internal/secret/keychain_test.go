@@ -68,11 +68,26 @@ func TestKeychainPutPassesSecretOnlyToProtectedWriter(t *testing.T) {
 	if !reflect.DeepEqual(call.args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", call.args, wantArgs)
 	}
-	if string(call.secret) != "actual-secret" {
-		t.Fatalf("secret = %q", call.secret)
+	if string(call.secret) == "actual-secret" || !strings.HasPrefix(string(call.secret), "mlink:v1:") {
+		t.Fatalf("encoded secret = %q", call.secret)
 	}
 	if strings.Contains(strings.Join(call.args, " "), string(secret)) {
 		t.Fatal("secret leaked into command arguments")
+	}
+}
+
+func TestKeychainRoundTripsBinarySecretThroughVersionedEncoding(t *testing.T) {
+	writer := &fakeSecretWriter{}
+	store := Keychain{Writer: writer}
+	want := []byte{0x00, 0x01, '\n', '\r', 0x7f, 0x80, 0xff}
+	if err := store.Put(context.Background(), "identity/hmac-key", want); err != nil {
+		t.Fatal(err)
+	}
+	encoded := append(append([]byte(nil), writer.calls[0].secret...), '\n')
+	store.Runner = &fakeRunner{output: encoded}
+	got, err := store.Get(context.Background(), "identity/hmac-key")
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("round trip = %x, %v", got, err)
 	}
 }
 
@@ -103,14 +118,18 @@ func TestKeychainGetAndDeleteUseAccountOnly(t *testing.T) {
 	}
 }
 
+func TestKeychainRejectsMalformedVersionedSecret(t *testing.T) {
+	store := Keychain{Runner: &fakeRunner{output: []byte("mlink:v1:not+base64\n")}}
+	if _, err := store.Get(context.Background(), "identity/hmac-key"); err == nil {
+		t.Fatal("Get() error = nil for malformed encoded secret")
+	}
+}
+
 func TestKeychainRejectsInvalidInputBeforeRunner(t *testing.T) {
 	writer := &fakeSecretWriter{}
 	store := Keychain{Writer: writer}
 	if err := store.Put(context.Background(), "", []byte("token")); err == nil {
 		t.Fatal("Put() error = nil for empty account")
-	}
-	if err := store.Put(context.Background(), "account", []byte("line-one\nline-two")); err == nil {
-		t.Fatal("Put() error = nil for multiline secret")
 	}
 	if len(writer.calls) != 0 {
 		t.Fatalf("writer calls = %d, want 0", len(writer.calls))
@@ -138,7 +157,7 @@ func TestKeychainBindingValueNeverAppearsInArgv(t *testing.T) {
 	if err := store.Put(context.Background(), "identity/binding/owner-feishu-union-1", value); err != nil {
 		t.Fatal(err)
 	}
-	if len(writer.calls) != 1 || string(writer.calls[0].secret) != "on_actual_binding" {
+	if len(writer.calls) != 1 || string(writer.calls[0].secret) == "on_actual_binding" || !strings.HasPrefix(string(writer.calls[0].secret), "mlink:v1:") {
 		t.Fatalf("calls = %#v", writer.calls)
 	}
 	if strings.Contains(strings.Join(writer.calls[0].args, " "), string(value)) {
