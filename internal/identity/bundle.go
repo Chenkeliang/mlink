@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -18,21 +19,28 @@ import (
 	"mlink/internal/config"
 )
 
-const bundleFormat = "mlink-identity-bundle/v1"
+const (
+	bundleFormat   = "mlink-identity-bundle/v1"
+	bundleFormatV2 = "mlink-identity-bundle/v2"
+)
 
 var ErrBundleAuthentication = errors.New("MLink identity bundle authentication failed")
 
 type BundleV1 struct {
-	SchemaVersion int                           `json:"schema_version"`
-	Principals    map[string]config.Principal   `json:"principals"`
-	Spaces        map[string]config.MemorySpace `json:"spaces"`
-	IdentityKey   []byte                        `json:"identity_key"`
-	Bindings      []BindingExport               `json:"bindings"`
-	CreatedAt     time.Time                     `json:"created_at"`
+	SchemaVersion   int                           `json:"schema_version"`
+	Principals      map[string]config.Principal   `json:"principals"`
+	Spaces          map[string]config.MemorySpace `json:"spaces"`
+	IdentityKey     []byte                        `json:"identity_key"`
+	AdminUserKey    []byte                        `json:"admin_user_key,omitempty"`
+	OwnerUserKey    []byte                        `json:"owner_user_key,omitempty"`
+	Bindings        []BindingExport               `json:"bindings"`
+	ControlPlane    *BundleControlPlane           `json:"control_plane,omitempty"`
+	PrincipalAgents []BundlePrincipalAgent        `json:"principal_agents,omitempty"`
+	CreatedAt       time.Time                     `json:"created_at"`
 }
 
 func (bundle BundleV1) String() string {
-	return fmt.Sprintf("BundleV1{SchemaVersion:%d Principals:%d Spaces:%d Bindings:%d CreatedAt:%s IdentityKey:<redacted>}", bundle.SchemaVersion, len(bundle.Principals), len(bundle.Spaces), len(bundle.Bindings), bundle.CreatedAt.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("BundleV1{SchemaVersion:%d Principals:%d Spaces:%d Bindings:%d PrincipalAgents:%d CreatedAt:%s IdentityKey:<redacted>}", bundle.SchemaVersion, len(bundle.Principals), len(bundle.Spaces), len(bundle.Bindings), len(bundle.PrincipalAgents), bundle.CreatedAt.UTC().Format(time.RFC3339))
 }
 
 func (bundle BundleV1) GoString() string { return bundle.String() }
@@ -43,6 +51,10 @@ func (bundle *BundleV1) Wipe() {
 	}
 	wipeDigest(bundle.IdentityKey)
 	bundle.IdentityKey = nil
+	wipeDigest(bundle.AdminUserKey)
+	bundle.AdminUserKey = nil
+	wipeDigest(bundle.OwnerUserKey)
+	bundle.OwnerUserKey = nil
 	for index := range bundle.Bindings {
 		bundle.Bindings[index].Wipe()
 	}
@@ -51,6 +63,29 @@ func (bundle *BundleV1) Wipe() {
 type BindingExport struct {
 	Ref   config.BindingRef `json:"ref"`
 	Value []byte            `json:"value"`
+}
+
+type BundleControlPlane struct {
+	InstallationID string `json:"installation_id"`
+	InstanceID     string `json:"instance_id"`
+	OwnerUserID    string `json:"owner_user_id"`
+	OwnerTeamID    string `json:"owner_team_id"`
+	OwnerAgentID   string `json:"owner_agent_id"`
+	OwnerAssetID   string `json:"owner_asset_id"`
+	PanelContainer string `json:"panel_container"`
+	PanelImage     string `json:"panel_image"`
+	State          string `json:"state"`
+}
+
+type BundlePrincipalAgent struct {
+	Fingerprint    string `json:"fingerprint"`
+	RouteKind      string `json:"route_kind"`
+	BackendUserID  string `json:"backend_user_id"`
+	BackendTeamID  string `json:"backend_team_id"`
+	BackendAgentID string `json:"backend_agent_id"`
+	BackendAssetID string `json:"backend_asset_id"`
+	DisplayLabel   string `json:"display_label"`
+	State          string `json:"state"`
 }
 
 func (binding BindingExport) String() string {
@@ -110,9 +145,13 @@ func EncryptBundle(bundle BundleV1, passphrase []byte, random io.Reader) ([]byte
 		return nil, err
 	}
 	defer wipeDigest(plaintext)
-	ciphertext := gcm.Seal(nil, nonce, plaintext, []byte(bundleFormat))
+	format := bundleFormat
+	if bundle.SchemaVersion == 2 {
+		format = bundleFormatV2
+	}
+	ciphertext := gcm.Seal(nil, nonce, plaintext, []byte(format))
 	envelope := encryptedEnvelope{
-		Format: bundleFormat, Salt: base64.RawStdEncoding.EncodeToString(salt),
+		Format: format, Salt: base64.RawStdEncoding.EncodeToString(salt),
 		Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
 	}
 	encoded, err := json.Marshal(envelope)
@@ -135,7 +174,7 @@ func DecryptBundle(encrypted, passphrase []byte) (BundleV1, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return BundleV1{}, errors.New("identity bundle contains multiple JSON values")
 	}
-	if envelope.Format != bundleFormat {
+	if envelope.Format != bundleFormat && envelope.Format != bundleFormatV2 {
 		return BundleV1{}, errors.New("unsupported identity bundle format")
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(envelope.Salt)
@@ -163,7 +202,7 @@ func DecryptBundle(encrypted, passphrase []byte) (BundleV1, error) {
 	if err != nil || len(nonce) != gcm.NonceSize() {
 		return BundleV1{}, ErrBundleAuthentication
 	}
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(bundleFormat))
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(envelope.Format))
 	if err != nil {
 		return BundleV1{}, ErrBundleAuthentication
 	}
@@ -234,8 +273,29 @@ func WriteBundleAtomic(path string, encrypted []byte) error {
 }
 
 func validateBundle(bundle BundleV1) error {
-	if bundle.SchemaVersion != 1 || len(bundle.IdentityKey) != 32 || len(bundle.Principals) == 0 || len(bundle.Spaces) == 0 || bundle.CreatedAt.IsZero() {
+	if bundle.SchemaVersion != 1 && bundle.SchemaVersion != 2 || len(bundle.IdentityKey) != 32 || len(bundle.Principals) == 0 || bundle.CreatedAt.IsZero() {
 		return errors.New("identity bundle fields are invalid")
+	}
+	if bundle.SchemaVersion == 1 && (len(bundle.Spaces) == 0 || bundle.ControlPlane != nil || len(bundle.PrincipalAgents) != 0) {
+		return errors.New("identity bundle v1 fields are invalid")
+	}
+	if bundle.SchemaVersion == 2 {
+		if len(bundle.Spaces) != 0 || bundle.ControlPlane == nil || len(bundle.AdminUserKey) == 0 || len(bundle.OwnerUserKey) == 0 || bundle.ControlPlane.InstallationID == "" ||
+			bundle.ControlPlane.OwnerUserID == "" || bundle.ControlPlane.OwnerTeamID == "" || bundle.ControlPlane.OwnerAgentID == "" || bundle.ControlPlane.OwnerAssetID == "" {
+			return errors.New("identity bundle v2 control plane is invalid")
+		}
+		seenFingerprints := map[string]BundlePrincipalAgent{}
+		for _, mapping := range bundle.PrincipalAgents {
+			if mapping.Fingerprint == "" || mapping.BackendUserID != bundle.ControlPlane.OwnerUserID ||
+				mapping.BackendTeamID != bundle.ControlPlane.OwnerTeamID || mapping.BackendAgentID == "" || mapping.BackendAssetID == "" ||
+				(mapping.RouteKind != "hermes-private" && mapping.RouteKind != "hermes-group") || strings.Contains(strings.ToLower(mapping.DisplayLabel), "ou_") || strings.Contains(strings.ToLower(mapping.DisplayLabel), "oc_") {
+				return errors.New("identity bundle v2 principal Agent is invalid")
+			}
+			if previous, exists := seenFingerprints[mapping.Fingerprint]; exists && (previous.BackendAgentID != mapping.BackendAgentID || previous.RouteKind != mapping.RouteKind) {
+				return errors.New("identity bundle v2 principal Agent collision")
+			}
+			seenFingerprints[mapping.Fingerprint] = mapping
+		}
 	}
 	for id, principal := range bundle.Principals {
 		if id != principal.ID || principal.ID == "" || principal.CanonicalUserID == "" || principal.Kind != config.PrincipalPerson {

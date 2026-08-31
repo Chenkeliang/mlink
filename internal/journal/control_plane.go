@@ -18,26 +18,26 @@ var (
 )
 
 type ControlPlaneState struct {
-	InstallationID string
-	InstanceID     string
-	OwnerUserID    string
-	OwnerTeamID    string
-	OwnerAgentID   string
-	OwnerAssetID   string
-	PanelContainer string
-	PanelImage     string
-	State          string
+	InstallationID string `json:"installation_id"`
+	InstanceID     string `json:"instance_id"`
+	OwnerUserID    string `json:"owner_user_id"`
+	OwnerTeamID    string `json:"owner_team_id"`
+	OwnerAgentID   string `json:"owner_agent_id"`
+	OwnerAssetID   string `json:"owner_asset_id"`
+	PanelContainer string `json:"panel_container"`
+	PanelImage     string `json:"panel_image"`
+	State          string `json:"state"`
 }
 
 type PrincipalAgent struct {
-	Fingerprint    string
-	RouteKind      string
-	BackendUserID  string
-	BackendTeamID  string
-	BackendAgentID string
-	BackendAssetID string
-	DisplayLabel   string
-	State          string
+	Fingerprint    string `json:"fingerprint"`
+	RouteKind      string `json:"route_kind"`
+	BackendUserID  string `json:"backend_user_id"`
+	BackendTeamID  string `json:"backend_team_id"`
+	BackendAgentID string `json:"backend_agent_id"`
+	BackendAssetID string `json:"backend_asset_id"`
+	DisplayLabel   string `json:"display_label"`
+	State          string `json:"state"`
 }
 
 func (s *Store) SaveControlPlane(ctx context.Context, value ControlPlaneState) error {

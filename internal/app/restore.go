@@ -75,7 +75,20 @@ func (service *Service) restoreResource(ctx context.Context, backup install.Back
 		return install.DesiredResource{}, false, err
 	}
 	ownerID := "dev.mlink.restore"
-	if currentExists && contentHash(current) == backup.ProposedHash {
+	ownedByLaterPlan := false
+	if currentExists {
+		if reader, ok := service.Ledger.(ownedResourceReader); ok {
+			owned, ownedErr := reader.ListOwned(ctx)
+			if ownedErr != nil {
+				return install.DesiredResource{}, false, ownedErr
+			}
+			currentHash := contentHash(current)
+			for _, resource := range owned {
+				ownedByLaterPlan = ownedByLaterPlan || resource.Target == backup.Target && resource.PostApplyHash == currentHash
+			}
+		}
+	}
+	if currentExists && (contentHash(current) == backup.ProposedHash || ownedByLaterPlan) {
 		if backup.Existed {
 			return install.DesiredResource{
 				OwnerID: ownerID, Target: backup.Target, Content: append([]byte(nil), backup.Content...), Mode: backup.Mode,

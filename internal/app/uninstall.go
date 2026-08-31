@@ -11,9 +11,11 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/launchagent"
+	"mlink/internal/panel"
 )
 
 type latestBackupReader interface {
@@ -57,6 +59,13 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 	}
 	full := isFullAgentSet(agents)
 	resources := make([]install.DesiredResource, 0, len(backups)+1)
+	var activeConfiguration config.Config
+	if full {
+		activeConfiguration, err = service.activeConfiguration(ctx)
+		if err != nil {
+			return install.ChangeSet{}, err
+		}
+	}
 	if full && containsLaunchAgentBackup(backups) {
 		unload, err := launchagent.PlanUnload(service.Paths, service.UID)
 		if err != nil {
@@ -75,6 +84,9 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 		if include {
 			resources = append(resources, resource)
 		}
+	}
+	if full && activeConfiguration.SchemaVersion == 3 {
+		resources = append(resources, panelUninstallResources(service.Paths.PanelRegistry)...)
 	}
 	return install.BuildChangeSet(service.Target, resources)
 }
@@ -110,6 +122,23 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 		return err
 	}
 	if isFullAgentSet(agents) {
+		if service.ControlPlaneStates != nil {
+			if err := service.ControlPlaneStates.MarkControlPlaneState(ctx, "inactive"); err != nil {
+				return err
+			}
+		}
+		if service.PrincipalAgentStates != nil {
+			mappings, err := service.PrincipalAgentStates.ListPrincipalAgents(ctx)
+			if err != nil {
+				return err
+			}
+			for _, mapping := range mappings {
+				mapping.State = "inactive"
+				if err := service.PrincipalAgentStates.PutPrincipalAgent(ctx, mapping); err != nil {
+					return err
+				}
+			}
+		}
 		if active, ok := service.Ledger.(ActiveInstallStore); ok {
 			if err := active.MarkInstallRemoved(ctx); err != nil {
 				return err
@@ -124,6 +153,9 @@ func (service *Service) removeInstallSecrets(ctx context.Context, configuration 
 		{account: "connection/" + configuration.ActiveConnectionID + "/token"},
 		{account: "identity/hmac-key"},
 		{account: "adapter/hermes/token"},
+	}
+	if configuration.SchemaVersion == 3 {
+		values = append(values, managedSecret{account: controlplane.AdminUserKeyAccount}, managedSecret{account: controlplane.OwnerUserKeyAccount})
 	}
 	for _, binding := range configuration.Bindings {
 		const prefix = "keychain://dev.mlink/"
@@ -157,6 +189,28 @@ func (service *Service) removeInstallSecrets(ctx context.Context, configuration 
 		values[index].written = true
 	}
 	return values, nil
+}
+
+func panelUninstallResources(registryPath string) []install.DesiredResource {
+	run := []string{
+		"docker", "run", "-d", "--name", panel.ContainerName, "--restart", "unless-stopped",
+		"--label", "dev.mlink.component=memory-panel", "--add-host", "host.docker.internal:host-gateway",
+		"-p", "127.0.0.1:8125:8123", "-e", "UI_DIST_DIR=./web/dist",
+		"-e", "METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json", "-e", "KNOWLEDGE_LLM_BINDING_SYNC=false",
+		"-e", "LOG_LEVEL=info", "-e", "LOG_FORMAT=json",
+		"-v", registryPath + ":/app/config/metadata-instances.json:ro", panel.ImageName,
+	}
+	return []install.DesiredResource{
+		{
+			OwnerID: "dev.mlink.panel.container", Target: "service:remove:" + panel.ContainerName, Action: install.ActionService,
+			Command: []string{"docker", "rm", "-f", panel.ContainerName}, RollbackCommand: run,
+			SemanticDiff: []install.SemanticDiff{{Path: "panel:container", Before: "MLink-owned", After: "removed; backend metadata retained"}},
+		},
+		{
+			OwnerID: "dev.mlink.panel.registry", Target: registryPath, Action: install.ActionRemoveOwned,
+			SemanticDiff: []install.SemanticDiff{{Path: "panel:registry", Before: "protected local credential registry", After: "removed"}},
+		},
+	}
 }
 
 func isFullAgentSet(agents []Agent) bool {

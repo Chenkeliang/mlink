@@ -63,21 +63,28 @@ type ControlPlaneStateStore interface {
 	MarkControlPlaneState(context.Context, string) error
 }
 
+type PrincipalAgentStateStore interface {
+	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
+	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
+	ListPrincipalAgents(context.Context) ([]journal.PrincipalAgent, error)
+}
+
 type Service struct {
-	Paths               layout.Paths
-	UID                 int
-	Target              install.Target
-	Ledger              install.Ledger
-	Secrets             secret.Store
-	BlockingEvents      BlockingEventStore
-	HermesEndpoint      string
-	HermesListenAddress string
-	HermesGrantToken    []byte
-	IdentityKey         []byte
-	ControlPlaneStates  ControlPlaneStateStore
-	ControlProvisioner  *controlplane.Service
-	ControlRequest      controlplane.ProvisionRequest
-	PanelRuntime        *panel.Runtime
-	PanelDesired        panel.Desired
-	PanelConnectionID   string
+	Paths                layout.Paths
+	UID                  int
+	Target               install.Target
+	Ledger               install.Ledger
+	Secrets              secret.Store
+	BlockingEvents       BlockingEventStore
+	HermesEndpoint       string
+	HermesListenAddress  string
+	HermesGrantToken     []byte
+	IdentityKey          []byte
+	ControlPlaneStates   ControlPlaneStateStore
+	ControlProvisioner   *controlplane.Service
+	ControlRequest       controlplane.ProvisionRequest
+	PanelRuntime         *panel.Runtime
+	PanelDesired         panel.Desired
+	PanelConnectionID    string
+	PrincipalAgentStates PrincipalAgentStateStore
 }

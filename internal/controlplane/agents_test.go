@@ -191,10 +191,15 @@ func TestAgentProvisionerReconcilesRemoteMarkerBeforeCreate(t *testing.T) {
 		AssetID: assetID, TeamID: state.OwnerTeamID, OwnerUserID: state.OwnerUserID, AssetType: "chat_memory", Status: "approved",
 	}}}
 	store := fixtureAgentStore()
+	store.mappings[intent.Fingerprint] = journal.PrincipalAgent{
+		Fingerprint: intent.Fingerprint, RouteKind: intent.RouteKind, BackendUserID: state.OwnerUserID,
+		BackendTeamID: state.OwnerTeamID, BackendAgentID: agent.AgentID, BackendAssetID: assetID,
+		DisplayLabel: intent.DisplayLabel, State: "provisioning",
+	}
 	provisioner := fixtureAgentProvisioner(store, metadata)
 
 	got, err := provisioner.ResolveOrCreate(context.Background(), intent)
-	if err != nil || got.BackendAgentID != "agt-remote" || metadata.createCalls != 0 || store.putCalls != 1 {
+	if err != nil || got.BackendAgentID != "agt-remote" || got.State != "active" || metadata.createCalls != 0 || store.putCalls != 1 {
 		t.Fatalf("mapping/create/puts = %#v/%d/%d, %v", got, metadata.createCalls, store.putCalls, err)
 	}
 }

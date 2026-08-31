@@ -14,8 +14,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/identity"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 )
 
 var ErrIdentityMutationConflict = errors.New("MLink identity mutation conflicts with current state")
@@ -218,6 +220,35 @@ func (service *Service) ExportIdentity(ctx context.Context, passphrase []byte, r
 		SchemaVersion: 1, Principals: clonePrincipals(configuration.Principals), Spaces: cloneSpaces(configuration.Spaces),
 		IdentityKey: append([]byte(nil), identityKey...), Bindings: exported, CreatedAt: time.Now().UTC(),
 	}
+	if configuration.SchemaVersion == 3 {
+		if service.ControlPlaneStates == nil || service.PrincipalAgentStates == nil {
+			return nil, errors.New("control-plane identity export state is unavailable")
+		}
+		state, err := service.ControlPlaneStates.LoadControlPlane(ctx)
+		if err != nil {
+			return nil, err
+		}
+		mappings, err := service.PrincipalAgentStates.ListPrincipalAgents(ctx)
+		if err != nil {
+			return nil, err
+		}
+		bundle.SchemaVersion = 2
+		bundle.Spaces = nil
+		adminKey, err := service.Secrets.Get(ctx, controlplane.AdminUserKeyAccount)
+		if err != nil {
+			return nil, err
+		}
+		defer wipe(adminKey)
+		ownerKey, err := service.Secrets.Get(ctx, controlplane.OwnerUserKeyAccount)
+		if err != nil {
+			return nil, err
+		}
+		defer wipe(ownerKey)
+		bundle.AdminUserKey = append([]byte(nil), adminKey...)
+		bundle.OwnerUserKey = append([]byte(nil), ownerKey...)
+		bundle.ControlPlane = bundleControlPlane(state)
+		bundle.PrincipalAgents = bundlePrincipalAgents(mappings)
+	}
 	defer bundle.Wipe()
 	if randomSource == nil {
 		randomSource = rand.Reader
@@ -246,7 +277,32 @@ func (service *Service) PlanIdentityImport(ctx context.Context, bundle identity.
 		bindings[binding.Ref.ID] = binding.Ref
 	}
 	configuration.Principals = clonePrincipals(bundle.Principals)
-	configuration.Spaces = cloneSpaces(bundle.Spaces)
+	if bundle.SchemaVersion == 1 {
+		if configuration.SchemaVersion != 2 {
+			return install.ChangeSet{}, ErrIdentityImportConflict
+		}
+		configuration.Spaces = cloneSpaces(bundle.Spaces)
+	} else {
+		if configuration.SchemaVersion != 3 || configuration.ControlPlane == nil || service.ControlPlaneStates == nil || service.PrincipalAgentStates == nil ||
+			bundle.ControlPlane.OwnerUserID != configuration.ControlPlane.OwnerUserID || bundle.ControlPlane.OwnerTeamID != configuration.ControlPlane.OwnerTeamID ||
+			bundle.ControlPlane.OwnerAgentID != configuration.ControlPlane.OwnerAgentID || bundle.ControlPlane.OwnerAssetID != configuration.ControlPlane.OwnerAssetID {
+			return install.ChangeSet{}, ErrIdentityImportConflict
+		}
+		currentMappings, err := service.PrincipalAgentStates.ListPrincipalAgents(ctx)
+		if err != nil {
+			return install.ChangeSet{}, err
+		}
+		existing := make(map[string]journal.PrincipalAgent, len(currentMappings))
+		for _, mapping := range currentMappings {
+			existing[mapping.Fingerprint] = mapping
+		}
+		for _, incoming := range bundle.PrincipalAgents {
+			if previous, ok := existing[incoming.Fingerprint]; ok && (previous.BackendAgentID != incoming.BackendAgentID || previous.RouteKind != incoming.RouteKind) {
+				return install.ChangeSet{}, ErrIdentityImportConflict
+			}
+		}
+		configuration.Spaces = nil
+	}
 	configuration.Bindings = bindings
 	if err := config.Validate(configuration); err != nil {
 		return install.ChangeSet{}, ErrIdentityImportConflict
@@ -279,6 +335,10 @@ func (service *Service) ApplyIdentityImport(ctx context.Context, planID string, 
 		return err
 	}
 	desired := map[string][]byte{"identity/hmac-key": append([]byte(nil), bundle.IdentityKey...)}
+	if bundle.SchemaVersion == 2 {
+		desired[controlplane.AdminUserKeyAccount] = append([]byte(nil), bundle.AdminUserKey...)
+		desired[controlplane.OwnerUserKeyAccount] = append([]byte(nil), bundle.OwnerUserKey...)
+	}
 	for _, binding := range bundle.Bindings {
 		account, err := identity.BindingAccount(binding.Ref.ID)
 		if err != nil {
@@ -320,7 +380,39 @@ func (service *Service) ApplyIdentityImport(ctx context.Context, planID string, 
 	if err := install.NewTransaction(service.Target, service.Ledger).Apply(ctx, plan); err != nil {
 		return errors.Join(err, service.restoreManagedSecrets(ctx, values))
 	}
+	if bundle.SchemaVersion == 2 {
+		for _, incoming := range bundle.PrincipalAgents {
+			mapping := journal.PrincipalAgent{
+				Fingerprint: incoming.Fingerprint, RouteKind: incoming.RouteKind, BackendUserID: incoming.BackendUserID,
+				BackendTeamID: incoming.BackendTeamID, BackendAgentID: incoming.BackendAgentID, BackendAssetID: incoming.BackendAssetID,
+				DisplayLabel: incoming.DisplayLabel, State: "provisioning",
+			}
+			if err := service.PrincipalAgentStates.PutPrincipalAgent(ctx, mapping); err != nil {
+				return fmt.Errorf("stage imported principal Agent for reconciliation: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+func bundleControlPlane(state journal.ControlPlaneState) *identity.BundleControlPlane {
+	return &identity.BundleControlPlane{
+		InstallationID: state.InstallationID, InstanceID: state.InstanceID, OwnerUserID: state.OwnerUserID,
+		OwnerTeamID: state.OwnerTeamID, OwnerAgentID: state.OwnerAgentID, OwnerAssetID: state.OwnerAssetID,
+		PanelContainer: state.PanelContainer, PanelImage: state.PanelImage, State: state.State,
+	}
+}
+
+func bundlePrincipalAgents(values []journal.PrincipalAgent) []identity.BundlePrincipalAgent {
+	result := make([]identity.BundlePrincipalAgent, 0, len(values))
+	for _, value := range values {
+		result = append(result, identity.BundlePrincipalAgent{
+			Fingerprint: value.Fingerprint, RouteKind: value.RouteKind, BackendUserID: value.BackendUserID,
+			BackendTeamID: value.BackendTeamID, BackendAgentID: value.BackendAgentID, BackendAssetID: value.BackendAssetID,
+			DisplayLabel: value.DisplayLabel, State: value.State,
+		})
+	}
+	return result
 }
 
 func clonePrincipals(input map[string]config.Principal) map[string]config.Principal {

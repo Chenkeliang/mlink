@@ -425,6 +425,8 @@ func (runtime *runtimeApplication) PlanUninstall(ctx context.Context, request ap
 		return install.ChangeSet{}, err
 	}
 	service.BlockingEvents = store
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
 	return service.PlanUninstall(ctx, request)
 }
 
@@ -441,6 +443,8 @@ func (runtime *runtimeApplication) ApplyUninstall(ctx context.Context, planID st
 		return err
 	}
 	service.BlockingEvents = store
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
 	return service.ApplyUninstall(ctx, planID, request)
 }
 
@@ -563,6 +567,7 @@ func (runtime *runtimeApplication) controlPanelService(ctx context.Context, writ
 		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: ledger, Secrets: keychain,
 		ControlPlaneStates: store, ControlProvisioner: controlService, ControlRequest: provisionRequest,
 		PanelRuntime: panelRuntime, PanelDesired: desired, PanelConnectionID: configuration.ActiveConnectionID,
+		PrincipalAgentStates: store,
 	}, closeService, nil
 }
 
@@ -652,11 +657,27 @@ func (runtime *runtimeApplication) DetectIdentityCandidates(ctx context.Context)
 }
 
 func (runtime *runtimeApplication) ExportIdentity(ctx context.Context, passphrase []byte) ([]byte, error) {
-	return runtime.identityService(previewLedger{}).ExportIdentity(ctx, passphrase, rand.Reader)
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	service := runtime.identityService(previewLedger{})
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
+	return service.ExportIdentity(ctx, passphrase, rand.Reader)
 }
 
 func (runtime *runtimeApplication) PlanIdentityImport(ctx context.Context, bundle identity.BundleV1) (install.ChangeSet, error) {
-	return runtime.identityService(previewLedger{}).PlanIdentityImport(ctx, bundle)
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer store.Close()
+	service := runtime.identityService(previewLedger{})
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
+	return service.PlanIdentityImport(ctx, bundle)
 }
 
 func (runtime *runtimeApplication) ApplyIdentityImport(ctx context.Context, planID string, bundle identity.BundleV1) error {
@@ -665,7 +686,10 @@ func (runtime *runtimeApplication) ApplyIdentityImport(ctx context.Context, plan
 		return err
 	}
 	defer store.Close()
-	return runtime.identityService(ledger).ApplyIdentityImport(ctx, planID, bundle)
+	service := runtime.identityService(ledger)
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
+	return service.ApplyIdentityImport(ctx, planID, bundle)
 }
 
 func (runtime *runtimeApplication) identityService(ledger install.Ledger) *app.Service {

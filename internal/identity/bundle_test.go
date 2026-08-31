@@ -74,6 +74,40 @@ func TestBundleFormattingRedactsIdentityMaterial(t *testing.T) {
 	}
 }
 
+func TestControlPlaneBundleRoundTripsGeneratedIDsAndMappings(t *testing.T) {
+	bundle := fixtureBundle()
+	bundle.SchemaVersion = 2
+	bundle.Spaces = nil
+	bundle.Principals["owner"] = config.Principal{ID: "owner", CanonicalUserID: "usr-owner-generated", Kind: config.PrincipalPerson}
+	bundle.ControlPlane = &BundleControlPlane{
+		InstallationID: "installation-1", InstanceID: "default", OwnerUserID: "usr-owner-generated",
+		OwnerTeamID: "team-owner-generated", OwnerAgentID: "agt-owner-generated",
+		OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", PanelContainer: "mlink-memory-panel",
+		PanelImage: "mlink-memory-panel:a5dcbe6", State: "active",
+	}
+	bundle.AdminUserKey = []byte("admin-key")
+	bundle.OwnerUserKey = []byte("owner-key")
+	bundle.PrincipalAgents = []BundlePrincipalAgent{{
+		Fingerprint: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaa", RouteKind: "hermes-private", BackendUserID: "usr-owner-generated",
+		BackendTeamID: "team-owner-generated", BackendAgentID: "agt-private", BackendAssetID: "chat_memory-team-owner-generated-agt-private",
+		DisplayLabel: "Feishu DM", State: "active",
+	}}
+	encrypted, err := EncryptBundle(bundle, []byte("passphrase-12"), bytes.NewReader(bytes.Repeat([]byte{0x22}, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecryptBundle(encrypted, []byte("passphrase-12"))
+	if err != nil || !reflect.DeepEqual(got, bundle) {
+		t.Fatalf("round trip = %#v, %v", got, err)
+	}
+	plaintext, _ := json.Marshal(got)
+	for _, forbidden := range []string{"on_raw", "oc_raw", "owner-key", "admin-key"} {
+		if strings.Contains(string(plaintext), forbidden) {
+			t.Fatalf("bundle leaked %q: %s", forbidden, plaintext)
+		}
+	}
+}
+
 func fixtureBundle() BundleV1 {
 	return BundleV1{
 		SchemaVersion: 1,

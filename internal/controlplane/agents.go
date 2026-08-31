@@ -105,10 +105,12 @@ func (provisioner *AgentProvisioner) ResolveOrCreate(ctx context.Context, intent
 
 func (provisioner *AgentProvisioner) resolveOrCreate(ctx context.Context, intent PrincipalIntent) (journal.PrincipalAgent, error) {
 	if existing, err := provisioner.Store.GetPrincipalAgent(ctx, intent.Fingerprint); err == nil {
-		if existing.RouteKind != intent.RouteKind || existing.State != "active" {
+		if existing.RouteKind != intent.RouteKind {
 			return journal.PrincipalAgent{}, errors.New("existing principal Agent mapping conflicts with requested route")
 		}
-		return existing, nil
+		if existing.State == "active" {
+			return existing, nil
+		}
 	} else if !errors.Is(err, journal.ErrPrincipalAgentNotFound) {
 		return journal.PrincipalAgent{}, fmt.Errorf("load principal Agent mapping: %w", err)
 	}

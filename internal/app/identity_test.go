@@ -10,7 +10,35 @@ import (
 	"mlink/internal/config"
 	"mlink/internal/identity"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 )
+
+type identityControlStore struct {
+	state    journal.ControlPlaneState
+	mappings map[string]journal.PrincipalAgent
+}
+
+func (store *identityControlStore) LoadControlPlane(context.Context) (journal.ControlPlaneState, error) {
+	return store.state, nil
+}
+func (store *identityControlStore) MarkControlPlaneState(_ context.Context, state string) error {
+	store.state.State = state
+	return nil
+}
+func (store *identityControlStore) GetPrincipalAgent(_ context.Context, fingerprint string) (journal.PrincipalAgent, error) {
+	return store.mappings[fingerprint], nil
+}
+func (store *identityControlStore) PutPrincipalAgent(_ context.Context, mapping journal.PrincipalAgent) error {
+	store.mappings[mapping.Fingerprint] = mapping
+	return nil
+}
+func (store *identityControlStore) ListPrincipalAgents(context.Context) ([]journal.PrincipalAgent, error) {
+	result := make([]journal.PrincipalAgent, 0, len(store.mappings))
+	for _, mapping := range store.mappings {
+		result = append(result, mapping)
+	}
+	return result, nil
+}
 
 func TestIdentityBindPreviewDoesNotWriteOrExposeValue(t *testing.T) {
 	service, _, secrets := installedIdentityFixture(t)
@@ -60,6 +88,58 @@ func TestIdentityExportRoundTripPreservesOwnerAndBinding(t *testing.T) {
 	defer bundle.Wipe()
 	if bundle.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(bundle.Bindings) != 1 || string(bundle.Bindings[0].Value) != "on_owner" {
 		t.Fatal("exported identity does not match installed owner")
+	}
+}
+
+func TestIdentityExportV2IncludesGeneratedControlPlaneAndMappings(t *testing.T) {
+	service, _, secrets := installedIdentityFixture(t)
+	secrets.values["control/tencentdb/admin-user-key"] = []byte("admin-key")
+	secrets.values["control/tencentdb/owner-user-key"] = []byte("owner-key")
+	state := journal.ControlPlaneState{
+		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated",
+		PanelContainer: "mlink-memory-panel", PanelImage: "mlink-memory-panel:a5dcbe6", State: "provisioned",
+	}
+	store := &identityControlStore{state: state, mappings: map[string]journal.PrincipalAgent{
+		"prn_aaaaaaaaaaaaaaaaaaaaaaaaaa": {
+			Fingerprint: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaa", RouteKind: "hermes-private", BackendUserID: state.OwnerUserID,
+			BackendTeamID: state.OwnerTeamID, BackendAgentID: "agt-private", BackendAssetID: "chat_memory-team-owner-generated-agt-private",
+			DisplayLabel: "Feishu DM", State: "active",
+		},
+	}}
+	service.ControlPlaneStates = store
+	service.PrincipalAgentStates = store
+	plan, err := service.PlanControlPlaneCutover(context.Background(), ControlPlaneCutoverRequest{DynamicAgentLimit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyControlPlaneCutover(context.Background(), plan.PlanID, ControlPlaneCutoverRequest{DynamicAgentLimit: 500}); err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := service.ExportIdentity(context.Background(), []byte("passphrase-12"), bytes.NewReader(bytes.Repeat([]byte{0x41}, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := identity.DecryptBundle(encrypted, []byte("passphrase-12"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Wipe()
+	if bundle.SchemaVersion != 2 || bundle.ControlPlane.OwnerAgentID != state.OwnerAgentID || len(bundle.PrincipalAgents) != 1 || len(bundle.Spaces) != 0 {
+		t.Fatalf("bundle = %#v", bundle)
+	}
+	importPlan, err := service.PlanIdentityImport(context.Background(), bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyIdentityImport(context.Background(), importPlan.PlanID, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.mappings["prn_aaaaaaaaaaaaaaaaaaaaaaaaaa"].State; got != "provisioning" {
+		t.Fatalf("imported mapping state = %q, want reconciliation", got)
+	}
+	if string(secrets.values["control/tencentdb/owner-user-key"]) != "owner-key" {
+		t.Fatal("Owner key was not restored from encrypted bundle")
 	}
 }
 
