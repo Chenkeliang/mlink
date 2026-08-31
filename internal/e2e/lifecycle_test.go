@@ -192,7 +192,7 @@ func fixture(t *testing.T) (*app.Service, *target, app.InstallRequest) {
 		paths.SourceExecutable:          {content: []byte("candidate-binary"), mode: 0o700},
 		"/Users/test/.codex/hooks.json": {content: []byte("{\n  \"custom\": true\n}\n"), mode: 0o600},
 		"/home/test/.hermes/config.yaml": {
-			content: []byte("model:\n  provider: subscription\n  base_url: https://models.example.invalid\nmemory:\n  memory_enabled: true\n  user_profile_enabled: true\n  provider: hy-memory\nagent:\n  disabled_toolsets:\n    - browser\n"),
+			content: []byte("group_sessions_per_user: true\nmodel:\n  provider: subscription\n  base_url: https://models.example.invalid\nmemory:\n  memory_enabled: true\n  user_profile_enabled: true\n  provider: hy-memory\nagent:\n  disabled_toolsets:\n    - browser\n"),
 			mode:    0o600,
 		},
 	}}
@@ -209,7 +209,12 @@ func fixture(t *testing.T) (*app.Service, *target, app.InstallRequest) {
 			ProviderConfig: map[string]any{"base_url": "http://127.0.0.1:8096", "service_id": "default", "timeout_ms": 5000},
 			TenantID:       "personal", AgentID: "default", UserID: "local-user",
 		},
-		SecretInputs:  map[string][]byte{app.MemoryCoreTokenSecret: []byte("memorycore-token")},
+		SecretInputs: map[string][]byte{app.MemoryCoreTokenSecret: []byte("memorycore-token"), app.OwnerBindingSecret: []byte("on_owner")},
+		OwnerSlug:    "keliang",
+		OwnerBindingSlot: config.BindingRef{
+			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
+			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
+		},
 		HermesMachine: "hermes-agent-env", HermesHome: "/home/test/.hermes",
 	}
 	return service, target, request

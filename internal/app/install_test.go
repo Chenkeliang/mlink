@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"mlink/internal/config"
 	"mlink/internal/install"
 	"mlink/internal/layout"
@@ -200,6 +202,57 @@ func TestPlanInstallContainsAllSelectedResourcesAndNoWrites(t *testing.T) {
 	}
 }
 
+func TestPlanInstallCreatesThreeSpacesAndStableOwner(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	plan, err := service.PlanInstall(context.Background(), fixtureInstallRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configOperation := operationForTarget(t, plan, service.Paths.Config)
+	var got config.Config
+	if err := yaml.Unmarshal(configOperation.Content, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 2 || got.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(got.Spaces) != 3 {
+		t.Fatalf("config = %#v", got)
+	}
+	if !got.Spaces["personal-owner"].IncludeAgentShared || got.Spaces["hermes-groups"].IncludeAgentShared || got.Spaces["hermes-private"].IncludeAgentShared {
+		t.Fatalf("spaces = %#v", got.Spaces)
+	}
+	connection := got.Connections["local"]
+	if connection.TenantID != "" || connection.AgentID != "" || connection.UserID != "" || connection.IncludeAgentShared {
+		t.Fatalf("legacy identity leaked into Connection: %#v", connection)
+	}
+}
+
+func TestPlanIdentityDoesNotDependOnTokenBindingOrIdentityKey(t *testing.T) {
+	a, _, _ := newInstallFixture(t)
+	b, _, _ := newInstallFixture(t)
+	a.IdentityKey = bytes.Repeat([]byte{0x11}, 32)
+	b.IdentityKey = bytes.Repeat([]byte{0x22}, 32)
+	first := fixtureInstallRequest()
+	second := fixtureInstallRequest()
+	first.SecretInputs[MemoryCoreTokenSecret] = []byte("token-one")
+	second.SecretInputs[MemoryCoreTokenSecret] = []byte("token-two")
+	first.SecretInputs[OwnerBindingSecret] = []byte("on_old")
+	second.SecretInputs[OwnerBindingSecret] = []byte("on_new")
+	firstPlan, err := a.PlanInstall(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan, err := b.PlanInstall(context.Background(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPlan.PlanID != secondPlan.PlanID {
+		t.Fatalf("secret-dependent plans: %s %s", firstPlan.PlanID, secondPlan.PlanID)
+	}
+	firstJSON, _ := install.RenderJSON(firstPlan)
+	if bytes.Contains(firstJSON, []byte("on_old")) || bytes.Contains(firstJSON, []byte("token-one")) {
+		t.Fatal("secret leaked into ChangeSet")
+	}
+}
+
 func TestPlanInstallSecretValueDoesNotAffectPlanIdentity(t *testing.T) {
 	service, _, _ := newInstallFixture(t)
 	first := fixtureInstallRequest()
@@ -308,7 +361,7 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 		paths.SourceExecutable:          {content: []byte("verified-binary"), mode: 0o700},
 		"/Users/test/.codex/hooks.json": {content: []byte("{\"hooks\":{}}\n"), mode: 0o600},
 		"/home/test/.hermes/config.yaml": {
-			content: []byte("model:\n  provider: llm.dedao\n  base_url: https://llm.example/v1\nagent:\n  disabled_toolsets: null\n  reasoning_effort: high\nmemory:\n  memory_enabled: true\n  user_profile_enabled: true\n  provider: hy-memory\n"),
+			content: []byte("group_sessions_per_user: true\nmodel:\n  provider: llm.dedao\n  base_url: https://llm.example/v1\nagent:\n  disabled_toolsets: null\n  reasoning_effort: high\nmemory:\n  memory_enabled: true\n  user_profile_enabled: true\n  provider: hy-memory\n"),
 			mode:    0o600,
 		},
 	})
@@ -327,7 +380,7 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 }
 
 func fixtureInstallRequest() InstallRequest {
-	return InstallRequest{
+	request := InstallRequest{
 		Agents: []Agent{Codex, Pi, Hermes},
 		Connection: config.Connection{
 			ID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-1",
@@ -336,10 +389,27 @@ func fixtureInstallRequest() InstallRequest {
 			},
 			TenantID: "personal", AgentID: "default", UserID: "user-local", IncludeAgentShared: true,
 		},
-		SecretInputs:  map[string][]byte{MemoryCoreTokenSecret: []byte("memorycore-secret")},
+		SecretInputs: map[string][]byte{MemoryCoreTokenSecret: []byte("memorycore-secret"), OwnerBindingSecret: []byte("on_owner")},
+		OwnerSlug:    "keliang",
+		OwnerBindingSlot: config.BindingRef{
+			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
+			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
+		},
 		HermesMachine: "hermes-agent-env",
 		HermesHome:    "/home/test/.hermes",
 	}
+	return request
+}
+
+func operationForTarget(t *testing.T, plan install.ChangeSet, target string) install.Operation {
+	t.Helper()
+	for _, operation := range plan.Operations {
+		if operation.Target == target {
+			return operation
+		}
+	}
+	t.Fatalf("operation for %q is missing", target)
+	return install.Operation{}
 }
 
 func assertPlanTargets(t *testing.T, plan install.ChangeSet, want []string) {

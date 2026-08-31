@@ -48,8 +48,14 @@ func TestFullUninstallUsesLatestSemanticBackupAndDeletesConnectionSecret(t *test
 	if _, exists := secrets.values["adapter/hermes/token"]; exists {
 		t.Fatal("Hermes grant still exists")
 	}
+	if _, exists := secrets.values["identity/binding/owner-feishu-union-1"]; exists {
+		t.Fatal("owner Binding still exists")
+	}
 	if got := target.files[hermesPath].content; !bytes.Contains(got, []byte("provider: hy-memory")) || !bytes.Contains(got, []byte("later_user_setting: keep")) {
 		t.Fatalf("Hermes config after uninstall = %s", got)
+	}
+	if got := target.files[hermesPath].content; !bytes.Contains(got, []byte("group_sessions_per_user: true")) || bytes.Contains(got, []byte("thread_sessions_per_user:")) {
+		t.Fatalf("Hermes Session flags after uninstall = %s", got)
 	}
 }
 

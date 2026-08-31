@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"mlink/internal/adapter/hermes"
 	"mlink/internal/adapter/pi"
 	"mlink/internal/config"
+	"mlink/internal/identity"
 	"mlink/internal/install"
 	"mlink/internal/launchagent"
 )
@@ -39,6 +41,14 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if len(service.IdentityKey) != 32 {
 		return install.ChangeSet{}, errors.New("32-byte MLink identity key is required")
 	}
+	if _, _, err := normalizeOwner(request); err != nil {
+		return install.ChangeSet{}, err
+	}
+	if agentSelected(agents, Hermes) {
+		if err := validateOwnerBinding(request); err != nil {
+			return install.ChangeSet{}, err
+		}
+	}
 
 	binary, _, err := service.Target.Read(ctx, service.Paths.SourceExecutable)
 	if err != nil {
@@ -54,7 +64,10 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 		}},
 	}}
 
-	configuration := service.desiredConfig(request.Connection, agents)
+	configuration, err := service.desiredConfig(request, agents)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
 	configData, err := yaml.Marshal(configuration)
 	if err != nil {
 		return install.ChangeSet{}, fmt.Errorf("render MLink config: %w", err)
@@ -225,32 +238,71 @@ func (service *Service) planHermes(ctx context.Context, request InstallRequest) 
 	return resources, nil
 }
 
-func (service *Service) desiredConfig(connection config.Connection, agents []Agent) config.Config {
+func (service *Service) desiredConfig(request InstallRequest, agents []Agent) (config.Config, error) {
+	connection := request.Connection
+	namespaceID, ownerSlug, err := normalizeOwner(request)
+	if err != nil {
+		return config.Config{}, err
+	}
 	connection.ProviderConfig = cloneAnyMap(connection.ProviderConfig)
 	connection.SecretRefs = map[string]string{
 		"token": "keychain://dev.mlink/connection/" + connection.ID + "/token",
 	}
+	connection.TenantID = ""
+	connection.AgentID = ""
+	connection.UserID = ""
+	connection.IncludeAgentShared = false
+	principals := map[string]config.Principal{"owner": {
+		ID: "owner", CanonicalUserID: "usr_owner_" + ownerSlug, Kind: config.PrincipalPerson,
+	}}
+	spaces := map[string]config.MemorySpace{
+		"personal-owner": {
+			ID: "personal-owner", ConnectionID: connection.ID, TenantID: namespaceID, AgentID: ownerSlug + "-personal",
+			IncludeAgentShared: true, PrincipalPolicy: config.PolicyFixed, PrincipalID: "owner",
+		},
+		"hermes-private": {
+			ID: "hermes-private", ConnectionID: connection.ID, TenantID: namespaceID, AgentID: "hermes-private", PrincipalPolicy: config.PolicyExternalHMAC,
+		},
+		"hermes-groups": {
+			ID: "hermes-groups", ConnectionID: connection.ID, TenantID: namespaceID, AgentID: "hermes-groups", PrincipalPolicy: config.PolicyGroupHMAC,
+		},
+	}
 	adapters := make(map[string]config.Adapter, len(agents))
 	for _, agent := range agents {
-		adapters[string(agent)] = config.Adapter{ID: string(agent), Enabled: true, ConnectionID: connection.ID}
+		adapter := config.Adapter{ID: string(agent), Enabled: true, SpaceID: "personal-owner"}
+		if agent == Hermes {
+			adapter.SpaceID = ""
+			adapter.HermesRouting = &config.HermesRouting{OwnerSpaceID: "personal-owner", PrivateSpaceID: "hermes-private", GroupSpaceID: "hermes-groups"}
+		}
+		adapters[string(agent)] = adapter
 	}
-	return config.Config{
-		SchemaVersion:      1,
-		NamespaceID:        connection.TenantID,
+	bindings := make(map[string]config.BindingRef)
+	if agentSelected(agents, Hermes) {
+		bindings[request.OwnerBindingSlot.ID] = request.OwnerBindingSlot
+	}
+	configuration := config.Config{
+		SchemaVersion:      2,
+		NamespaceID:        namespaceID,
 		ActiveConnectionID: connection.ID,
 		Connections:        map[string]config.Connection{connection.ID: connection},
+		Principals:         principals,
+		Spaces:             spaces,
 		Adapters:           adapters,
+		Bindings:           bindings,
 		Broker: config.Broker{
 			HermesEndpoint: service.HermesEndpoint,
 			ListenAddress:  service.HermesListenAddress,
 		},
 	}
+	if err := config.Validate(configuration); err != nil {
+		return config.Config{}, err
+	}
+	return configuration, nil
 }
 
 func validateConnection(connection config.Connection) error {
-	if connection.ID == "" || connection.ProviderID != "dev.mlink.tencentdb" || connection.ProviderVersion == "" || connection.ConfigRevision == "" ||
-		connection.TenantID == "" || connection.AgentID == "" || connection.UserID == "" {
-		return errors.New("complete TencentDB connection and identity are required")
+	if connection.ID == "" || connection.ProviderID != "dev.mlink.tencentdb" || connection.ProviderVersion == "" || connection.ConfigRevision == "" {
+		return errors.New("complete TencentDB connection is required")
 	}
 	for key := range connection.ProviderConfig {
 		normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
@@ -258,6 +310,37 @@ func validateConnection(connection config.Connection) error {
 		case "token", "api_key", "apikey", "secret", "password":
 			return fmt.Errorf("Provider secret %q must use SecretInputs", key)
 		}
+	}
+	return nil
+}
+
+var ownerSlugInvalid = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func normalizeOwner(request InstallRequest) (string, string, error) {
+	namespaceID := strings.TrimSpace(request.Connection.TenantID)
+	if namespaceID == "" {
+		namespaceID = "personal"
+	}
+	slug := strings.Trim(ownerSlugInvalid.ReplaceAllString(strings.TrimSpace(request.OwnerSlug), "-"), "-")
+	if slug == "" {
+		slug = strings.Trim(ownerSlugInvalid.ReplaceAllString(strings.TrimSpace(request.Connection.UserID), "-"), "-")
+	}
+	if slug == "" || len(slug) > 96 {
+		return "", "", errors.New("valid stable owner slug is required")
+	}
+	return namespaceID, slug, nil
+}
+
+func validateOwnerBinding(request InstallRequest) error {
+	if request.OwnerBindingSlot.PrincipalID != "owner" {
+		return errors.New("Hermes owner Binding must reference owner")
+	}
+	if err := config.ValidateBindingRef(request.OwnerBindingSlot); err != nil {
+		return err
+	}
+	value := request.SecretInputs[OwnerBindingSecret]
+	if len(value) == 0 || len(value) > 16*1024 || bytes.ContainsAny(value, "\r\n") {
+		return errors.New("Hermes owner Binding input is required")
 	}
 	return nil
 }
@@ -376,7 +459,15 @@ func (service *Service) installSecrets(ctx context.Context, request InstallReque
 		{account: "identity/hmac-key", value: append([]byte(nil), service.IdentityKey...)},
 	}
 	if agentSelected(request.Agents, Hermes) {
-		values = append(values, managedSecret{account: "adapter/hermes/token", value: append([]byte(nil), service.HermesGrantToken...)})
+		bindingAccount, err := identity.BindingAccount(request.OwnerBindingSlot.ID)
+		if err != nil {
+			wipeManagedSecrets(values)
+			return nil, err
+		}
+		values = append(values,
+			managedSecret{account: "adapter/hermes/token", value: append([]byte(nil), service.HermesGrantToken...)},
+			managedSecret{account: bindingAccount, value: append([]byte(nil), request.SecretInputs[OwnerBindingSecret]...)},
+		)
 	}
 	for index := range values {
 		previous, err := service.Secrets.Get(ctx, values[index].account)

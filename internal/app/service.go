@@ -18,14 +18,19 @@ const (
 	Hermes Agent = "hermes"
 )
 
-const MemoryCoreTokenSecret = "memorycore_token"
+const (
+	MemoryCoreTokenSecret = "memorycore_token"
+	OwnerBindingSecret    = "owner_feishu_binding"
+)
 
 type InstallRequest struct {
-	Agents        []Agent
-	Connection    config.Connection
-	SecretInputs  map[string][]byte
-	HermesMachine string
-	HermesHome    string
+	Agents           []Agent
+	Connection       config.Connection
+	OwnerSlug        string
+	OwnerBindingSlot config.BindingRef
+	SecretInputs     map[string][]byte
+	HermesMachine    string
+	HermesHome       string
 }
 
 type UninstallRequest struct {

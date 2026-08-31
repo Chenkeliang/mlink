@@ -93,11 +93,11 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 	}
 	var removedSecrets []managedSecret
 	if isFullAgentSet(agents) && service.Secrets != nil {
-		connectionID, err := service.activeConnectionID(ctx)
+		configuration, err := service.activeConfiguration(ctx)
 		if err != nil {
 			return err
 		}
-		removedSecrets, err = service.removeInstallSecrets(ctx, connectionID)
+		removedSecrets, err = service.removeInstallSecrets(ctx, configuration)
 		if err != nil {
 			return err
 		}
@@ -119,11 +119,19 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 	return nil
 }
 
-func (service *Service) removeInstallSecrets(ctx context.Context, connectionID string) ([]managedSecret, error) {
+func (service *Service) removeInstallSecrets(ctx context.Context, configuration config.Config) ([]managedSecret, error) {
 	values := []managedSecret{
-		{account: "connection/" + connectionID + "/token"},
+		{account: "connection/" + configuration.ActiveConnectionID + "/token"},
 		{account: "identity/hmac-key"},
 		{account: "adapter/hermes/token"},
+	}
+	for _, binding := range configuration.Bindings {
+		const prefix = "keychain://dev.mlink/"
+		if !strings.HasPrefix(binding.SecretRef, prefix) {
+			wipeManagedSecrets(values)
+			return nil, errors.New("unsupported MLink Binding secret reference")
+		}
+		values = append(values, managedSecret{account: strings.TrimPrefix(binding.SecretRef, prefix)})
 	}
 	for index := range values {
 		previous, err := service.Secrets.Get(ctx, values[index].account)
@@ -176,17 +184,17 @@ func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {
 	return full
 }
 
-func (service *Service) activeConnectionID(ctx context.Context) (string, error) {
+func (service *Service) activeConfiguration(ctx context.Context) (config.Config, error) {
 	content, _, err := service.Target.Read(ctx, service.Paths.Config)
 	if err != nil {
-		return "", fmt.Errorf("read MLink config before uninstall: %w", err)
+		return config.Config{}, fmt.Errorf("read MLink config before uninstall: %w", err)
 	}
 	var configuration config.Config
 	if err := yaml.Unmarshal(content, &configuration); err != nil {
-		return "", fmt.Errorf("parse MLink config before uninstall: %w", err)
+		return config.Config{}, fmt.Errorf("parse MLink config before uninstall: %w", err)
 	}
 	if strings.TrimSpace(configuration.ActiveConnectionID) == "" {
-		return "", errors.New("MLink active connection is missing")
+		return config.Config{}, errors.New("MLink active connection is missing")
 	}
-	return configuration.ActiveConnectionID, nil
+	return configuration, nil
 }
