@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestStoreRoundTripDoesNotContainSecrets(t *testing.T) {
@@ -84,6 +86,63 @@ func TestStoreRoundTripDoesNotContainSecrets(t *testing.T) {
 	}
 }
 
+func TestStoreRoundTripsV3ControlPlane(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	want := fixtureV3Config()
+	store := Store{Path: path}
+	if err := store.SaveAtomic(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("round trip = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateV3RoutingPolicies(t *testing.T) {
+	tests := map[string]func(*Config){
+		"missing owner id":   func(cfg *Config) { cfg.ControlPlane.OwnerUserID = "" },
+		"non-loopback panel": func(cfg *Config) { cfg.ControlPlane.PanelURL = "http://0.0.0.0:8125" },
+		"wrong provider":     func(cfg *Config) { cfg.ControlPlane.ProviderID = "mem0" },
+		"private L2": func(cfg *Config) {
+			policy := cfg.RoutingPolicies["hermes-private"]
+			policy.Layers = []MemoryLayer{LayerL1, LayerL2}
+			cfg.RoutingPolicies["hermes-private"] = policy
+		},
+		"group without topic sessions": func(cfg *Config) {
+			policy := cfg.RoutingPolicies["hermes-groups"]
+			policy.SessionPolicy = ""
+			cfg.RoutingPolicies["hermes-groups"] = policy
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := fixtureV3Config()
+			mutate(&cfg)
+			if err := Validate(cfg); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
+func TestLoadV2WithoutImplicitControlPlaneMigration(t *testing.T) {
+	raw, err := yaml.Marshal(fixtureV2Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 2 || got.ControlPlane != nil || len(got.RoutingPolicies) != 0 {
+		t.Fatalf("v2 config changed during load: %#v", got)
+	}
+}
+
 func TestV2RejectsBindingSlotThatLeaksExternalValue(t *testing.T) {
 	cfg := fixtureV2Config()
 	cfg.Bindings["owner-feishu-union-1"] = BindingRef{
@@ -117,6 +176,33 @@ func fixtureV2Config() Config {
 			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
 			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: BindingActive,
 		}},
+	}
+}
+
+func fixtureV3Config() Config {
+	return Config{
+		SchemaVersion:      3,
+		NamespaceID:        "installation-1",
+		ActiveConnectionID: "local",
+		Connections: map[string]Connection{"local": {
+			ID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-3",
+			ProviderConfig: map[string]any{"base_url": "http://127.0.0.1:8420", "service_id": "default", "timeout_ms": 5000},
+			SecretRefs:     map[string]string{"token": "keychain://dev.mlink/connection/local/token"},
+		}},
+		Principals: map[string]Principal{
+			"owner": {ID: "owner", CanonicalUserID: "usr-generated", Kind: PrincipalPerson},
+		},
+		Adapters: map[string]Adapter{},
+		ControlPlane: &ControlPlane{
+			ProviderID: "dev.mlink.tencentdb", InstanceID: "default", PanelURL: "http://127.0.0.1:8125",
+			OwnerUserID: "usr-generated", OwnerTeamID: "team-generated", OwnerAgentID: "agt-owner",
+			OwnerAssetID: "chat_memory-team-generated-agt-owner",
+		},
+		RoutingPolicies: map[string]RoutingPolicy{
+			"owner":          {ID: "owner", Layers: []MemoryLayer{LayerL1, LayerL2, LayerL3}, AgentPolicy: AgentFixed},
+			"hermes-private": {ID: "hermes-private", Layers: []MemoryLayer{LayerL1}, AgentPolicy: AgentDynamicPrincipal},
+			"hermes-groups":  {ID: "hermes-groups", Layers: []MemoryLayer{LayerL1}, AgentPolicy: AgentDynamicGroup, SessionPolicy: SessionPerTopic},
+		},
 	}
 }
 

@@ -2,15 +2,54 @@ package config
 
 // Config is MLink's versioned, non-secret user configuration.
 type Config struct {
-	SchemaVersion      int                    `yaml:"schema_version"`
-	NamespaceID        string                 `yaml:"namespace_id"`
-	ActiveConnectionID string                 `yaml:"active_connection_id"`
-	Connections        map[string]Connection  `yaml:"connections"`
-	Principals         map[string]Principal   `yaml:"principals,omitempty"`
-	Spaces             map[string]MemorySpace `yaml:"spaces,omitempty"`
-	Adapters           map[string]Adapter     `yaml:"adapters"`
-	Bindings           map[string]BindingRef  `yaml:"bindings,omitempty"`
-	Broker             Broker                 `yaml:"broker,omitempty"`
+	SchemaVersion      int                      `yaml:"schema_version"`
+	NamespaceID        string                   `yaml:"namespace_id"`
+	ActiveConnectionID string                   `yaml:"active_connection_id"`
+	Connections        map[string]Connection    `yaml:"connections"`
+	Principals         map[string]Principal     `yaml:"principals,omitempty"`
+	Spaces             map[string]MemorySpace   `yaml:"spaces,omitempty"`
+	Adapters           map[string]Adapter       `yaml:"adapters"`
+	Bindings           map[string]BindingRef    `yaml:"bindings,omitempty"`
+	Broker             Broker                   `yaml:"broker,omitempty"`
+	ControlPlane       *ControlPlane            `yaml:"control_plane,omitempty"`
+	RoutingPolicies    map[string]RoutingPolicy `yaml:"routing_policies,omitempty"`
+}
+
+type MemoryLayer string
+
+const (
+	LayerL1 MemoryLayer = "L1"
+	LayerL2 MemoryLayer = "L2"
+	LayerL3 MemoryLayer = "L3"
+)
+
+type AgentPolicy string
+
+const (
+	AgentFixed            AgentPolicy = "fixed"
+	AgentDynamicPrincipal AgentPolicy = "dynamic_per_principal"
+	AgentDynamicGroup     AgentPolicy = "dynamic_per_group"
+)
+
+type SessionPolicy string
+
+const SessionPerTopic SessionPolicy = "per_topic"
+
+type ControlPlane struct {
+	ProviderID   string `yaml:"provider_id"`
+	InstanceID   string `yaml:"instance_id"`
+	PanelURL     string `yaml:"panel_url"`
+	OwnerUserID  string `yaml:"owner_user_id"`
+	OwnerTeamID  string `yaml:"owner_team_id"`
+	OwnerAgentID string `yaml:"owner_agent_id"`
+	OwnerAssetID string `yaml:"owner_asset_id"`
+}
+
+type RoutingPolicy struct {
+	ID            string        `yaml:"id"`
+	Layers        []MemoryLayer `yaml:"layers"`
+	AgentPolicy   AgentPolicy   `yaml:"agent_policy"`
+	SessionPolicy SessionPolicy `yaml:"session_policy,omitempty"`
 }
 
 type Broker struct {

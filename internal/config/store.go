@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,7 +109,7 @@ func Decode(data []byte) (Config, error) {
 }
 
 func Validate(cfg Config) error {
-	if cfg.SchemaVersion != 2 {
+	if cfg.SchemaVersion != 2 && cfg.SchemaVersion != 3 {
 		return fmt.Errorf("unsupported MLink config schema %d", cfg.SchemaVersion)
 	}
 	if !safeIDPattern.MatchString(cfg.NamespaceID) || !safeIDPattern.MatchString(cfg.ActiveConnectionID) {
@@ -189,7 +190,72 @@ func Validate(cfg Config) error {
 		}
 		secretRefs[binding.SecretRef] = id
 	}
+	if cfg.SchemaVersion == 2 {
+		if cfg.ControlPlane != nil || len(cfg.RoutingPolicies) != 0 {
+			return errors.New("schema v2 config contains schema v3 control-plane fields")
+		}
+		return nil
+	}
+	if err := validateControlPlane(cfg); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateControlPlane(cfg Config) error {
+	control := cfg.ControlPlane
+	if control == nil || control.ProviderID != "dev.mlink.tencentdb" || !safeIDPattern.MatchString(control.InstanceID) ||
+		!safeIDPattern.MatchString(control.OwnerUserID) || !safeIDPattern.MatchString(control.OwnerTeamID) ||
+		!safeIDPattern.MatchString(control.OwnerAgentID) || !safeIDPattern.MatchString(control.OwnerAssetID) {
+		return errors.New("valid TencentDB control plane is required")
+	}
+	connection := cfg.Connections[cfg.ActiveConnectionID]
+	if connection.ProviderID != control.ProviderID {
+		return errors.New("control plane and active connection providers differ")
+	}
+	serviceID, _ := connection.ProviderConfig["service_id"].(string)
+	if serviceID != control.InstanceID {
+		return errors.New("control plane and active connection instances differ")
+	}
+	panelURL, err := url.Parse(control.PanelURL)
+	if err != nil || panelURL.Scheme != "http" || panelURL.Host != "127.0.0.1:8125" || panelURL.Path != "" || panelURL.RawQuery != "" || panelURL.Fragment != "" {
+		return errors.New("control plane Panel URL must be http://127.0.0.1:8125")
+	}
+	owner, exists := cfg.Principals["owner"]
+	if !exists || owner.CanonicalUserID != control.OwnerUserID {
+		return errors.New("Owner principal must use the Core-generated user ID")
+	}
+	if len(cfg.RoutingPolicies) != 3 {
+		return errors.New("exactly three routing policies are required")
+	}
+	ownerPolicy := cfg.RoutingPolicies["owner"]
+	if ownerPolicy.ID != "owner" || ownerPolicy.AgentPolicy != AgentFixed || ownerPolicy.SessionPolicy != "" ||
+		!sameLayers(ownerPolicy.Layers, LayerL1, LayerL2, LayerL3) {
+		return errors.New("invalid Owner routing policy")
+	}
+	privatePolicy := cfg.RoutingPolicies["hermes-private"]
+	if privatePolicy.ID != "hermes-private" || privatePolicy.AgentPolicy != AgentDynamicPrincipal || privatePolicy.SessionPolicy != "" ||
+		!sameLayers(privatePolicy.Layers, LayerL1) {
+		return errors.New("invalid Hermes private routing policy")
+	}
+	groupPolicy := cfg.RoutingPolicies["hermes-groups"]
+	if groupPolicy.ID != "hermes-groups" || groupPolicy.AgentPolicy != AgentDynamicGroup || groupPolicy.SessionPolicy != SessionPerTopic ||
+		!sameLayers(groupPolicy.Layers, LayerL1) {
+		return errors.New("invalid Hermes group routing policy")
+	}
+	return nil
+}
+
+func sameLayers(got []MemoryLayer, want ...MemoryLayer) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateBindingRef(binding BindingRef) error {
