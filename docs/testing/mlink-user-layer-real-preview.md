@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: previewed and reproducible; awaiting explicit approval; not applied
+Status: installed through the TUI and independently verified
 
 ## Approval Identity
 
@@ -123,6 +123,19 @@ The failed Broker was stopped. Approved recovery ChangeSet `plan_b4b6a25ef6e838e
 
 Commit `b597c4f` adds versioned Base64 URL encoding for every Keychain value, with strict decoding and legacy text fallback; the binary round-trip test includes NUL, newline, carriage return, high-bit, and `0xff` bytes. It also emits the Hermes Broker Grant as URL-safe text and removes the unsupported LaunchAgent flags. The real temporary Keychain binary round trip, CLI tests, LaunchAgent tests, and full regression matrix pass.
 
+## Successful Manual TUI Apply
+
+The user manually applied `plan_76854bd9e1bec07ad484485824` from the nine-step TUI. The first immediate Doctor snapshot ran before the LaunchAgent had bound its Unix socket and temporarily showed the Socket, Provider, and Hermes bridge as unavailable. Pressing `r` after Broker startup produced the expected result. An independent CLI verification then confirmed:
+
+- installed binary SHA-256 `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256`;
+- active installation Plan `plan_76854bd9e1bec07ad484485824` with Codex, Pi, and Hermes enabled;
+- identity key, Owner binding, all three Memory Spaces, LaunchAgent, Broker Socket, TencentDB Provider, Hermes Provider/bridge/session policy, and Journal queue all passed;
+- LaunchAgent state `running`, Broker Socket `reachable`, TencentDB backend `available`, Hermes bridge `reachable`;
+- Hermes config hash `ce5d0d530ca10010b5df2440211a3dd4f5dcb3065d17bff2575484eb62950f8d`, with the protected model/auth invariant preserved;
+- MemoryCore health `ok` with its state backend connected.
+
+`codex.hook: awaiting_trust` and `pi.extension: awaiting_first_turn` are expected activation states until each Agent emits its first real lifecycle event. The TUI's immediate post-Apply Doctor timing remains a UX follow-up: it should wait for Broker readiness or retry automatically instead of showing a stale first snapshot.
+
 ## Verification
 
 - `go test ./...`: pass
@@ -132,4 +145,4 @@ Commit `b597c4f` adds versioned Base64 URL encoding for every Keychain value, wi
 - real temporary-login-Keychain PTY write/read/delete integration: pass
 - the install-preview disclosure regression test first failed against the incomplete output, then passed after Schema, Principal, Binding, Space, and Agent-route diffs were added
 
-No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_76854bd9e1bec07ad484485824` after this exact ChangeSet is shown.
+The final TUI Apply and independent verification completed successfully for `plan_76854bd9e1bec07ad484485824`.
