@@ -135,6 +135,8 @@ type Asset struct {
 	Status       string   `json:"status"`
 	Confidence   *float64 `json:"confidence"`
 	ExpiresAt    *string  `json:"expires_at"`
+	LastUsedAt   *string  `json:"last_used_at"`
+	UsageCount   int      `json:"usage_count"`
 	ContentRef   *string  `json:"content_ref"`
 	MetadataJSON string   `json:"metadata_json"`
 	CreatedAt    string   `json:"created_at"`
