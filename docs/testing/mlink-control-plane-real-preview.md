@@ -8,7 +8,7 @@ Status: **previewed, not applied**. Stage A is blocked because the unchanged off
 
 - Branch: `feat_product_design`
 - Candidate: `/tmp/mlink-control-plane-preview`
-- Candidate SHA-256: `7c8a3887a03f5c9aa52b1f91291eb546a22d1d97c3277261e1e44cab432d138f`
+- Candidate SHA-256: `b73b6cb365fa8f5efb4f062e9b8ebd9dde625d31362ab0116f449df7a76d8b2f`
 - Installed MLink SHA-256 before/after preview: `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256`
 - Official Panel source: clean checkout at `a5dcbe6`
 - Planned image: `mlink-memory-panel:a5dcbe6`
