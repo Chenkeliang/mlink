@@ -6,10 +6,10 @@ Status: previewed and reproducible; awaiting explicit approval; not applied
 
 ## Approval Identity
 
-- Final ChangeSet: `plan_840c3a08543ba520b2462228e6`
-- Invalidated ChangeSets: `plan_5b496cbe0ed3a1c09525934f9c`, `plan_3fccddff2c44b2e0b90fdfd41d`
+- Final ChangeSet: `plan_1e78ad2f7ca2232a424c44d69c`
+- Invalidated ChangeSets: `plan_5b496cbe0ed3a1c09525934f9c`, `plan_3fccddff2c44b2e0b90fdfd41d`, `plan_840c3a08543ba520b2462228e6`
 - Candidate path: `/tmp/mlink-principal-routing-preview`
-- Candidate SHA-256: `63a15caf9790f0092e4d7d66d6eefabe70cadf999488d866cbe7e886c5b704c0`
+- Candidate SHA-256: `bb7376875072da2f2e49cf128c15ce108556584b53e7d05bdd32005b9a0027e6`
 - Git branch: `feat_product_design`
 - Provider: `dev.mlink.tencentdb@0.1.0`
 - MemoryCore endpoint: `http://127.0.0.1:8420`
@@ -47,7 +47,7 @@ The proposed `~/.mlink/config.yaml` is Schema v2 and contains one stable Owner P
 
 | # | Action | Target | Proposed SHA-256 / semantic result | Rollback |
 |---:|---|---|---|---|
-| 1 | create | `/Users/keliang/.local/bin/mlink` | `63a15caf9790f0092e4d7d66d6eefabe70cadf999488d866cbe7e886c5b704c0` | remove created file |
+| 1 | create | `/Users/keliang/.local/bin/mlink` | `bb7376875072da2f2e49cf128c15ce108556584b53e7d05bdd32005b9a0027e6` | remove created file |
 | 2 | create | `/Users/keliang/.mlink/config.yaml` | `9fde5087c73671c5403ed736233ed8d509c80bfddb912392ab0f6f5a0b6c0161`; Schema v2 routing above | remove created file |
 | 3 | create | `/Users/keliang/.codex/hooks.json` | MLink lifecycle Hooks; existing Hooks preserved | remove created file |
 | 4 | create | `/Users/keliang/.pi/agent/extensions/mlink.ts` | official Pi lifecycle Extension | remove created file |
@@ -78,29 +78,44 @@ Hermes model, provider, Base URL, authentication, gateway, and every unowned set
 
 ## Reproducibility and No-Write Proof
 
-Two independent final preview processes returned the same `plan_840c3a08543ba520b2462228e6`. A controlled before/after window around two more previews produced:
+Two independent final preview processes returned the same `plan_1e78ad2f7ca2232a424c44d69c`. A controlled preview kept these protected Agent configuration hashes identical before and after:
 
-| Protected state | Before | After | Result |
-|---|---|---|---|
-| Codex `config.toml` | `3ac101d346cc3a6e35825a0a6b8e4b224c1ff050faab3ba3cb1a87b44ba8b13f` | same, same mtime | unchanged |
-| Pi `settings.json` | `da7ec5c4f3e914491b1177093756e8bf36d29084817c318f6b47fc43da1bc8dd` | same | unchanged |
-| Hermes `config.yaml` | `dc88cec33f11785e4605dd2bbbfe7c38d37d07f9aa93e63587b3ba039788995b` | same | unchanged |
+| Protected state | SHA-256 | Result |
+|---|---|---|
+| Codex `config.toml` | `3ac101d346cc3a6e35825a0a6b8e4b224c1ff050faab3ba3cb1a87b44ba8b13f` | unchanged |
+| Pi `settings.json` | `da7ec5c4f3e914491b1177093756e8bf36d29084817c318f6b47fc43da1bc8dd` | unchanged |
+| Hermes `config.yaml` | `dc88cec33f11785e4605dd2bbbfe7c38d37d07f9aa93e63587b3ba039788995b` | unchanged |
 
 Codex had independently changed its config hash from an earlier `b618…` observation to `3ac1…` before the controlled final window. MLink neither reads nor targets `config.toml`; the final before/after hash and mtime prove the preview did not cause that external change.
 
 After the final preview:
 
-- the installed MLink binary, MLink config, Journal, Unix socket, Codex Hook, Pi Extension, LaunchAgent plist, Hermes Provider files, and Hermes grant file were all absent;
+- the installed MLink binary, MLink config, Unix socket, Codex Hook, Pi Extension, LaunchAgent plist, Hermes Provider files, and Hermes grant file were all absent;
 - `launchctl` had no `dev.mlink.broker` service;
 - all four proposed `dev.mlink` Keychain accounts returned macOS Security item-not-found exit code `44`;
+- the failed `plan_840c…` attempt created `~/.mlink/journal.db`, but `owned_resources`, `adapter_installations`, `backup_artifacts`, and `journal_events` all contained zero rows;
 - no encrypted `*.mlink` identity bundle existed under `~/.mlink`;
 - no Agent, LaunchAgent, Keychain, OrbStack file, or MemoryCore state was changed.
+
+## Failed Apply Remediation
+
+The first user-driven Apply of `plan_840c3a08543ba520b2462228e6` exposed that macOS `security add-generic-password -w` opens the controlling terminal and requests the secret twice instead of consuming ordinary process stdin. The attempt stopped before any managed file or formal Keychain item was written. The obsolete TUI process was terminated after its exact command was verified.
+
+Commit `0876ecd` replaces ordinary stdin with a bounded protected pseudo-terminal flow. The secret is sent twice only after each prompt is detected, never appears in argv or logs, and the process has a 15-second timeout. The same fix also:
+
+- trims pasted Token whitespace before planning;
+- clears confirmation and returns to credential entry after any Apply failure;
+- prevents a second Enter from masking the original error with `MemoryCore token input is required`.
+
+A real macOS integration test wrote and read a uniquely named temporary Keychain item, deleted it, and confirmed that no `dev.mlink.integration*` item remained. The four formal `dev.mlink` accounts remain absent.
 
 ## Verification
 
 - `go test ./...`: pass
 - `go test -shuffle=on -count=2 ./...`: pass
 - `go vet ./...`: pass
+- `GOTOOLCHAIN=go1.22.12 CGO_ENABLED=0 go test ./...`: pass
+- real temporary-login-Keychain PTY write/read/delete integration: pass
 - the install-preview disclosure regression test first failed against the incomplete output, then passed after Schema, Principal, Binding, Space, and Agent-route diffs were added
 
-No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_840c3a08543ba520b2462228e6` after this exact ChangeSet is shown.
+No Apply is authorized by this report. Applying requires a fresh explicit confirmation of `plan_1e78ad2f7ca2232a424c44d69c` after this exact ChangeSet is shown.
