@@ -33,7 +33,9 @@ func TestMetadataClientUsesOfficialRoutesAndHeaders(t *testing.T) {
 		responses := map[string]string{
 			"/v3/internal/meta/user/init-admin": `{"user_id":"usr-admin","user_key":"admin-key"}`,
 			"/v3/meta/user/create":              `{"user_id":"usr-owner","user_type":"normal","created_at":"2026-08-31T00:00:00Z","default_user_key":"owner-key"}`,
+			"/v3/meta/auth/verify":              `{"valid":true,"user":{"user_id":"usr-owner","user_type":"normal","username":"keliang","created_at":"2026-08-31T00:00:00Z"}}`,
 			"/v3/meta/team/create":              `{"team_id":"team-owner","name":"MLink","description":"Owner team","owner_user_id":"usr-owner","status":"active","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","metadata_json":"{}"}`,
+			"/v3/meta/team/list":                `{"items":[{"team_id":"team-owner","name":"MLink","description":"Owner team","owner_user_id":"usr-owner","status":"active","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","metadata_json":"{}"}],"total":1,"limit":100,"offset":0}`,
 			"/v3/meta/agent/create":             `{"agent_id":"agt-owner","team_id":"team-owner","owner_user_id":"usr-owner","name":"MLink Owner","description":"Owner memory","prompt":"","visibility":"private","status":"active","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","metadata_json":"{}"}`,
 			"/v3/meta/agent/list":               `{"items":[{"agent_id":"agt-owner","team_id":"team-owner","owner_user_id":"usr-owner","name":"MLink Owner","description":"Owner memory","prompt":"","visibility":"private","status":"active","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","metadata_json":"{}"}],"total":1,"limit":100,"offset":0}`,
 			"/v3/meta/asset/get":                `{"asset_id":"chat_memory-team-owner-agt-owner","team_id":"team-owner","asset_type":"chat_memory","name":"MLink Owner","owner_user_id":"usr-owner","source_type":"agent","description":"","source_ref":"agt-owner","visibility":"private","status":"approved","confidence":1,"expires_at":null,"content_ref":"","metadata_json":"{}","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","version":1}`,
@@ -57,9 +59,17 @@ func TestMetadataClientUsesOfficialRoutesAndHeaders(t *testing.T) {
 	if err != nil || owner.UserID != "usr-owner" || string(owner.UserKey) != "owner-key" {
 		t.Fatalf("owner = %#v, %v", owner, err)
 	}
+	verified, err := metadata.VerifyUser(ctx, []byte("owner-key"))
+	if err != nil || verified.UserID != owner.UserID || verified.UserType != "normal" {
+		t.Fatalf("verified = %#v, %v", verified, err)
+	}
 	team, err := metadata.CreateTeam(ctx, []byte("owner-key"), CreateTeamRequest{Name: "MLink", OwnerUserID: owner.UserID, Description: "Owner team"})
 	if err != nil || team.TeamID != "team-owner" || team.OwnerUserID != owner.UserID {
 		t.Fatalf("team = %#v, %v", team, err)
+	}
+	teams, err := metadata.ListTeams(ctx, []byte("owner-key"), ListTeamsRequest{UserID: owner.UserID, Name: "MLink", Limit: 100})
+	if err != nil || len(teams) != 1 || teams[0].TeamID != team.TeamID {
+		t.Fatalf("teams = %#v, %v", teams, err)
 	}
 	agent, err := metadata.CreateAgent(ctx, []byte("owner-key"), CreateAgentRequest{TeamID: team.TeamID, OwnerUserID: owner.UserID, Name: "MLink Owner", Description: "Owner memory", Visibility: "private", MetadataJSON: "{}"})
 	if err != nil || agent.AgentID != "agt-owner" {
@@ -77,7 +87,7 @@ func TestMetadataClientUsesOfficialRoutesAndHeaders(t *testing.T) {
 	if err != nil || quota.MaxUsers != 100 || quota.MaxTeams != 20 {
 		t.Fatalf("quota = %#v, %v", quota, err)
 	}
-	wantPaths := "/v3/internal/meta/user/init-admin,/v3/meta/user/create,/v3/meta/team/create,/v3/meta/agent/create,/v3/meta/agent/list,/v3/meta/asset/get,/v3/meta/instance-quota/get"
+	wantPaths := "/v3/internal/meta/user/init-admin,/v3/meta/user/create,/v3/meta/auth/verify,/v3/meta/team/create,/v3/meta/team/list,/v3/meta/agent/create,/v3/meta/agent/list,/v3/meta/asset/get,/v3/meta/instance-quota/get"
 	if strings.Join(paths, ",") != wantPaths {
 		t.Fatalf("paths = %s", strings.Join(paths, ","))
 	}

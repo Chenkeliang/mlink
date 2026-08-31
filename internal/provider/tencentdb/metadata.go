@@ -13,7 +13,9 @@ import (
 type MetadataClient interface {
 	InitAdmin(context.Context, InitAdminRequest) (UserCredential, error)
 	CreateUser(context.Context, []byte, CreateUserRequest) (UserCredential, error)
+	VerifyUser(context.Context, []byte) (User, error)
 	CreateTeam(context.Context, []byte, CreateTeamRequest) (Team, error)
+	ListTeams(context.Context, []byte, ListTeamsRequest) ([]Team, error)
 	CreateAgent(context.Context, []byte, CreateAgentRequest) (Agent, error)
 	ListAgents(context.Context, []byte, ListAgentsRequest) ([]Agent, error)
 	GetAsset(context.Context, []byte, string) (Asset, error)
@@ -41,6 +43,13 @@ type UserCredential struct {
 	UserKey []byte
 }
 
+type User struct {
+	UserID    string `json:"user_id"`
+	UserType  string `json:"user_type"`
+	Username  string `json:"username"`
+	CreatedAt string `json:"created_at"`
+}
+
 func (credential UserCredential) String() string {
 	return fmt.Sprintf("UserCredential{UserID:%q UserKey:<redacted>}", credential.UserID)
 }
@@ -56,9 +65,10 @@ func (credential *UserCredential) Wipe() {
 }
 
 type CreateTeamRequest struct {
-	Name        string `json:"name"`
-	OwnerUserID string `json:"owner_user_id"`
-	Description string `json:"description,omitempty"`
+	Name         string `json:"name"`
+	OwnerUserID  string `json:"owner_user_id"`
+	Description  string `json:"description,omitempty"`
+	MetadataJSON string `json:"metadata_json,omitempty"`
 }
 
 type Team struct {
@@ -70,6 +80,13 @@ type Team struct {
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	MetadataJSON string  `json:"metadata_json"`
+}
+
+type ListTeamsRequest struct {
+	UserID string `json:"user_id"`
+	Name   string `json:"name,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	Offset int    `json:"offset,omitempty"`
 }
 
 type CreateAgentRequest struct {
@@ -160,6 +177,20 @@ func (metadata *metadataClient) CreateUser(ctx context.Context, adminKey []byte,
 	return credential(response.UserID, response.DefaultUserKey)
 }
 
+func (metadata *metadataClient) VerifyUser(ctx context.Context, userKey []byte) (User, error) {
+	var response struct {
+		Valid bool  `json:"valid"`
+		User  *User `json:"user"`
+	}
+	if err := metadata.post(ctx, "/v3/meta/auth/verify", userKey, map[string]string{"user_key": string(userKey)}, &response); err != nil {
+		return User{}, err
+	}
+	if !response.Valid || response.User == nil || strings.TrimSpace(response.User.UserID) == "" {
+		return User{}, errors.New("TencentDB metadata user key is invalid")
+	}
+	return *response.User, nil
+}
+
 func (metadata *metadataClient) CreateTeam(ctx context.Context, ownerKey []byte, request CreateTeamRequest) (Team, error) {
 	if strings.TrimSpace(request.Name) == "" || strings.TrimSpace(request.OwnerUserID) == "" {
 		return Team{}, errors.New("complete TencentDB team request is required")
@@ -169,6 +200,22 @@ func (metadata *metadataClient) CreateTeam(ctx context.Context, ownerKey []byte,
 		return Team{}, err
 	}
 	return response, nil
+}
+
+func (metadata *metadataClient) ListTeams(ctx context.Context, ownerKey []byte, request ListTeamsRequest) ([]Team, error) {
+	if strings.TrimSpace(request.UserID) == "" || request.Limit < 0 || request.Limit > 100 || request.Offset < 0 {
+		return nil, errors.New("valid TencentDB Team list request is required")
+	}
+	var response struct {
+		Items  []Team `json:"items"`
+		Total  int    `json:"total"`
+		Limit  int    `json:"limit"`
+		Offset int    `json:"offset"`
+	}
+	if err := metadata.post(ctx, "/v3/meta/team/list", ownerKey, request, &response); err != nil {
+		return nil, err
+	}
+	return response.Items, nil
 }
 
 func (metadata *metadataClient) CreateAgent(ctx context.Context, ownerKey []byte, request CreateAgentRequest) (Agent, error) {
