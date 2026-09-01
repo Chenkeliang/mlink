@@ -336,4 +336,3 @@ rtk git commit -m "test: accept official memory hub"
 ```
 
 Stage B remains a separate future exact Plan and confirmation.
-

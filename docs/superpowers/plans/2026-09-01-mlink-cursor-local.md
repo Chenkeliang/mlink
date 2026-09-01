@@ -58,4 +58,3 @@
 - [ ] Apply after exact Plan confirmation; verify Cursor reload, hook heartbeat, MCP list-tools/search, one capture, Hub visibility and uninstall preview.
 - [ ] Run full/shuffle/vet and record evidence.
 - [ ] Commit `test: accept local cursor memory`.
-

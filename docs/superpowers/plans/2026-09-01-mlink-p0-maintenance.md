@@ -67,4 +67,3 @@
 - [ ] Run full, shuffle, vet and real Doctor.
 - [ ] Upgrade the installed binary through the new command and verify Doctor clean.
 - [ ] Commit `feat: complete maintenance doctor`.
-

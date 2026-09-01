@@ -18,4 +18,3 @@ memory:
 custom_section:
   nested:
     keep: exactly
-
