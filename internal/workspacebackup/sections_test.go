@@ -51,7 +51,8 @@ func TestPackAndOpenRoundTripCleansCiphertextStaging(t *testing.T) {
 			return io.NopCloser(strings.NewReader(content)), nil
 		}})
 	}
-	if err := (Packer{StagingParent: staging}).Pack(context.Background(), output, passphrase, fixtureManifest(), sources...); err != nil {
+	manifestInput := fixtureManifest()
+	if err := (Packer{StagingParent: staging}).Pack(context.Background(), output, passphrase, &manifestInput, sources...); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := os.ReadDir(staging)
@@ -99,7 +100,8 @@ func TestPackRejectsMissingDuplicateAndUnknownSections(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "bundle.mlink-backup")
-			if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), output, []byte("twelve-byte-passphrase"), fixtureManifest(), sources...); err == nil {
+			manifest := fixtureManifest()
+			if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), output, []byte("twelve-byte-passphrase"), &manifest, sources...); err == nil {
 				t.Fatal("Pack() error = nil")
 			}
 			if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
@@ -119,7 +121,8 @@ func TestPackRefusesSymlinkOutput(t *testing.T) {
 	if err := os.Symlink(victim, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), link, []byte("twelve-byte-passphrase"), fixtureManifest(), fixtureSources()...); err == nil {
+	manifest := fixtureManifest()
+	if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), link, []byte("twelve-byte-passphrase"), &manifest, fixtureSources()...); err == nil {
 		t.Fatal("Pack() accepted symlink output")
 	}
 	content, _ := os.ReadFile(victim)
@@ -131,7 +134,8 @@ func TestPackRefusesSymlinkOutput(t *testing.T) {
 func TestOpenRejectsWrongPassphraseAndTruncatedBundle(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "bundle.mlink-backup")
 	passphrase := []byte("twelve-byte-passphrase")
-	if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), output, passphrase, fixtureManifest(), fixtureSources()...); err != nil {
+	manifest := fixtureManifest()
+	if err := (Packer{StagingParent: t.TempDir()}).Pack(context.Background(), output, passphrase, &manifest, fixtureSources()...); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(context.Background(), output, []byte("wrong-passphrase"), func(Section, io.Reader) error { return nil }); !errors.Is(err, ErrAuthentication) {

@@ -96,11 +96,14 @@ func EncryptSection(ctx context.Context, staging string, passphrase []byte, sour
 	return StagedSection{Name: source.Name, Path: path, CipherBytes: size, CipherSHA256: hex.EncodeToString(digest.Sum(nil))}, nil
 }
 
-func (packer Packer) Pack(ctx context.Context, output string, passphrase []byte, manifest Manifest, sources ...SectionSource) error {
+func (packer Packer) Pack(ctx context.Context, output string, passphrase []byte, manifest *Manifest, sources ...SectionSource) error {
 	if ctx == nil || !filepath.IsAbs(output) || !filepath.IsAbs(packer.StagingParent) {
 		return errors.New("absolute workspace backup output and staging paths are required")
 	}
-	if err := VerifyManifest(manifest); err != nil {
+	if manifest == nil {
+		return ErrInvalidBundle
+	}
+	if err := VerifyManifest(*manifest); err != nil {
 		return err
 	}
 	if err := validateSectionSources(sources); err != nil {
