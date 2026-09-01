@@ -119,6 +119,14 @@ type WorkspaceRestoreLocal interface {
 	RollbackRestore(context.Context) error
 }
 
+type WorkspaceEvidenceStore interface {
+	RecordWorkspaceBackupEvidence(context.Context, journal.WorkspaceBackupEvidence) error
+}
+
+type RestoreOperationStore interface {
+	SaveRestoreOperation(context.Context, journal.RestoreOperation) error
+}
+
 type PrincipalAgentStateStore interface {
 	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
 	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
@@ -172,6 +180,8 @@ type Service struct {
 	WorkspacePacker      WorkspaceBundle
 	WorkspaceArchiver    WorkspaceStateArchiver
 	WorkspaceRestorer    WorkspaceRestoreLocal
+	WorkspaceEvidence    WorkspaceEvidenceStore
+	RestoreOperations    RestoreOperationStore
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime
 	PanelDesired         panel.Desired

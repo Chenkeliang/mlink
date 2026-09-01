@@ -32,6 +32,9 @@ var eventResolutionMigration string
 //go:embed migrations/006_control_plane_capacity.sql
 var controlPlaneCapacityMigration string
 
+//go:embed migrations/007_restore_operations.sql
+var restoreOperationsMigration string
+
 type Store struct {
 	db *sql.DB
 }
@@ -113,6 +116,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		{version: 4, sql: controlPlaneAgentsMigration},
 		{version: 5, sql: eventResolutionMigration},
 		{version: 6, sql: controlPlaneCapacityMigration},
+		{version: 7, sql: restoreOperationsMigration},
 	}
 	for _, migration := range migrations {
 		var applied int

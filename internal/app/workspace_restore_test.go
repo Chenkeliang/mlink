@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mlink/internal/install"
+	"mlink/internal/journal"
 	"mlink/internal/panel"
 	"mlink/internal/provider/lifecycle"
 	"mlink/internal/provider/tencentdb"
@@ -88,6 +89,13 @@ type restoreLocal struct {
 	events      *[]string
 }
 
+type restoreOperationStore struct{ values []journal.RestoreOperation }
+
+func (store *restoreOperationStore) SaveRestoreOperation(_ context.Context, value journal.RestoreOperation) error {
+	store.values = append(store.values, value)
+	return nil
+}
+
 func (local *restoreLocal) PlanRestore(context.Context, WorkspaceRestoreRequest, workspacebackup.Manifest) (install.ChangeSet, error) {
 	return install.BuildChangeSet(local.target, []install.DesiredResource{{OwnerID: "restore", Target: "service:restore:local", Action: install.ActionService, Command: []string{"restore", "local"}, RollbackCommand: []string{"rollback", "local"}}})
 }
@@ -156,6 +164,8 @@ func TestWorkspaceRestoreDefaultsToAgentsRecordedInBundle(t *testing.T) {
 
 func TestWorkspaceRestoreAppliesSectionsThenVerifiesIdentity(t *testing.T) {
 	service, target, _, snapshot, local := workspaceRestoreFixture(t)
+	operations := &restoreOperationStore{}
+	service.RestoreOperations = operations
 	var events []string
 	snapshot.events, local.events = &events, &events
 	request := WorkspaceRestoreRequest{BundlePath: "/tmp/workspace.mlink-backup", Passphrase: []byte("twelve-byte-passphrase"), SelectedAgents: []Agent{Codex, Cursor}}
@@ -173,10 +183,19 @@ func TestWorkspaceRestoreAppliesSectionsThenVerifiesIdentity(t *testing.T) {
 	if got := strings.Join(events, ","); got != want {
 		t.Fatalf("restore order = %s, want %s", got, want)
 	}
+	var phases []string
+	for _, operation := range operations.values {
+		phases = append(phases, string(operation.Phase))
+	}
+	if strings.Join(phases, ",") != "planned,applying,verifying,installing_agents,complete" {
+		t.Fatalf("restore phases = %v", phases)
+	}
 }
 
 func TestWorkspaceRestoreFailureRollsBackOnlyCreatedResources(t *testing.T) {
 	service, target, _, snapshot, local := workspaceRestoreFixture(t)
+	operations := &restoreOperationStore{}
+	service.RestoreOperations = operations
 	snapshot.verifyErr = errors.New("fixed ID mismatch")
 	request := WorkspaceRestoreRequest{BundlePath: "/tmp/workspace.mlink-backup", Passphrase: []byte("twelve-byte-passphrase"), SelectedAgents: []Agent{Codex}}
 	plan, _ := service.PlanWorkspaceRestore(context.Background(), request)
@@ -185,6 +204,9 @@ func TestWorkspaceRestoreFailureRollsBackOnlyCreatedResources(t *testing.T) {
 	}
 	if local.rollbacks != 1 || target.runs != 4 {
 		t.Fatalf("rollback/runs = %d/%d", local.rollbacks, target.runs)
+	}
+	if got := operations.values[len(operations.values)-1].Phase; got != journal.RestorePhaseRolledBack {
+		t.Fatalf("final restore phase = %s", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -175,7 +176,50 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 		report.Checks = append(report.Checks, runtime.checkHubContainer(ctx)...)
 	}
 	report.Checks = append(report.Checks, runtime.checkQueue(ctx))
+	if status.Installed {
+		report.Checks = append(report.Checks, runtime.checkWorkspaceLifecycle(ctx)...)
+	}
 	return report, nil
+}
+
+func (runtime *runtimeApplication) checkWorkspaceLifecycle(ctx context.Context) []doctor.Check {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return []doctor.Check{
+			{ID: "backup.last_verified", State: doctor.StateFailed, Code: "journal_unavailable"},
+			{ID: "restore.state", State: doctor.StateFailed, Code: "journal_unavailable"},
+			{ID: "restore.identity_gate", State: doctor.StateFailed, Code: "journal_unavailable"},
+		}
+	}
+	defer store.Close()
+	backup := doctor.Check{ID: "backup.last_verified", State: doctor.StatePassed, Code: "none"}
+	if evidence, evidenceErr := store.LatestWorkspaceBackupEvidence(ctx); evidenceErr == nil {
+		backup.Code, backup.Message = "verified", evidence.VerifiedAt.UTC().Format(time.RFC3339)
+	} else if !errors.Is(evidenceErr, sql.ErrNoRows) {
+		backup.State, backup.Code = doctor.StateFailed, "evidence_invalid"
+	}
+	restore := doctor.Check{ID: "restore.state", State: doctor.StatePassed, Code: "none"}
+	identityGate := doctor.Check{ID: "restore.identity_gate", State: doctor.StatePassed, Code: "not_applicable"}
+	operation, operationErr := store.LatestRestoreOperation(ctx)
+	if operationErr == nil {
+		switch operation.Phase {
+		case journal.RestorePhaseComplete:
+			restore.Code = "complete"
+			identityGate.Code = "preserved"
+		case journal.RestorePhaseRolledBack:
+			restore.Code = "rolled_back"
+		case journal.RestorePhaseFailed:
+			restore.State, restore.Code = doctor.StateFailed, "failed"
+			identityGate.State, identityGate.Code = doctor.StateFailed, "not_verified"
+		default:
+			restore.State, restore.Code = doctor.StatePendingAction, "interrupted"
+			identityGate.State, identityGate.Code = doctor.StateFailed, "not_verified"
+		}
+	} else if !errors.Is(operationErr, sql.ErrNoRows) {
+		restore.State, restore.Code = doctor.StateFailed, "evidence_invalid"
+		identityGate.State, identityGate.Code = doctor.StateFailed, "evidence_invalid"
+	}
+	return []doctor.Check{backup, restore, identityGate}
 }
 
 func providerDiagnosticChecks(status lifecycle.BackendStatus, statusErr error) []doctor.Check {

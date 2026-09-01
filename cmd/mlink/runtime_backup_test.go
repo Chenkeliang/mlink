@@ -18,6 +18,7 @@ import (
 	"mlink/internal/config"
 	"mlink/internal/controlplane"
 	"mlink/internal/identity"
+	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/workspacebackup"
 )
@@ -212,6 +213,64 @@ func TestLocalWorkspaceRestorerRejectsIdentityRewrite(t *testing.T) {
 	}
 	if len(restorer.secrets.(*restoreTestSecrets).values) != 0 {
 		t.Fatal("identity mismatch wrote Keychain values")
+	}
+}
+
+func TestWorkspaceLifecycleDiagnosticsReportVerifiedBackupAndRestore(t *testing.T) {
+	restorer := restoreTestLocalRestorer(t)
+	store, err := journal.Open(context.Background(), restorer.paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordWorkspaceBackupEvidence(context.Background(), journal.WorkspaceBackupEvidence{BundleFingerprint: "0123456789abcdef", Format: workspacebackup.FormatV1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRestoreOperation(context.Background(), journal.RestoreOperation{
+		OperationID: "restore_0123456789ab", BundleFingerprint: "0123456789abcdef", PlanID: "plan_0123456789abcdef", Phase: journal.RestorePhaseComplete,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &runtimeApplication{paths: restorer.paths}
+	checks := runtime.checkWorkspaceLifecycle(context.Background())
+	if len(checks) != 3 || checks[0].Code != "verified" || checks[1].Code != "complete" || checks[2].Code != "preserved" {
+		t.Fatalf("workspace lifecycle checks = %#v", checks)
+	}
+}
+
+func TestDeferredRestoreOperationStorePersistsRedactedCrashEvidenceUntilJournalExists(t *testing.T) {
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, filepath.Join(home, "mlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(paths.Run, "restore-operation.json")
+	store := &deferredRestoreOperationStore{path: paths.Journal, statePath: statePath}
+	operation := journal.RestoreOperation{
+		OperationID: "restore_0123456789ab", BundleFingerprint: "0123456789abcdef", PlanID: "plan_0123456789abcdef", Phase: journal.RestorePhaseApplying,
+	}
+	if err := store.SaveRestoreOperation(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(statePath)
+	if err != nil || bytes.Contains(content, []byte("/Users/")) || bytes.Contains(content, []byte("secret")) {
+		t.Fatalf("sidecar = %s/%v", content, err)
+	}
+	journalStore, err := journal.Open(context.Background(), paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journalStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	operation.Phase = journal.RestorePhaseComplete
+	if err := store.SaveRestoreOperation(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("terminal restore retained sidecar: %v", err)
 	}
 }
 

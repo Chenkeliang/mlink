@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"mlink/internal/install"
+	"mlink/internal/journal"
 	"mlink/internal/workspacebackup"
 )
 
@@ -92,6 +93,13 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 	if plan.PlanID != planID {
 		return fmt.Errorf("%w: workspace restore plan changed", install.ErrPlanStale)
 	}
+	operation := workspaceRestoreOperation(plan, request.BundlePath)
+	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhasePlanned, ""); err != nil {
+		return err
+	}
+	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhaseApplying, ""); err != nil {
+		return err
+	}
 	manifest, err := service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(workspacebackup.Section, io.Reader) error { return nil })
 	if err != nil {
 		return err
@@ -108,7 +116,8 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 	rollback := func(cause error) error {
 		localErr := service.WorkspaceRestorer.RollbackRestore(context.Background())
 		transactionErr := transaction.Rollback(context.Background(), plan)
-		return errors.Join(cause, localErr, transactionErr)
+		stateErr := service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseRolledBack, "restore_failed")
+		return errors.Join(cause, localErr, transactionErr, stateErr)
 	}
 	_, err = service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(section workspacebackup.Section, reader io.Reader) error {
 		switch section {
@@ -129,7 +138,13 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 		return rollback(err)
 	}
 	defer providerRequest.Wipe()
+	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhaseVerifying, ""); err != nil {
+		return rollback(err)
+	}
 	if err := service.SnapshotDriver.VerifyRestore(ctx, providerRequest, manifest); err != nil {
+		return rollback(err)
+	}
+	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhaseInstallingAgents, ""); err != nil {
 		return rollback(err)
 	}
 	_, err = service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(section workspacebackup.Section, reader io.Reader) error {
@@ -147,6 +162,9 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 		return rollback(err)
 	}
 	if err := transaction.RecordOwnership(ctx, applied); err != nil {
+		return rollback(err)
+	}
+	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhaseComplete, ""); err != nil {
 		return rollback(err)
 	}
 	return nil
@@ -176,4 +194,31 @@ func agentStrings(values []Agent) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func workspaceRestoreOperation(plan install.ChangeSet, bundlePath string) journal.RestoreOperation {
+	owners := make(map[string]bool)
+	for _, operation := range plan.Operations {
+		if operation.Action != install.ActionUnchanged && strings.HasPrefix(operation.OwnerID, "dev.mlink.") {
+			owners[operation.OwnerID] = true
+		}
+	}
+	ownerIDs := make([]string, 0, len(owners))
+	for ownerID := range owners {
+		ownerIDs = append(ownerIDs, ownerID)
+	}
+	sort.Strings(ownerIDs)
+	digest := sha256.Sum256([]byte(plan.PlanID + "\x00" + restorePathFingerprint(bundlePath)))
+	return journal.RestoreOperation{
+		OperationID: "restore_" + hex.EncodeToString(digest[:])[:16], BundleFingerprint: restorePathFingerprint(bundlePath),
+		PlanID: plan.PlanID, CreatedOwnerIDs: ownerIDs,
+	}
+}
+
+func (service *Service) saveRestoreOperation(ctx context.Context, operation journal.RestoreOperation, phase journal.RestorePhase, errorCode string) error {
+	if service.RestoreOperations == nil {
+		return nil
+	}
+	operation.Phase, operation.ErrorCode = phase, errorCode
+	return service.RestoreOperations.SaveRestoreOperation(ctx, operation)
 }

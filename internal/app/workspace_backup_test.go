@@ -106,6 +106,15 @@ func (archiver *backupStateArchiver) Open(context.Context, layout.Paths) (io.Rea
 	return io.NopCloser(strings.NewReader("mlink-state-tar")), nil
 }
 
+type backupEvidenceStore struct {
+	values []journal.WorkspaceBackupEvidence
+}
+
+func (store *backupEvidenceStore) RecordWorkspaceBackupEvidence(_ context.Context, value journal.WorkspaceBackupEvidence) error {
+	store.values = append(store.values, value)
+	return nil
+}
+
 func TestWorkspaceBackupPreviewIsZeroWriteAndSecretIndependent(t *testing.T) {
 	service, target, secrets := workspaceBackupFixture(t)
 	output := filepath.Join(t.TempDir(), "workspace.mlink-backup")
@@ -134,6 +143,8 @@ func TestWorkspaceBackupPreviewIsZeroWriteAndSecretIndependent(t *testing.T) {
 
 func TestWorkspaceBackupApplyPacksAllSectionsAndRestartsServices(t *testing.T) {
 	service, target, _ := workspaceBackupFixture(t)
+	evidence := &backupEvidenceStore{}
+	service.WorkspaceEvidence = evidence
 	output := filepath.Join(t.TempDir(), "workspace.mlink-backup")
 	request := WorkspaceBackupRequest{OutputPath: output, Passphrase: []byte("twelve-byte-passphrase")}
 	plan, err := service.PlanWorkspaceBackup(context.Background(), request)
@@ -154,6 +165,9 @@ func TestWorkspaceBackupApplyPacksAllSectionsAndRestartsServices(t *testing.T) {
 	}
 	if info, err := os.Stat(output); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("output info/error = %#v/%v", info, err)
+	}
+	if len(evidence.values) != 1 || evidence.values[0].Format != workspacebackup.FormatV1 || evidence.values[0].BundleFingerprint == "" {
+		t.Fatalf("backup evidence = %#v", evidence.values)
 	}
 }
 

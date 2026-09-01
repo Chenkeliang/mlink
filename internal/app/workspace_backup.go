@@ -119,6 +119,15 @@ func (service *Service) ApplyWorkspaceBackup(ctx context.Context, planID string,
 	if backupErr != nil || resumeErr != nil {
 		return errors.Join(backupErr, resumeErr)
 	}
+	if service.WorkspaceEvidence != nil {
+		fingerprint, err := workspaceFileFingerprint(request.OutputPath)
+		if err != nil {
+			return err
+		}
+		if err := service.WorkspaceEvidence.RecordWorkspaceBackupEvidence(ctx, journal.WorkspaceBackupEvidence{BundleFingerprint: fingerprint, Format: workspacebackup.FormatV1}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -414,4 +423,17 @@ func imageDigest(reference string) string {
 		return reference
 	}
 	return digest
+}
+
+func workspaceFileFingerprint(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", errors.New("open completed workspace backup")
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return "", errors.New("hash completed workspace backup")
+	}
+	return hex.EncodeToString(digest.Sum(nil))[:16], nil
 }

@@ -73,6 +73,49 @@ type restoreMemoryLedger struct {
 	owned   []install.OwnedResource
 }
 
+type deferredRestoreOperationStore struct {
+	path      string
+	statePath string
+	mu        sync.Mutex
+	latest    journal.RestoreOperation
+}
+
+func (store *deferredRestoreOperationStore) SaveRestoreOperation(ctx context.Context, operation journal.RestoreOperation) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := journal.ValidateRestoreOperation(operation); err != nil {
+		return err
+	}
+	store.latest = operation
+	encoded, err := json.Marshal(operation)
+	if err != nil {
+		return errors.New("encode restore operation sidecar")
+	}
+	encoded = append(encoded, '\n')
+	if err := (install.LocalTarget{}).WriteAtomic(ctx, store.statePath, encoded, 0o600); err != nil {
+		return err
+	}
+	if _, err := os.Stat(store.path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	destination, err := journal.Open(ctx, store.path)
+	if err != nil {
+		return err
+	}
+	defer destination.Close()
+	if err := destination.SaveRestoreOperation(ctx, operation); err != nil {
+		return err
+	}
+	if operation.Phase == journal.RestorePhaseComplete || operation.Phase == journal.RestorePhaseRolledBack {
+		if err := os.Remove(store.statePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ledger *restoreMemoryLedger) SaveBackup(_ context.Context, backup install.Backup) error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
@@ -707,6 +750,7 @@ func (runtime *runtimeApplication) workspaceBackupService(ctx context.Context, w
 	service.Paths, service.UID, service.Target, service.Ledger = runtime.paths, runtime.uid, localTarget, ledger
 	service.Secrets = runtime.secretStore()
 	service.ControlPlaneStates, service.PrincipalAgentStates = store, store
+	service.WorkspaceEvidence = store
 	service.SnapshotDriver = driver
 	service.WorkspacePacker = workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")}
 	service.WorkspaceArchiver = app.LocalWorkspaceArchiver{}
@@ -726,5 +770,6 @@ func (runtime *runtimeApplication) workspaceRestoreService(request app.Workspace
 	return &app.Service{
 		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: &restoreMemoryLedger{}, Secrets: runtime.secretStore(),
 		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")}, WorkspaceRestorer: local,
+		RestoreOperations: &deferredRestoreOperationStore{path: runtime.paths.Journal, statePath: filepath.Join(runtime.paths.Run, "restore-operation.json")},
 	}
 }
