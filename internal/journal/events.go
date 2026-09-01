@@ -471,12 +471,26 @@ func (s *Store) markFailure(ctx context.Context, id string, state State, errorCo
 }
 
 func (s *Store) FlushSession(ctx context.Context, adapterID, sessionID string) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
 	var count int
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT count(*) FROM journal_events
 		WHERE adapter_id = ? AND session_id = ? AND state IN (?, ?, ?)`,
 		adapterID, sessionID, StateQueued, StateDispatching, StateRetryableFailed).Scan(&count)
-	return count, err
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_fragments WHERE adapter_id = ? AND session_id = ?`, adapterID, sessionID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) ListBlockingEvents(ctx context.Context) ([]Event, error) {

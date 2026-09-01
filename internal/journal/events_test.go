@@ -173,6 +173,38 @@ func TestClaimAndRetryUseCompareAndSetTransitions(t *testing.T) {
 	}
 }
 
+func TestFlushSessionClearsOnlyIncompleteFragments(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	fragment := Fragment{
+		AdapterID: "codex", Route: fixtureEnvelope("user", "turn", "content").Route,
+		Identity: model.IdentityScope{TenantID: "team", AgentID: "agent", UserID: "user", SessionID: "session-a", TurnID: "turn-orphan"},
+		Role:     "user", Content: "orphan", OccurredAt: time.Now().UTC(),
+	}
+	if err := store.RecordFragment(ctx, fragment); err != nil {
+		t.Fatal(err)
+	}
+	other := fragment
+	other.Identity.SessionID = "session-b"
+	other.Identity.TurnID = "turn-other"
+	if err := store.RecordFragment(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.EnqueueTurn(ctx, fixtureEnvelope("user", "queued-turn", "queued")); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.FlushSession(ctx, "codex", "session-a")
+	if err != nil || pending != 0 {
+		t.Fatalf("pending/error = %d/%v", pending, err)
+	}
+	var sessionA, sessionB int
+	_ = store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE adapter_id='codex' AND session_id='session-a'`).Scan(&sessionA)
+	_ = store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE adapter_id='codex' AND session_id='session-b'`).Scan(&sessionB)
+	if sessionA != 0 || sessionB != 1 {
+		t.Fatalf("fragment counts = session-a:%d session-b:%d", sessionA, sessionB)
+	}
+}
+
 func TestRetryCompletesDeliveryAttemptAudit(t *testing.T) {
 	store := openTestStore(t)
 	event, _, err := store.EnqueueTurn(context.Background(), fixtureEnvelope("usr_a", "turn-audit", "retry"))
