@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type Service struct {
 }
 
 func (service Service) PlanProvision(ctx context.Context, request ProvisionRequest) (install.ChangeSet, error) {
+	request = normalizeProvisionRequest(request)
 	if err := validateProvisionRequest(request); err != nil {
 		return install.ChangeSet{}, err
 	}
@@ -57,6 +59,7 @@ func (service Service) PlanProvision(ctx context.Context, request ProvisionReque
 }
 
 func (service Service) ApplyProvision(ctx context.Context, planID string, request ProvisionRequest) (ProvisionResult, error) {
+	request = normalizeProvisionRequest(request)
 	if service.Metadata == nil || service.Secrets == nil || service.States == nil {
 		return ProvisionResult{}, errors.New("metadata, Keychain, and state store are required")
 	}
@@ -108,7 +111,8 @@ func (service Service) ApplyProvision(ctx context.Context, planID string, reques
 
 	state := journal.ControlPlaneState{
 		InstallationID: request.InstallationID, InstanceID: request.InstanceID,
-		OwnerUserID: owner.UserID, OwnerTeamID: team.TeamID, OwnerAgentID: agent.AgentID, OwnerAssetID: asset.AssetID,
+		DynamicAgentLimit: request.DynamicAgentLimit,
+		OwnerUserID:       owner.UserID, OwnerTeamID: team.TeamID, OwnerAgentID: agent.AgentID, OwnerAssetID: asset.AssetID,
 		PanelContainer: PanelContainerName, PanelImage: PanelImageName, State: "provisioned",
 	}
 	if err := service.States.SaveControlPlane(ctx, state); err != nil {
@@ -231,11 +235,28 @@ func (service Service) ensureAgent(ctx context.Context, request ProvisionRequest
 }
 
 func provisionIntent(request ProvisionRequest, mode, suffix, before, after string) install.DesiredResource {
+	intent, _ := json.Marshal(struct {
+		InstallationID    string `json:"installation_id"`
+		InstanceID        string `json:"instance_id"`
+		AdminUsername     string `json:"admin_username"`
+		OwnerUsername     string `json:"owner_username"`
+		TeamName          string `json:"team_name"`
+		OwnerAgentName    string `json:"owner_agent_name"`
+		DynamicAgentLimit int    `json:"dynamic_agent_limit"`
+	}{request.InstallationID, request.InstanceID, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName, request.DynamicAgentLimit})
 	return install.DesiredResource{
 		OwnerID: "dev.mlink.control-plane", Target: "remote:tencentdb:" + request.InstanceID + ":" + mode + ":" + suffix,
 		Action: install.ActionService, Command: []string{"mlink-internal", "provision-control-plane", suffix},
+		CommandInput: intent,
 		SemanticDiff: []install.SemanticDiff{{Path: "control-plane:" + suffix, Before: before, After: after}},
 	}
+}
+
+func normalizeProvisionRequest(request ProvisionRequest) ProvisionRequest {
+	if request.DynamicAgentLimit == 0 {
+		request.DynamicAgentLimit = 500
+	}
+	return request
 }
 
 func metadataMarker(installationID, role string) string {
@@ -243,6 +264,9 @@ func metadataMarker(installationID, role string) string {
 }
 
 func validateProvisionRequest(request ProvisionRequest) error {
+	if request.DynamicAgentLimit <= 0 || request.DynamicAgentLimit > 10_000 {
+		return errors.New("dynamic Agent limit must be between 1 and 10000")
+	}
 	for _, value := range []string{request.InstallationID, request.InstanceID, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName} {
 		if strings.TrimSpace(value) == "" || len(value) > 128 {
 			return errors.New("complete bounded control-plane provisioning request is required")

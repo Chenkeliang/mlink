@@ -45,6 +45,7 @@ import (
 	"mlink/internal/mcpserver"
 	"mlink/internal/model"
 	"mlink/internal/panel"
+	"mlink/internal/provider/lifecycle"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
 	"mlink/internal/tui"
@@ -489,8 +490,122 @@ func defaultInstallRequest() app.InstallRequest {
 			UserID:             environmentDefault("MLINK_MEMORY_USER_ID", username),
 			IncludeAgentShared: false,
 		},
-		HermesMachine: environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env"),
+		HermesMachine:     environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env"),
+		DynamicAgentLimit: 500,
 	}
+}
+
+func (runtime *runtimeApplication) ProviderStatus(ctx context.Context) (lifecycle.BackendStatus, error) {
+	registry, err := runtime.providerRegistry(previewLedger{})
+	if err != nil {
+		return lifecycle.BackendStatus{}, err
+	}
+	backend, err := registry.Get("dev.mlink.tencentdb")
+	if err != nil {
+		return lifecycle.BackendStatus{}, err
+	}
+	return backend.Detect(ctx, runtime.providerConnection())
+}
+
+func (runtime *runtimeApplication) PlanProviderInstall(ctx context.Context, request lifecycle.BackendInstallRequest) (install.ChangeSet, error) {
+	registry, err := runtime.providerRegistry(previewLedger{})
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	backend, err := registry.Get(request.ProviderID)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	return backend.PlanInstall(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyProviderInstall(ctx context.Context, planID string, request lifecycle.BackendInstallRequest) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	registry, err := runtime.providerRegistry(ledger)
+	if err != nil {
+		return err
+	}
+	backend, err := registry.Get(request.ProviderID)
+	if err != nil {
+		return err
+	}
+	return backend.ApplyInstall(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) providerRegistry(ledger install.Ledger) (*lifecycle.Registry, error) {
+	target := install.LocalTarget{}
+	deployment := tencentdb.Deployment{
+		Runner: target, Target: target, Ledger: ledger, Secrets: secret.Keychain{},
+		ConfigPath: filepath.Join(runtime.paths.Home, "memorycore", "tdai-gateway.yaml"),
+		EnvPath:    filepath.Join(runtime.paths.Run, "memorycore.env"),
+	}
+	return lifecycle.NewRegistry(lifecycle.Registration{ProviderID: "dev.mlink.tencentdb", Lifecycle: deployment})
+}
+
+func (runtime *runtimeApplication) providerConnection() config.Connection {
+	if configuration, err := (config.Store{Path: runtime.paths.Config}).Load(); err == nil {
+		if connection, exists := configuration.Connections[configuration.ActiveConnectionID]; exists {
+			return connection
+		}
+	}
+	return defaultInstallRequest().Connection
+}
+
+func (runtime *runtimeApplication) PlanControlPlaneProvision(ctx context.Context, limit int) (install.ChangeSet, error) {
+	service, closeService, err := runtime.headlessControlService(ctx, false, limit)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer closeService()
+	return service.PlanControlPlaneProvision(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyControlPlaneProvision(ctx context.Context, planID string, limit int) error {
+	service, closeService, err := runtime.headlessControlService(ctx, true, limit)
+	if err != nil {
+		return err
+	}
+	defer closeService()
+	return service.ApplyControlPlaneProvision(ctx, planID)
+}
+
+func (runtime *runtimeApplication) headlessControlService(ctx context.Context, writable bool, limit int) (*app.Service, func(), error) {
+	var store *journal.Store
+	var err error
+	if writable {
+		store, _, err = runtime.openLedger(ctx)
+	} else {
+		store, err = journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	}
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeService := func() { _ = store.Close() }
+	request := defaultInstallRequest()
+	connection := request.Connection
+	connection.SecretRefs = map[string]string{"token": "keychain://dev.mlink/connection/" + connection.ID + "/token"}
+	configuration := config.Config{ActiveConnectionID: connection.ID, Connections: map[string]config.Connection{connection.ID: connection}}
+	var metadata tencentdb.MetadataClient
+	if writable {
+		client, clientErr := runtimeTencentClient(ctx, configuration, secret.Keychain{})
+		if clientErr != nil {
+			closeService()
+			return nil, func() {}, clientErr
+		}
+		metadata = tencentdb.NewMetadataClient(client)
+	}
+	controlService := &controlplane.Service{Metadata: metadata, Secrets: secret.Keychain{}, States: store}
+	return &app.Service{
+		ControlProvisioner: controlService, ControlPlaneStates: store, Secrets: secret.Keychain{},
+		ControlRequest: controlplane.ProvisionRequest{
+			InstallationID: request.Connection.TenantID, InstanceID: "default", AdminUsername: "mlink-admin",
+			OwnerUsername: sanitizeStableID(request.OwnerSlug), TeamName: "MLink", OwnerAgentName: "MLink Owner", DynamicAgentLimit: limit,
+		},
+	}, closeService, nil
 }
 
 func (runtime *runtimeApplication) PlanInstall(ctx context.Context, request app.InstallRequest) (install.ChangeSet, error) {

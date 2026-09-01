@@ -20,15 +20,16 @@ var (
 )
 
 type ControlPlaneState struct {
-	InstallationID string `json:"installation_id"`
-	InstanceID     string `json:"instance_id"`
-	OwnerUserID    string `json:"owner_user_id"`
-	OwnerTeamID    string `json:"owner_team_id"`
-	OwnerAgentID   string `json:"owner_agent_id"`
-	OwnerAssetID   string `json:"owner_asset_id"`
-	PanelContainer string `json:"panel_container"`
-	PanelImage     string `json:"panel_image"`
-	State          string `json:"state"`
+	InstallationID    string `json:"installation_id"`
+	InstanceID        string `json:"instance_id"`
+	DynamicAgentLimit int    `json:"dynamic_agent_limit"`
+	OwnerUserID       string `json:"owner_user_id"`
+	OwnerTeamID       string `json:"owner_team_id"`
+	OwnerAgentID      string `json:"owner_agent_id"`
+	OwnerAssetID      string `json:"owner_asset_id"`
+	PanelContainer    string `json:"panel_container"`
+	PanelImage        string `json:"panel_image"`
+	State             string `json:"state"`
 }
 
 type PrincipalAgent struct {
@@ -53,9 +54,9 @@ func (s *Store) SaveControlPlane(ctx context.Context, value ControlPlaneState) e
 		}
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE control_plane_installations
-			SET panel_container = ?, panel_image = ?, state = ?, updated_at = ?
+			SET panel_container = ?, panel_image = ?, dynamic_agent_limit = ?, state = ?, updated_at = ?
 			WHERE installation_id = ?`,
-			value.PanelContainer, value.PanelImage, value.State, formatTime(time.Now().UTC()), value.InstallationID)
+			value.PanelContainer, value.PanelImage, value.DynamicAgentLimit, value.State, formatTime(time.Now().UTC()), value.InstallationID)
 		if err != nil {
 			return fmt.Errorf("update control-plane state: %w", err)
 		}
@@ -68,10 +69,10 @@ func (s *Store) SaveControlPlane(ctx context.Context, value ControlPlaneState) e
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO control_plane_installations(
 			installation_id, instance_id, owner_user_id, owner_team_id, owner_agent_id, owner_asset_id,
-			panel_container, panel_image, state, created_at, updated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			panel_container, panel_image, dynamic_agent_limit, state, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		value.InstallationID, value.InstanceID, value.OwnerUserID, value.OwnerTeamID, value.OwnerAgentID,
-		value.OwnerAssetID, value.PanelContainer, value.PanelImage, value.State, now, now)
+		value.OwnerAssetID, value.PanelContainer, value.PanelImage, value.DynamicAgentLimit, value.State, now, now)
 	if err != nil {
 		return fmt.Errorf("save control-plane state: %w", err)
 	}
@@ -92,11 +93,11 @@ func (s *Store) LoadControlPlane(ctx context.Context) (ControlPlaneState, error)
 	var value ControlPlaneState
 	err := s.db.QueryRowContext(ctx, `
 		SELECT installation_id, instance_id, owner_user_id, owner_team_id, owner_agent_id, owner_asset_id,
-		       panel_container, panel_image, state
+		       panel_container, panel_image, dynamic_agent_limit, state
 		FROM control_plane_installations
 		ORDER BY updated_at DESC, installation_id DESC LIMIT 1`).Scan(
 		&value.InstallationID, &value.InstanceID, &value.OwnerUserID, &value.OwnerTeamID,
-		&value.OwnerAgentID, &value.OwnerAssetID, &value.PanelContainer, &value.PanelImage, &value.State)
+		&value.OwnerAgentID, &value.OwnerAssetID, &value.PanelContainer, &value.PanelImage, &value.DynamicAgentLimit, &value.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ControlPlaneState{}, fs.ErrNotExist
 	}
@@ -210,10 +211,10 @@ func (s *Store) controlPlaneByID(ctx context.Context, installationID string) (Co
 	var value ControlPlaneState
 	err := s.db.QueryRowContext(ctx, `
 		SELECT installation_id, instance_id, owner_user_id, owner_team_id, owner_agent_id, owner_asset_id,
-		       panel_container, panel_image, state
+		       panel_container, panel_image, dynamic_agent_limit, state
 		FROM control_plane_installations WHERE installation_id = ?`, installationID).Scan(
 		&value.InstallationID, &value.InstanceID, &value.OwnerUserID, &value.OwnerTeamID,
-		&value.OwnerAgentID, &value.OwnerAssetID, &value.PanelContainer, &value.PanelImage, &value.State)
+		&value.OwnerAgentID, &value.OwnerAssetID, &value.PanelContainer, &value.PanelImage, &value.DynamicAgentLimit, &value.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ControlPlaneState{}, fs.ErrNotExist
 	}
@@ -224,6 +225,9 @@ func (s *Store) controlPlaneByID(ctx context.Context, installationID string) (Co
 }
 
 func validControlPlane(value ControlPlaneState) bool {
+	if value.DynamicAgentLimit < 0 || value.DynamicAgentLimit > 10_000 {
+		return false
+	}
 	for _, item := range []string{value.InstallationID, value.InstanceID, value.OwnerUserID, value.OwnerTeamID,
 		value.OwnerAgentID, value.OwnerAssetID, value.PanelContainer} {
 		if !journalIDPattern.MatchString(item) {

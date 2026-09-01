@@ -24,7 +24,6 @@ import (
 	"mlink/internal/connection"
 	"mlink/internal/doctor"
 	"mlink/internal/identity"
-	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/model"
@@ -394,7 +393,7 @@ func TestDeriveHermesGrantIsStableAndDomainSeparated(t *testing.T) {
 	}
 }
 
-func TestDefaultInstallPreviewDoesNotCreateUserState(t *testing.T) {
+func TestDefaultInstallPreviewRequiresProvisionedCoreWithoutCreatingState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	dependencies, err := defaultDependencies(&bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
@@ -404,8 +403,8 @@ func TestDefaultInstallPreviewDoesNotCreateUserState(t *testing.T) {
 	request := dependencies.InstallRequest
 	request.Agents = []app.Agent{app.Codex}
 	request.SecretInputs = map[string][]byte{app.MemoryCoreTokenSecret: []byte("test-token")}
-	if _, err := dependencies.App.PlanInstall(context.Background(), request); err != nil {
-		t.Fatal(err)
+	if _, err := dependencies.App.PlanInstall(context.Background(), request); err == nil || !strings.Contains(err.Error(), "Core identity") {
+		t.Fatalf("error = %v", err)
 	}
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -427,7 +426,7 @@ func TestStaleRuntimeApplyDoesNotCreateUserState(t *testing.T) {
 	request.Agents = []app.Agent{app.Codex}
 	request.SecretInputs = map[string][]byte{app.MemoryCoreTokenSecret: []byte("test-token")}
 	err = dependencies.App.ApplyInstall(context.Background(), "plan_stale", request)
-	if !errors.Is(err, install.ErrPlanStale) {
+	if err == nil || !strings.Contains(err.Error(), "Core identity") {
 		t.Fatalf("error = %v", err)
 	}
 	entries, err := os.ReadDir(home)

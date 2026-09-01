@@ -48,7 +48,8 @@ func TestSaveLoadAndMarkControlPlane(t *testing.T) {
 	store := openTestStore(t)
 	want := ControlPlaneState{
 		InstallationID: "installation-1", InstanceID: "default",
-		OwnerUserID: "usr-owner", OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner",
+		DynamicAgentLimit: 500,
+		OwnerUserID:       "usr-owner", OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner",
 		OwnerAssetID:   "chat_memory-team-owner-agt-owner",
 		PanelContainer: "tdai-memory-hub", PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}

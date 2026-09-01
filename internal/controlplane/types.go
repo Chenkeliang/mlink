@@ -13,12 +13,13 @@ const (
 )
 
 type ProvisionRequest struct {
-	InstallationID string
-	InstanceID     string
-	AdminUsername  string
-	OwnerUsername  string
-	TeamName       string
-	OwnerAgentName string
+	InstallationID    string
+	InstanceID        string
+	AdminUsername     string
+	OwnerUsername     string
+	TeamName          string
+	OwnerAgentName    string
+	DynamicAgentLimit int
 }
 
 type ProvisionResult struct {
