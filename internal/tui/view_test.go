@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"mlink/internal/identity"
+	"mlink/internal/install"
 )
 
 func TestNarrowViewHasNoOverflow(t *testing.T) {
@@ -58,6 +59,27 @@ func TestPanelPreviewExplainsOfficialHubAndOptInKnowledge(t *testing.T) {
 	for _, want := range []string{"Official Memory Hub", "8125", "8424", "not automatically imported"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("Hub preview missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestEveryWizardStepFitsSupportedTerminalWidths(t *testing.T) {
+	model := New(&fakeApplication{}, fixtureRequest())
+	model.backendPlan = install.ChangeSet{PlanID: "plan_backend"}
+	model.controlPlan = install.ChangeSet{PlanID: "plan_control"}
+	model.plan = install.ChangeSet{PlanID: "plan_install"}
+	model.panelPlan = install.ChangeSet{PlanID: "plan_panel"}
+	model.candidates = []identity.Candidate{identity.NewCandidate("陈科良", "union_id", "on_hidden", time.Unix(20, 0))}
+	for step := StepWelcome; step <= StepComplete; step++ {
+		model.step = step
+		for _, width := range []int{80, 100, 140} {
+			model.width, model.height = width, 40
+			view := model.View()
+			for _, line := range strings.Split(view, "\n") {
+				if actual := lipgloss.Width(line); actual > width {
+					t.Fatalf("step=%d width=%d line-width=%d line=%q", step, width, actual, line)
+				}
+			}
 		}
 	}
 }

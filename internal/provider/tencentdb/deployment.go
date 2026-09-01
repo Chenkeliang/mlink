@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -40,12 +41,47 @@ type Deployment struct {
 	EnvPath       string
 	HealthTimeout time.Duration
 	PollInterval  time.Duration
+	Layout        DeploymentLayout
+}
+
+type DeploymentLayout struct {
+	ContainerName string
+	VolumeName    string
+	NetworkName   string
+	HostAddress   string
+	HostPort      int
+}
+
+var dockerObjectNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{2,127}$`)
+
+func (deployment Deployment) resolvedLayout() DeploymentLayout {
+	layout := deployment.Layout
+	if layout == (DeploymentLayout{}) {
+		return DeploymentLayout{
+			ContainerName: MemoryCoreContainerName, VolumeName: MemoryCoreVolumeName,
+			NetworkName: MemoryCoreNetworkName, HostAddress: "127.0.0.1", HostPort: 8420,
+		}
+	}
+	return layout
+}
+
+func (layout DeploymentLayout) validate() error {
+	if !dockerObjectNamePattern.MatchString(layout.ContainerName) || !dockerObjectNamePattern.MatchString(layout.VolumeName) ||
+		!dockerObjectNamePattern.MatchString(layout.NetworkName) || layout.HostAddress != "127.0.0.1" ||
+		layout.HostPort <= 1024 || layout.HostPort > 65535 {
+		return errors.New("safe loopback MemoryCore deployment layout is required")
+	}
+	return nil
 }
 
 //go:embed templates/tdai-gateway.yaml.tmpl
 var gatewayConfigTemplate string
 
 func (deployment Deployment) Detect(ctx context.Context, connection config.Connection) (lifecycle.BackendStatus, error) {
+	layout := deployment.resolvedLayout()
+	if err := layout.validate(); err != nil {
+		return lifecycle.BackendStatus{}, err
+	}
 	if connection.ProviderID != providerID || connection.ProviderVersion != providerVersion {
 		return lifecycle.BackendStatus{}, errors.New("TencentDB connection identity is incompatible")
 	}
@@ -66,7 +102,7 @@ func (deployment Deployment) Detect(ctx context.Context, connection config.Conne
 		}
 		status.State, status.Version = lifecycle.BackendReachable, version
 		if local {
-			if inspected, inspectErr := deployment.inspect(ctx); inspectErr == nil && inspected.compatible() {
+			if inspected, inspectErr := deployment.inspect(ctx); inspectErr == nil && inspected.compatible(layout) {
 				status.Installed = true
 			}
 		}
@@ -82,7 +118,7 @@ func (deployment Deployment) Detect(ctx context.Context, connection config.Conne
 		return status, nil
 	}
 	status.Installed = true
-	if !inspected.compatible() {
+	if !inspected.compatible(layout) {
 		status.State = lifecycle.BackendIncompatible
 		return status, nil
 	}
@@ -168,7 +204,7 @@ func (deployment Deployment) inspect(ctx context.Context) (coreInspect, error) {
 	if runner == nil {
 		runner = install.LocalTarget{}
 	}
-	output, err := runner.Run(ctx, []string{"docker", "inspect", MemoryCoreContainerName}, nil)
+	output, err := runner.Run(ctx, []string{"docker", "inspect", deployment.resolvedLayout().ContainerName}, nil)
 	if err != nil {
 		return coreInspect{}, err
 	}
@@ -179,18 +215,18 @@ func (deployment Deployment) inspect(ctx context.Context) (coreInspect, error) {
 	return values[0], nil
 }
 
-func (value coreInspect) compatible() bool {
+func (value coreInspect) compatible(layout DeploymentLayout) bool {
 	if value.Config.Image != MemoryCoreImageReference || value.Config.Labels["dev.mlink.component"] != "memory-core" {
 		return false
 	}
 	volume := false
 	for _, mount := range value.Mounts {
-		volume = volume || mount.Name == MemoryCoreVolumeName && mount.Destination == "/data/tdai-memory"
+		volume = volume || mount.Name == layout.VolumeName && mount.Destination == "/data/tdai-memory"
 	}
 	bindings := value.HostConfig.PortBindings["8420/tcp"]
 	port := false
 	for _, binding := range bindings {
-		port = port || binding.HostIP == "127.0.0.1" && binding.HostPort == "8420"
+		port = port || binding.HostIP == layout.HostAddress && binding.HostPort == fmt.Sprint(layout.HostPort)
 	}
 	return volume && port
 }
@@ -215,35 +251,36 @@ func (deployment Deployment) PlanInstall(ctx context.Context, request lifecycle.
 		Command:      []string{"docker", "pull", MemoryCoreImageReference},
 		SemanticDiff: []install.SemanticDiff{{Path: "memorycore.image", Before: "absent or cached", After: MemoryCoreImageReference}},
 	})
-	if !deployment.dockerObjectExists(ctx, "network", MemoryCoreNetworkName) {
+	layout := deployment.resolvedLayout()
+	if !deployment.dockerObjectExists(ctx, "network", layout.NetworkName) {
 		resources = append(resources, install.DesiredResource{
-			OwnerID: "dev.mlink.memorycore.network", Target: "service:docker-network:" + MemoryCoreNetworkName, Action: install.ActionService,
-			Command:         []string{"docker", "network", "create", "--label", "dev.mlink.component=memory-core", MemoryCoreNetworkName},
-			RollbackCommand: []string{"docker", "network", "rm", MemoryCoreNetworkName},
-			SemanticDiff:    []install.SemanticDiff{{Path: "memorycore.network", Before: "absent", After: MemoryCoreNetworkName}},
+			OwnerID: "dev.mlink.memorycore.network", Target: "service:docker-network:" + layout.NetworkName, Action: install.ActionService,
+			Command:         []string{"docker", "network", "create", "--label", "dev.mlink.component=memory-core", layout.NetworkName},
+			RollbackCommand: []string{"docker", "network", "rm", layout.NetworkName},
+			SemanticDiff:    []install.SemanticDiff{{Path: "memorycore.network", Before: "absent", After: layout.NetworkName}},
 		})
 	}
-	if !deployment.dockerObjectExists(ctx, "volume", MemoryCoreVolumeName) {
+	if !deployment.dockerObjectExists(ctx, "volume", layout.VolumeName) {
 		resources = append(resources, install.DesiredResource{
-			OwnerID: "dev.mlink.memorycore.volume", Target: "service:docker-volume:" + MemoryCoreVolumeName, Action: install.ActionService,
-			Command:      []string{"docker", "volume", "create", "--label", "dev.mlink.component=memory-core", MemoryCoreVolumeName},
-			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.data-volume", Before: "absent", After: MemoryCoreVolumeName + "; retained on rollback and ordinary uninstall"}},
+			OwnerID: "dev.mlink.memorycore.volume", Target: "service:docker-volume:" + layout.VolumeName, Action: install.ActionService,
+			Command:      []string{"docker", "volume", "create", "--label", "dev.mlink.component=memory-core", layout.VolumeName},
+			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.data-volume", Before: "absent", After: layout.VolumeName + "; retained on rollback and ordinary uninstall"}},
 		})
 	}
 	run := []string{
-		"docker", "run", "-d", "--name", MemoryCoreContainerName, "--restart", "unless-stopped",
-		"--label", "dev.mlink.component=memory-core", "--network", MemoryCoreNetworkName,
-		"-p", "127.0.0.1:8420:8420", "-v", MemoryCoreVolumeName + ":/data/tdai-memory",
+		"docker", "run", "-d", "--name", layout.ContainerName, "--restart", "unless-stopped",
+		"--label", "dev.mlink.component=memory-core", "--network", layout.NetworkName,
+		"-p", fmt.Sprintf("%s:%d:8420", layout.HostAddress, layout.HostPort), "-v", layout.VolumeName + ":/data/tdai-memory",
 		"-v", deployment.ConfigPath + ":/data/config/tdai-gateway.yaml:ro", "--env-file", deployment.EnvPath,
 		"-e", "TDAI_GATEWAY_PORT=8420", "-e", "TDAI_GATEWAY_HOST=0.0.0.0", "-e", "TDAI_DATA_DIR=/data/tdai-memory",
 		MemoryCoreImageReference,
 	}
 	resources = append(resources, install.DesiredResource{
-		OwnerID: "dev.mlink.memorycore.container", Target: "service:docker-run:" + MemoryCoreContainerName, Action: install.ActionService,
-		Command: run, RollbackCommand: []string{"docker", "rm", "-f", MemoryCoreContainerName},
+		OwnerID: "dev.mlink.memorycore.container", Target: "service:docker-run:" + layout.ContainerName, Action: install.ActionService,
+		Command: run, RollbackCommand: []string{"docker", "rm", "-f", layout.ContainerName},
 		SemanticDiff: []install.SemanticDiff{
-			{Path: "memorycore.container", Before: "absent", After: MemoryCoreContainerName},
-			{Path: "memorycore.port", Before: "available", After: "127.0.0.1:8420:8420"},
+			{Path: "memorycore.container", Before: "absent", After: layout.ContainerName},
+			{Path: "memorycore.port", Before: "available", After: fmt.Sprintf("%s:%d:8420", layout.HostAddress, layout.HostPort)},
 			{Path: "memorycore.secret-transport", Before: "Keychain inputs", After: "private temporary env file removed after startup"},
 		},
 	})
@@ -298,8 +335,12 @@ func (deployment Deployment) ApplyInstall(ctx context.Context, planID string, re
 // persistent MemoryCore volume is deliberately outside the ordinary uninstall
 // ChangeSet so memory data survives reinstall and upgrades.
 func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeSet, error) {
+	layout := deployment.resolvedLayout()
+	if err := layout.validate(); err != nil {
+		return install.ChangeSet{}, err
+	}
 	inspected, inspectErr := deployment.inspect(ctx)
-	if inspectErr == nil && !inspected.compatible() {
+	if inspectErr == nil && !inspected.compatible(layout) {
 		return install.ChangeSet{}, errors.New("MLink refuses to remove an unowned or drifted MemoryCore container")
 	}
 	if deployment.Target == nil || !filepath.IsAbs(deployment.ConfigPath) {
@@ -311,8 +352,8 @@ func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeS
 	}}
 	if inspectErr == nil {
 		resources = append(resources, install.DesiredResource{
-			OwnerID: "dev.mlink.memorycore.container", Target: "service:remove:" + MemoryCoreContainerName, Action: install.ActionService,
-			Command:      []string{"docker", "rm", "-f", MemoryCoreContainerName},
+			OwnerID: "dev.mlink.memorycore.container", Target: "service:remove:" + layout.ContainerName, Action: install.ActionService,
+			Command:      []string{"docker", "rm", "-f", layout.ContainerName},
 			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.container", Before: "MLink-owned", After: "removed; data volume retained"}},
 		})
 	}
@@ -320,12 +361,17 @@ func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeS
 }
 
 func (deployment Deployment) validateInstallRequest(request lifecycle.BackendInstallRequest) error {
+	layout := deployment.resolvedLayout()
+	if err := layout.validate(); err != nil {
+		return err
+	}
 	if deployment.Target == nil || deployment.Ledger == nil || deployment.Secrets == nil || !filepath.IsAbs(deployment.ConfigPath) || !filepath.IsAbs(deployment.EnvPath) {
 		return errors.New("MemoryCore install target, ledger, Keychain, and absolute paths are required")
 	}
 	endpoint, local, err := deploymentEndpoint(request.Endpoint)
-	if err != nil || !local || strings.TrimRight(endpoint.String(), "/") != "http://127.0.0.1:8420" {
-		return errors.New("official local MemoryCore install requires http://127.0.0.1:8420")
+	expectedEndpoint := fmt.Sprintf("http://%s:%d", layout.HostAddress, layout.HostPort)
+	if err != nil || !local || strings.TrimRight(endpoint.String(), "/") != expectedEndpoint {
+		return fmt.Errorf("official local MemoryCore install requires %s", expectedEndpoint)
 	}
 	if err := validateLLMEndpoint(request.LLMBaseURL); err != nil {
 		return errors.New("valid HTTPS or loopback memory LLM endpoint is required")

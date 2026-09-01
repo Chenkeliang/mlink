@@ -238,7 +238,7 @@ func fixture(t *testing.T) (*app.Service, *target, app.InstallRequest) {
 		controlplane.OwnerUserKeyAccount: []byte("owner-key"),
 	}
 	controlStore := &e2eControlStore{state: journal.ControlPlaneState{
-		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		InstallationID: "personal", InstanceID: "default", DynamicAgentLimit: 500, OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
 		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
 	}, mappings: map[string]journal.PrincipalAgent{}}
 	service := &app.Service{

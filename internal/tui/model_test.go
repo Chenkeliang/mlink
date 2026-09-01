@@ -17,22 +17,23 @@ import (
 )
 
 type fakeApplication struct {
-	plan            install.ChangeSet
-	applyCalls      int
-	planCalls       int
-	candidates      []identity.Candidate
-	planRequest     app.InstallRequest
-	applyErr        error
-	panelPlan       install.ChangeSet
-	panelApplies    int
-	providerStatus  lifecycle.BackendStatus
-	providerPlan    install.ChangeSet
-	providerRequest lifecycle.BackendInstallRequest
-	providerApplies int
-	controlPlan     install.ChangeSet
-	controlApplies  int
-	controlLimit    int
-	panelStatus     app.PanelControlStatus
+	plan             install.ChangeSet
+	applyCalls       int
+	planCalls        int
+	candidates       []identity.Candidate
+	planRequest      app.InstallRequest
+	applyErr         error
+	panelPlan        install.ChangeSet
+	panelApplies     int
+	providerStatus   lifecycle.BackendStatus
+	providerPlan     install.ChangeSet
+	providerRequest  lifecycle.BackendInstallRequest
+	providerApplies  int
+	providerApplyErr error
+	controlPlan      install.ChangeSet
+	controlApplies   int
+	controlLimit     int
+	panelStatus      app.PanelControlStatus
 }
 
 func (application *fakeApplication) PlanInstall(_ context.Context, request app.InstallRequest) (install.ChangeSet, error) {
@@ -71,7 +72,7 @@ func (application *fakeApplication) PlanProviderInstall(_ context.Context, reque
 }
 func (application *fakeApplication) ApplyProviderInstall(context.Context, string, lifecycle.BackendInstallRequest) error {
 	application.providerApplies++
-	return nil
+	return application.providerApplyErr
 }
 func (application *fakeApplication) PlanControlPlaneProvision(_ context.Context, limit int) (install.ChangeSet, error) {
 	application.controlLimit = limit
@@ -119,6 +120,33 @@ func TestWizardReachableBackendUsesExistingConnection(t *testing.T) {
 	}
 }
 
+func TestWizardStoppedBackendOffersSetupAndCanConnectExisting(t *testing.T) {
+	application := &fakeApplication{providerStatus: lifecycle.BackendStatus{ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendStopped, Installed: true}}
+	model := New(application, fixtureRequest())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	if model.step != StepBackendMode {
+		t.Fatalf("stopped backend step = %d", model.step)
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = advance(t, model, enterKey())
+	if model.step != StepConnection || model.installBackend {
+		t.Fatalf("connect-existing = step:%d install:%t", model.step, model.installBackend)
+	}
+}
+
+func TestWizardIncompatibleBackendFailsClosedBeforeCredentials(t *testing.T) {
+	application := &fakeApplication{providerStatus: lifecycle.BackendStatus{ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendIncompatible}}
+	model := New(application, fixtureRequest())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	if model.step != StepBackendDetect || model.err == nil {
+		t.Fatalf("incompatible backend = step:%d error:%v", model.step, model.err)
+	}
+}
+
 func TestWizardLocalBackendCollectsInstallInputsBeforeIdentity(t *testing.T) {
 	application := &fakeApplication{providerStatus: lifecycle.BackendStatus{ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendAbsent}, providerPlan: install.ChangeSet{PlanID: "plan_backend"}}
 	model := New(application, fixtureRequest())
@@ -158,6 +186,30 @@ func TestWizardCreatesCoreIdentityBeforeAnyAgentInstallPlan(t *testing.T) {
 	model = advance(t, model, enterKey())
 	if model.step != StepPreview || application.planCalls != 1 || application.planRequest.DynamicAgentLimit != 777 {
 		t.Fatalf("after gate = step:%d plans:%d request:%#v", model.step, application.planCalls, application.planRequest)
+	}
+}
+
+func TestWizardBackendApplyResumesAtCoreIdentityAndKeepsFailureRetryable(t *testing.T) {
+	application := &fakeApplication{controlPlan: install.ChangeSet{PlanID: "plan_control"}}
+	model := New(application, fixtureRequest())
+	model.step, model.backendPlan, model.confirmed = StepBackendApply, install.ChangeSet{PlanID: "plan_backend"}, true
+	model.dynamicAgentLimit = 500
+	model.endpoint.SetValue("http://127.0.0.1:8420")
+	model.token.SetValue("gateway-token-long")
+	model.llmBaseURL.SetValue("https://llm.example/v1")
+	model.llmModel.SetValue("model")
+	model.llmAPIKey.SetValue("key")
+	model = advance(t, model, enterKey())
+	if model.step != StepControlPreview || application.providerApplies != 1 || model.llmAPIKey.Value() != "" {
+		t.Fatalf("backend resume = step:%d applies:%d llm-key:%q", model.step, application.providerApplies, model.llmAPIKey.Value())
+	}
+
+	application.providerApplyErr = errors.New("docker unavailable")
+	model.step, model.backendPlan, model.confirmed = StepBackendApply, install.ChangeSet{PlanID: "plan_backend_retry"}, true
+	model.llmAPIKey.SetValue("retry-key")
+	model = advance(t, model, enterKey())
+	if model.step != StepBackendApply || model.err == nil || model.llmAPIKey.Value() == "" {
+		t.Fatalf("retryable failure = step:%d error:%v llm-key:%q", model.step, model.err, model.llmAPIKey.Value())
 	}
 }
 

@@ -228,6 +228,39 @@ func TestDeploymentInstallPlanIsPinnedSecretFreeAndZeroWrite(t *testing.T) {
 	}
 }
 
+func TestDeploymentInstallPlanSupportsValidatedIsolatedLayout(t *testing.T) {
+	runner := &deploymentRunner{err: errors.New("not found")}
+	root := t.TempDir()
+	deployment := Deployment{
+		Runner: runner, Target: install.LocalTarget{Runner: runner}, Ledger: &deploymentLedger{},
+		Secrets: &deploymentSecrets{values: map[string][]byte{}}, ConfigPath: root + "/gateway.yaml", EnvPath: root + "/core.env",
+		Layout: DeploymentLayout{
+			ContainerName: "mlink-e2e-core-123", VolumeName: "mlink-e2e-data-123", NetworkName: "mlink-e2e-net-123",
+			HostAddress: "127.0.0.1", HostPort: 18420,
+		},
+	}
+	request := installRequest()
+	request.Endpoint = "http://127.0.0.1:18420"
+	plan, err := deployment.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := ""
+	for _, operation := range plan.Operations {
+		commands += "\n" + strings.Join(operation.Command, " ")
+	}
+	for _, want := range []string{"mlink-e2e-core-123", "mlink-e2e-data-123", "mlink-e2e-net-123", "127.0.0.1:18420:8420"} {
+		if !strings.Contains(commands, want) {
+			t.Fatalf("isolated Plan missing %q: %s", want, commands)
+		}
+	}
+	for _, forbidden := range []string{"--name " + MemoryCoreContainerName, "-v " + MemoryCoreVolumeName + ":", "--network " + MemoryCoreNetworkName, "127.0.0.1:8420:8420"} {
+		if strings.Contains(commands, forbidden) {
+			t.Fatalf("isolated Plan contains production resource %q: %s", forbidden, commands)
+		}
+	}
+}
+
 func TestDeploymentApplyInstallsAndDeletesTemporarySecretFile(t *testing.T) {
 	runner := &installRunner{}
 	deployment := deploymentFixture(t, runner)
