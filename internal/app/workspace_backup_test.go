@@ -115,6 +115,16 @@ func (store *backupEvidenceStore) RecordWorkspaceBackupEvidence(_ context.Contex
 	return nil
 }
 
+type backupResumeVerifier struct {
+	calls int
+	err   error
+}
+
+func (verifier *backupResumeVerifier) ResumeWorkspaceServices(context.Context) error {
+	verifier.calls++
+	return verifier.err
+}
+
 func TestWorkspaceBackupPreviewIsZeroWriteAndSecretIndependent(t *testing.T) {
 	service, target, secrets := workspaceBackupFixture(t)
 	output := filepath.Join(t.TempDir(), "workspace.mlink-backup")
@@ -185,6 +195,25 @@ func TestWorkspaceBackupFailureRestartsOriginalServicesAndLeavesNoOutput(t *test
 	}
 	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed backup left output: %v", err)
+	}
+}
+
+func TestWorkspaceBackupAcceptsTransientCompensationErrorOnlyAfterRuntimeVerification(t *testing.T) {
+	service, target, _ := workspaceBackupFixture(t)
+	verifier := &backupResumeVerifier{}
+	service.WorkspaceResumer = verifier
+	target.failAtRun = 6
+	output := filepath.Join(t.TempDir(), "workspace.mlink-backup")
+	request := WorkspaceBackupRequest{OutputPath: output, Passphrase: []byte("twelve-byte-passphrase")}
+	plan, err := service.PlanWorkspaceBackup(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyWorkspaceBackup(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("resume verification calls = %d", verifier.calls)
 	}
 }
 

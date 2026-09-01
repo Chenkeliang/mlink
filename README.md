@@ -86,7 +86,31 @@ go build -trimpath -o mlink ./cmd/mlink
 ./mlink
 ```
 
-The wizard detects local agents, lets you select adapters, previews every file and service operation, and only applies the exact confirmed Plan.
+The wizard starts with **New installation**, **Restore encrypted backup**, or **Connect existing MemoryCore**. It also exposes `b` for a full encrypted backup and `c` for controlled Panel credential access. Every file and service operation is previewed and only the exact confirmed Plan can be applied.
+
+### Move the complete workspace to another Mac
+
+```bash
+mlink backup create \
+  --output /absolute/path/workspace.mlink-backup \
+  --passphrase-stdin --dry-run --json
+
+mlink backup create \
+  --output /absolute/path/workspace.mlink-backup \
+  --passphrase-stdin --apply-plan <exact-plan-id> --yes
+
+# On the destination Mac:
+mlink backup inspect /absolute/path/workspace.mlink-backup --passphrase-stdin --json
+mlink backup restore /absolute/path/workspace.mlink-backup --passphrase-stdin --dry-run --json
+mlink backup restore /absolute/path/workspace.mlink-backup --passphrase-stdin --apply-plan <exact-plan-id> --yes
+```
+
+A full workspace backup contains encrypted MemoryCore and Knowledge snapshots, the exact MemoryCore runtime configuration, MLink config and Journal, Core-generated fixed/dynamic IDs, Keychain material, stable identity bindings, and the selected Agent integrations. Restore preserves those IDs; it does not create replacements or migrate memories into a new identity graph.
+
+This is different from:
+
+- `mlink backup list`: automatic per-change rollback artifacts for the current computer;
+- `mlink identity export/import`: identity-only portability without MemoryCore/Knowledge data.
 
 ### Existing installation: enable Cursor
 
@@ -112,6 +136,9 @@ mlink status [--json]                      Installed adapters and active plan
 mlink doctor [agent] [--json]              Read-only dependency/runtime checks
 mlink config diff [--json]                 Owned-resource drift
 mlink backup list [--json]                 Automatic rollback backups
+mlink backup create / inspect / restore    Encrypted full-workspace portability
+mlink credentials status [--json]          Redacted Keychain inventory
+mlink credentials copy panel-* --yes       Controlled Panel login key copy
 mlink identity list [--json]               Stable identity bindings
 mlink identity export / import ...         Encrypted identity portability
 mlink panel status | open                  Official Memory Hub Panel
@@ -146,6 +173,10 @@ TencentDB MemoryCore is the first real connector, not a hard-coded product ceili
 ## Safety and recovery
 
 - Secrets live in macOS Keychain; plans and logs contain fingerprints only.
+- Full backups use authenticated outer encryption plus independently encrypted sections; ciphertext-only staging is mode `0700`, and the final bundle is mode `0600`.
+- Restore creates only empty formal resources, starts the official digest-pinned Core with secrets outside argv, verifies fixed and dynamic IDs, then installs Agent integrations.
+- A non-secret restore sidecar survives interruption before the restored Journal is available; Journal schema v7 records restore phases and verified bundle fingerprints without paths or raw IDs.
+- `mlink doctor` reports `backup.last_verified`, `restore.state`, and `restore.identity_gate`.
 - The Journal separates delivery state from operator resolution and clears payloads after audited resolution.
 - Cursor and Codex Hooks fail open so memory downtime does not block the agent.
 - The Memory Hub image is digest-pinned and its Knowledge volume is persistent.

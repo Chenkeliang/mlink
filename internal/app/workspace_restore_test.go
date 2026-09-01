@@ -179,7 +179,7 @@ func TestWorkspaceRestoreAppliesSectionsThenVerifiesIdentity(t *testing.T) {
 	if target.runs != 2 {
 		t.Fatalf("transaction service runs = %d", target.runs)
 	}
-	want := "local:stage-secrets,provider:core,provider:knowledge,provider:verify,local:mlink,local:identity,local:secrets,local:agents,local:verify"
+	want := "local:stage-mlink,local:stage-secrets,provider:core,provider:knowledge,provider:verify,local:mlink,local:identity,local:secrets,local:agents,local:verify"
 	if got := strings.Join(events, ","); got != want {
 		t.Fatalf("restore order = %s, want %s", got, want)
 	}

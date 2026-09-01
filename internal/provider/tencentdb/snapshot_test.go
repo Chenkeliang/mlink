@@ -55,6 +55,22 @@ type snapshotStreamRunner struct {
 	content  []byte
 }
 
+type snapshotEnvironmentRunner struct {
+	argv        []string
+	environment map[string][]byte
+	commands    [][]string
+}
+
+func (runner *snapshotEnvironmentRunner) RunEnvironment(_ context.Context, argv []string, environment map[string][]byte, _ io.Reader) ([]byte, error) {
+	runner.argv = append([]string(nil), argv...)
+	runner.commands = append(runner.commands, append([]string(nil), argv...))
+	runner.environment = map[string][]byte{}
+	for name, value := range environment {
+		runner.environment[name] = append([]byte(nil), value...)
+	}
+	return []byte("container-id"), nil
+}
+
 type snapshotMetadata struct {
 	owner  User
 	teams  []Team
@@ -237,6 +253,34 @@ func TestSnapshotVerifyRestoreRequiresExactFixedAndDynamicIdentity(t *testing.T)
 	manifest.PrincipalAgents[0].BackendAgentID = "agt-other"
 	if err := driver.VerifyRestore(context.Background(), request, manifest); err == nil || !strings.Contains(err.Error(), "dynamic Agent") {
 		t.Fatalf("dynamic mismatch error = %v", err)
+	}
+}
+
+func TestSnapshotVerifyStartsOfficialCoreWithSecretsOutsideArgv(t *testing.T) {
+	metadata := &snapshotMetadata{
+		owner: User{UserID: "usr-owner", UserType: "normal"}, teams: []Team{{TeamID: "team-owner", OwnerUserID: "usr-owner"}},
+		agents: []Agent{{AgentID: "agt-owner", TeamID: "team-owner", OwnerUserID: "usr-owner"}, {AgentID: "agt-dynamic", TeamID: "team-owner", OwnerUserID: "usr-owner"}},
+		assets: map[string]Asset{"asset-owner": {AssetID: "asset-owner", TeamID: "team-owner", OwnerUserID: "usr-owner"}, "asset-dynamic": {AssetID: "asset-dynamic", TeamID: "team-owner", OwnerUserID: "usr-owner"}},
+	}
+	environment := &snapshotEnvironmentRunner{}
+	driver := SnapshotDriver{Metadata: metadata, Environment: environment, WaitHealthy: func(context.Context, string) error { return nil }}
+	request := lifecycle.RestoreRequest{
+		ProviderID: providerID, CoreContainer: MemoryCoreContainerName, CoreVolume: MemoryCoreVolumeName, CoreNetwork: MemoryCoreNetworkName,
+		CoreConfigPath: "/Users/test/.mlink/memorycore/tdai-gateway.yaml", Endpoint: "http://127.0.0.1:8420",
+		GatewayToken: []byte("gateway-secret"), LLMAPIKey: []byte("llm-secret"), OwnerUserKey: []byte("owner-key"),
+	}
+	if err := driver.VerifyRestore(context.Background(), request, fixtureManifestForSnapshot()); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(environment.argv, " ")
+	for _, secret := range []string{"gateway-secret", "llm-secret"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("restore argv leaked %q: %s", secret, joined)
+		}
+	}
+	if string(environment.environment["TDAI_GATEWAY_API_KEY"]) != "gateway-secret" || string(environment.environment["TDAI_LLM_API_KEY"]) != "llm-secret" ||
+		!strings.Contains(joined, MemoryCoreImageReference) || !strings.Contains(joined, "-e TDAI_GATEWAY_API_KEY") {
+		t.Fatalf("restore command/environment = %s/%#v", joined, environment.environment)
 	}
 }
 

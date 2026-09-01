@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,8 @@ type SnapshotDriver struct {
 	Runner          install.CommandRunner
 	Stream          install.StreamRunner
 	Target          install.Target
+	Environment     install.EnvironmentRunner
+	WaitHealthy     func(context.Context, string) error
 	Metadata        MetadataClient
 	InstanceID      string
 	CoreContainer   string
@@ -179,6 +182,11 @@ func (driver SnapshotDriver) PlanRestore(ctx context.Context, request lifecycle.
 		createSnapshotObject("network", request.CoreNetwork, "memory-core"),
 		createSnapshotObject("volume", request.CoreVolume, "memory-core"),
 		createSnapshotObject("volume", request.KnowledgeVolume, "memory-hub"),
+		{
+			OwnerID: "dev.mlink.memorycore.container", Target: "service:restore-runtime:" + request.CoreContainer, Action: install.ActionService,
+			Command: []string{"true"}, RollbackCommand: []string{"docker", "rm", "-f", request.CoreContainer},
+			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.restore-runtime", Before: "absent", After: "official restored Core; secrets supplied through process environment"}},
+		},
 	}
 	return install.BuildChangeSet(driver.Target, resources)
 }
@@ -206,31 +214,80 @@ func (driver SnapshotDriver) VerifyRestore(ctx context.Context, request lifecycl
 	if driver.Metadata == nil || len(request.OwnerUserKey) == 0 {
 		return errors.New("TencentDB restore metadata verification is unavailable")
 	}
+	started := false
+	if driver.Environment != nil {
+		if err := driver.startRestoredCore(ctx, request); err != nil {
+			return err
+		}
+		started = true
+	}
+	fail := func(message string) error {
+		if started && driver.Runner != nil {
+			_, _ = driver.Runner.Run(context.Background(), []string{"docker", "rm", "-f", request.CoreContainer}, nil)
+		}
+		return errors.New(message)
+	}
 	control := manifest.ControlPlane
 	owner, err := driver.Metadata.VerifyUser(ctx, request.OwnerUserKey)
 	if err != nil || owner.UserID != control.OwnerUserID || owner.UserType != "normal" {
-		return errors.New("restored Owner identity mismatch")
+		return fail("restored Owner identity mismatch")
 	}
 	teams, err := driver.Metadata.ListTeams(ctx, request.OwnerUserKey, ListTeamsRequest{UserID: control.OwnerUserID, Limit: 100})
 	if err != nil || !hasTeam(teams, control.OwnerTeamID, control.OwnerUserID) {
-		return errors.New("restored Owner Team mismatch")
+		return fail("restored Owner Team mismatch")
 	}
 	agents, err := driver.Metadata.ListAgents(ctx, request.OwnerUserKey, ListAgentsRequest{TeamID: control.OwnerTeamID, OwnerUserID: control.OwnerUserID, Limit: 100})
 	if err != nil || !hasAgent(agents, control.OwnerAgentID, control.OwnerTeamID, control.OwnerUserID) {
-		return errors.New("restored Owner Agent mismatch")
+		return fail("restored Owner Agent mismatch")
 	}
 	asset, err := driver.Metadata.GetAsset(ctx, request.OwnerUserKey, control.OwnerAssetID)
 	if err != nil || asset.AssetID != control.OwnerAssetID || asset.TeamID != control.OwnerTeamID || asset.OwnerUserID != control.OwnerUserID {
-		return errors.New("restored Owner Asset mismatch")
+		return fail("restored Owner Asset mismatch")
 	}
 	for _, mapping := range manifest.PrincipalAgents {
 		if !hasAgent(agents, mapping.BackendAgentID, mapping.BackendTeamID, mapping.BackendUserID) {
-			return errors.New("restored dynamic Agent mismatch")
+			return fail("restored dynamic Agent mismatch")
 		}
 		asset, err := driver.Metadata.GetAsset(ctx, request.OwnerUserKey, mapping.BackendAssetID)
 		if err != nil || asset.AssetID != mapping.BackendAssetID || asset.TeamID != mapping.BackendTeamID || asset.OwnerUserID != mapping.BackendUserID {
-			return errors.New("restored dynamic Asset mismatch")
+			return fail("restored dynamic Asset mismatch")
 		}
+	}
+	return nil
+}
+
+func (driver SnapshotDriver) startRestoredCore(ctx context.Context, request lifecycle.RestoreRequest) error {
+	if driver.Environment == nil || request.CoreContainer == "" || request.CoreVolume == "" || request.CoreNetwork == "" ||
+		!filepath.IsAbs(request.CoreConfigPath) || len(request.GatewayToken) == 0 || len(request.LLMAPIKey) == 0 {
+		return errors.New("complete protected restored Core runtime is required")
+	}
+	endpoint, local, err := deploymentEndpoint(request.Endpoint)
+	if err != nil || !local || endpoint.Scheme != "http" || endpoint.Port() == "" || endpoint.Path != "" {
+		return errors.New("restored Core verification endpoint must be an explicit loopback HTTP port")
+	}
+	command := []string{
+		"docker", "run", "-d", "--name", request.CoreContainer, "--restart", "unless-stopped",
+		"--label", "dev.mlink.component=memory-core", "--network", request.CoreNetwork,
+		"-p", "127.0.0.1:" + endpoint.Port() + ":8420", "-v", request.CoreVolume + ":/data/tdai-memory",
+		"-v", request.CoreConfigPath + ":/data/config/tdai-gateway.yaml:ro",
+		"-e", "TDAI_GATEWAY_API_KEY", "-e", "TDAI_LLM_API_KEY",
+		"-e", "TDAI_GATEWAY_PORT=8420", "-e", "TDAI_GATEWAY_HOST=0.0.0.0", "-e", "TDAI_DATA_DIR=/data/tdai-memory",
+		MemoryCoreImageReference,
+	}
+	if _, err := driver.Environment.RunEnvironment(ctx, command, map[string][]byte{
+		"TDAI_GATEWAY_API_KEY": request.GatewayToken, "TDAI_LLM_API_KEY": request.LLMAPIKey,
+	}, nil); err != nil {
+		return errors.New("start restored MemoryCore")
+	}
+	waitHealthy := driver.WaitHealthy
+	if waitHealthy == nil {
+		waitHealthy = (Deployment{}).waitHealthy
+	}
+	if err := waitHealthy(ctx, request.Endpoint); err != nil {
+		if driver.Runner != nil {
+			_, _ = driver.Runner.Run(context.Background(), []string{"docker", "rm", "-f", request.CoreContainer}, nil)
+		}
+		return err
 	}
 	return nil
 }

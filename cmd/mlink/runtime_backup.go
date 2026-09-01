@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"mlink/internal/app"
 	"mlink/internal/config"
@@ -54,6 +55,7 @@ type localWorkspaceRestorer struct {
 	secrets        secret.Store
 	passphrase     []byte
 	manifest       workspacebackup.Manifest
+	provider       lifecycle.RestoreRequest
 	selectedAgents []app.Agent
 	agents         restoredAgentLifecycle
 	staged         restoreSecretMaterial
@@ -146,9 +148,50 @@ func (ledger *restoreMemoryLedger) RecordOwned(_ context.Context, resource insta
 }
 
 type runtimeRestoreAgents struct {
-	runtime *runtimeApplication
-	plan    install.ChangeSet
-	applied bool
+	runtime      *runtimeApplication
+	plan         install.ChangeSet
+	applied      bool
+	panelStarted bool
+}
+
+type runtimeWorkspaceResumer struct {
+	target install.Target
+	driver lifecycle.SnapshotDriver
+	uid    int
+	plist  string
+}
+
+func (resumer runtimeWorkspaceResumer) ResumeWorkspaceServices(ctx context.Context) error {
+	domain := fmt.Sprintf("gui/%d", resumer.uid)
+	service := domain + "/dev.mlink.broker"
+	if _, err := resumer.target.Run(ctx, []string{"launchctl", "print", service}, nil); err != nil {
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			_, bootstrapErr := resumer.target.Run(ctx, []string{"launchctl", "bootstrap", domain, resumer.plist}, nil)
+			if bootstrapErr == nil {
+				break
+			}
+			if _, printErr := resumer.target.Run(ctx, []string{"launchctl", "print", service}, nil); printErr == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				return errors.New("Broker did not resume after workspace snapshot")
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	if resumer.driver == nil {
+		return errors.New("snapshot runtime verification is unavailable")
+	}
+	source, err := resumer.driver.Detect(ctx)
+	if err != nil || !source.CoreRunning || source.HubContainer != "" && !source.HubRunning {
+		return errors.New("memory services did not resume after workspace snapshot")
+	}
+	return nil
 }
 
 func (lifecycle *runtimeRestoreAgents) Apply(ctx context.Context, selected []app.Agent) error {
@@ -242,6 +285,14 @@ func (lifecycle *runtimeRestoreAgents) Apply(ctx context.Context, selected []app
 }
 
 func (lifecycle *runtimeRestoreAgents) Verify(ctx context.Context, selected []app.Agent) error {
+	panelPlan, err := lifecycle.runtime.PlanPanelRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	if err := lifecycle.runtime.ApplyPanelRuntime(ctx, panelPlan.PlanID); err != nil {
+		return err
+	}
+	lifecycle.panelStarted = true
 	report, err := lifecycle.runtime.Doctor(ctx, selected)
 	if err != nil {
 		return err
@@ -253,17 +304,27 @@ func (lifecycle *runtimeRestoreAgents) Verify(ctx context.Context, selected []ap
 }
 
 func (lifecycle *runtimeRestoreAgents) Rollback(ctx context.Context) error {
-	if lifecycle == nil || !lifecycle.applied {
+	if lifecycle == nil {
 		return nil
+	}
+	var rollbackErrors []error
+	if lifecycle.panelStarted {
+		if _, err := (install.LocalTarget{}).Run(ctx, []string{"docker", "rm", "-f", panel.ContainerName}, nil); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+		lifecycle.panelStarted = false
+	}
+	if !lifecycle.applied {
+		return errors.Join(rollbackErrors...)
 	}
 	store, ledger, err := lifecycle.runtime.openLedger(ctx)
 	if err != nil {
-		return err
+		return errors.Join(append(rollbackErrors, err)...)
 	}
 	defer store.Close()
 	err = install.NewTransaction(install.LocalTarget{}, ledger).Rollback(ctx, lifecycle.plan)
 	lifecycle.applied = false
-	return err
+	return errors.Join(append(rollbackErrors, err)...)
 }
 
 type restoreMetadataClient struct{ restorer *localWorkspaceRestorer }
@@ -367,8 +428,14 @@ func (restorer *localWorkspaceRestorer) PlanRestore(ctx context.Context, request
 }
 
 func (restorer *localWorkspaceRestorer) StageSection(_ context.Context, section workspacebackup.Section, reader io.Reader) error {
-	if restorer == nil || section != workspacebackup.SectionSecrets || reader == nil {
-		return errors.New("protected restore secret section is required")
+	if restorer == nil || reader == nil {
+		return errors.New("restore staging section is required")
+	}
+	if section == workspacebackup.SectionMLink {
+		return restorer.stageCoreConfiguration(reader)
+	}
+	if section != workspacebackup.SectionSecrets {
+		return errors.New("unsupported restore staging section")
 	}
 	material, err := decodeRestoreSecrets(reader)
 	if err != nil {
@@ -377,6 +444,28 @@ func (restorer *localWorkspaceRestorer) StageSection(_ context.Context, section 
 	restorer.staged.wipe()
 	restorer.staged = material
 	return nil
+}
+
+func (restorer *localWorkspaceRestorer) stageCoreConfiguration(reader io.Reader) error {
+	archive := tar.NewReader(reader)
+	for {
+		header, err := archive.Next()
+		if errors.Is(err, io.EOF) {
+			return errors.New("MemoryCore configuration is missing from workspace backup")
+		}
+		if err != nil || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > 1<<20 {
+			return errors.New("workspace configuration archive is invalid")
+		}
+		if header.Name != "memorycore/tdai-gateway.yaml" {
+			continue
+		}
+		path := filepath.Join(restorer.paths.Home, "memorycore", "tdai-gateway.yaml")
+		if err := writeRestoreFile(path, archive, header.Size); err != nil {
+			return err
+		}
+		restorer.createdFiles = append(restorer.createdFiles, path)
+		return nil
+	}
 }
 
 func decodeRestoreSecrets(reader io.Reader) (restoreSecretMaterial, error) {
@@ -404,13 +493,32 @@ func (restorer *localWorkspaceRestorer) ProviderRequest(_ context.Context, manif
 	if restorer == nil {
 		return lifecycle.RestoreRequest{}, errors.New("local restore provider request is unavailable")
 	}
-	return lifecycle.RestoreRequest{
+	request := lifecycle.RestoreRequest{
 		ProviderID: manifest.Provider.ProviderID, CoreContainer: tencentdb.MemoryCoreContainerName,
 		CoreVolume: tencentdb.MemoryCoreVolumeName, KnowledgeVolume: panel.VolumeName, CoreNetwork: tencentdb.MemoryCoreNetworkName,
 		CoreConfigPath: filepath.Join(restorer.paths.Home, "memorycore", "tdai-gateway.yaml"), Endpoint: "http://127.0.0.1:8420",
 		GatewayToken: append([]byte(nil), restorer.staged.GatewayToken...), LLMAPIKey: append([]byte(nil), restorer.staged.LLMAPIKey...),
 		OwnerUserKey: append([]byte(nil), restorer.staged.OwnerUserKey...),
-	}, nil
+	}
+	if restorer.provider.CoreContainer != "" {
+		request.CoreContainer = restorer.provider.CoreContainer
+	}
+	if restorer.provider.CoreVolume != "" {
+		request.CoreVolume = restorer.provider.CoreVolume
+	}
+	if restorer.provider.KnowledgeVolume != "" {
+		request.KnowledgeVolume = restorer.provider.KnowledgeVolume
+	}
+	if restorer.provider.CoreNetwork != "" {
+		request.CoreNetwork = restorer.provider.CoreNetwork
+	}
+	if restorer.provider.CoreConfigPath != "" {
+		request.CoreConfigPath = restorer.provider.CoreConfigPath
+	}
+	if restorer.provider.Endpoint != "" {
+		request.Endpoint = restorer.provider.Endpoint
+	}
+	return request, nil
 }
 
 func (restorer *localWorkspaceRestorer) ApplySection(ctx context.Context, section workspacebackup.Section, reader io.Reader) error {
@@ -582,7 +690,15 @@ func (restorer *localWorkspaceRestorer) extractMLink(reader io.Reader) error {
 			return err
 		}
 		if err := writeRestoreFile(destination, archive, header.Size); err != nil {
-			return err
+			if header.Name != "memorycore/tdai-gateway.yaml" || !restorer.createdFile(destination) {
+				return err
+			}
+			content, readErr := io.ReadAll(io.LimitReader(archive, header.Size+1))
+			existing, fileErr := os.ReadFile(destination)
+			if readErr != nil || fileErr != nil || int64(len(content)) != header.Size || !bytes.Equal(content, existing) {
+				return errors.New("staged MemoryCore configuration differs from archive")
+			}
+			continue
 		}
 		restorer.createdFiles = append(restorer.createdFiles, destination)
 	}
@@ -590,6 +706,15 @@ func (restorer *localWorkspaceRestorer) extractMLink(reader io.Reader) error {
 		return errors.New("MLink restore archive is incomplete")
 	}
 	return nil
+}
+
+func (restorer *localWorkspaceRestorer) createdFile(path string) bool {
+	for _, created := range restorer.createdFiles {
+		if created == path {
+			return true
+		}
+	}
+	return false
 }
 
 func (restorer *localWorkspaceRestorer) restoreArchivePath(name string) (string, error) {
@@ -752,6 +877,10 @@ func (runtime *runtimeApplication) workspaceBackupService(ctx context.Context, w
 	service.ControlPlaneStates, service.PrincipalAgentStates = store, store
 	service.WorkspaceEvidence = store
 	service.SnapshotDriver = driver
+	service.WorkspaceResumer = runtimeWorkspaceResumer{
+		target: localTarget, driver: driver, uid: runtime.uid,
+		plist: filepath.Join(filepath.Dir(runtime.paths.Home), "Library", "LaunchAgents", "dev.mlink.broker.plist"),
+	}
 	service.WorkspacePacker = workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")}
 	service.WorkspaceArchiver = app.LocalWorkspaceArchiver{}
 	return &service, func() { _ = store.Close() }, nil
@@ -765,7 +894,8 @@ func (runtime *runtimeApplication) workspaceRestoreService(request app.Workspace
 	}
 	local.agents = &runtimeRestoreAgents{runtime: runtime}
 	driver := &tencentdb.SnapshotDriver{
-		Runner: localTarget, Stream: install.LocalStreamRunner{}, Target: localTarget, Metadata: restoreMetadataClient{restorer: local}, InstanceID: "default",
+		Runner: localTarget, Stream: install.LocalStreamRunner{}, Target: localTarget, Environment: install.LocalEnvironmentRunner{},
+		Metadata: restoreMetadataClient{restorer: local}, InstanceID: "default",
 	}
 	return &app.Service{
 		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: &restoreMemoryLedger{}, Secrets: runtime.secretStore(),

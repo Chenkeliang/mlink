@@ -123,6 +123,10 @@ type WorkspaceEvidenceStore interface {
 	RecordWorkspaceBackupEvidence(context.Context, journal.WorkspaceBackupEvidence) error
 }
 
+type WorkspaceServiceResumer interface {
+	ResumeWorkspaceServices(context.Context) error
+}
+
 type RestoreOperationStore interface {
 	SaveRestoreOperation(context.Context, journal.RestoreOperation) error
 }
@@ -181,6 +185,7 @@ type Service struct {
 	WorkspaceArchiver    WorkspaceStateArchiver
 	WorkspaceRestorer    WorkspaceRestoreLocal
 	WorkspaceEvidence    WorkspaceEvidenceStore
+	WorkspaceResumer     WorkspaceServiceResumer
 	RestoreOperations    RestoreOperationStore
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime

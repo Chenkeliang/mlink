@@ -3,7 +3,9 @@ package install
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +44,18 @@ func TestLimitedWriterStopsOversizedStream(t *testing.T) {
 	}
 	if count, err := writer.Write([]byte("0123456789")); err != nil || count != 10 || writer.Written != 10 {
 		t.Fatalf("bounded write = %d/%v/%d", count, err, writer.Written)
+	}
+}
+
+func TestLocalEnvironmentRunnerPassesSecretOutsideArgv(t *testing.T) {
+	secret := []byte("protected-value")
+	argv := []string{"sh", "-c", `test -n "$MLINK_TEST_SECRET" && printf ok`}
+	output, err := (LocalEnvironmentRunner{}).RunEnvironment(context.Background(), argv, map[string][]byte{"MLINK_TEST_SECRET": secret}, nil)
+	if err != nil || string(output) != "ok" {
+		t.Fatalf("output/error = %q/%v", output, err)
+	}
+	if strings.Contains(fmt.Sprint(argv), string(secret)) {
+		t.Fatal("test command accidentally placed secret in argv")
 	}
 }
 

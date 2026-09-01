@@ -119,6 +119,8 @@ go build -trimpath -o mlink ./cmd/mlink
 8. 展示完整变更 Plan，确认后才写入；
 9. 运行 Doctor，并可选安装官方 Memory Hub。
 
+欢迎页直接提供“新安装”“从加密备份恢复”“连接已有 MemoryCore”三条主路径；按 `b` 可创建全量加密备份，按 `c` 可查看脱敏凭据状态并受控复制 Panel 登录 Key。
+
 所有文件与服务变更都必须经过同一流程：
 
 ```text
@@ -141,6 +143,30 @@ mlink adapter enable cursor --dry-run --json
 mlink adapter enable cursor --apply-plan <精确-plan-id> --yes
 ```
 
+### 把整套记忆迁移到另一台 Mac
+
+```bash
+mlink backup create \
+  --output /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --dry-run --json
+
+mlink backup create \
+  --output /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --apply-plan <精确-plan-id> --yes
+
+# 在新电脑上：
+mlink backup inspect /绝对路径/workspace.mlink-backup --passphrase-stdin --json
+mlink backup restore /绝对路径/workspace.mlink-backup --passphrase-stdin --dry-run --json
+mlink backup restore /绝对路径/workspace.mlink-backup --passphrase-stdin --apply-plan <精确-plan-id> --yes
+```
+
+全量工作区备份会加密保存 MemoryCore 与 Knowledge 卷、MemoryCore 原始运行配置、MLink 配置与 Journal、Core 生成的固定/动态 ID、Keychain 材料、稳定身份绑定，以及已选择的 Agent 接入。恢复时保留原 ID，不会创建替代 ID，也不会把记忆“迁移”到另一套身份图。
+
+它与下面两种备份不同：
+
+- `mlink backup list`：只用于当前电脑安装变更的自动回滚；
+- `mlink identity export/import`：只迁移身份，不包含 MemoryCore/Knowledge 数据。
+
 ## 后端接入方式
 
 推荐通过 TUI 完成首次接入，避免在 Shell 历史中暴露凭据。
@@ -159,7 +185,7 @@ mlink provider install tencentdb \
   --dry-run --json
 ```
 
-`--secrets-stdin` 读取受保护 JSON，其中包含 Gateway Token 和 Memory LLM API Key。密钥不会进入 argv、Plan、日志、普通配置或备份。
+`--secrets-stdin` 读取受保护 JSON，其中包含 Gateway Token 和 Memory LLM API Key。密钥不会进入 argv、Plan、日志、普通配置或未加密文件；只有明确创建的全量加密包会包含可恢复的密钥段。
 
 ### 连接已有 MemoryCore
 
@@ -188,6 +214,9 @@ mlink status [--json]                      查看已安装 Agent 与当前连接
 mlink doctor [agent] [--json]              只读检查依赖、身份和运行状态
 mlink config diff [--json]                 检查 MLink 所有资源是否漂移
 mlink backup list [--json]                 查看自动回滚备份
+mlink backup create / inspect / restore    全量加密备份、检查与换机恢复
+mlink credentials status [--json]          查看脱敏 Keychain 凭据清单
+mlink credentials copy panel-* --yes       受控复制 Panel 登录 Key
 mlink identity list [--json]               查看稳定身份绑定
 mlink identity export / import ...         加密导出与迁移身份
 mlink panel status | open                  管理官方 Memory Hub
@@ -217,6 +246,10 @@ TencentDB MemoryCore 是首个真实 Provider，但不是硬编码的能力上�
 ## 安全与恢复
 
 - 密钥保存在 macOS Keychain，Plan 和日志只包含指纹或存在性标记。
+- 全量备份采用“外层认证加密 + 分段独立加密”；暂存目录只出现密文且权限为 `0700`，最终包权限为 `0600`。
+- 恢复只创建空的正式资源，使用官方 digest 固定镜像启动 Core，密钥不进入 argv；固定 ID 与动态 Agent/Asset ID 验证一致后才安装 Agent 接入。
+- 主 Journal 尚未恢复时，由不含路径、密钥和原始 ID 的 sidecar 记录中断阶段；Journal schema v7 保存恢复阶段与已验证包指纹。
+- `mlink doctor` 会显示 `backup.last_verified`、`restore.state` 与 `restore.identity_gate`。
 - SQLite Journal 负责防重复、投递状态、审计与安全重试。
 - Codex 和 Cursor Hooks 采用 fail-open；记忆不可用时不会阻塞 Agent。
 - 官方 MemoryCore 与 Memory Hub 镜像固定到明确 digest。

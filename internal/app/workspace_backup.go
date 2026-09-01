@@ -116,6 +116,13 @@ func (service *Service) ApplyWorkspaceBackup(ctx context.Context, planID string,
 	}
 	backupErr := service.createWorkspaceBackup(ctx, request)
 	resumeErr := transaction.Rollback(ctx, plan)
+	if resumeErr != nil && service.WorkspaceResumer != nil {
+		if verifiedErr := service.WorkspaceResumer.ResumeWorkspaceServices(ctx); verifiedErr == nil {
+			resumeErr = nil
+		} else {
+			resumeErr = errors.Join(resumeErr, verifiedErr)
+		}
+	}
 	if backupErr != nil || resumeErr != nil {
 		return errors.Join(backupErr, resumeErr)
 	}

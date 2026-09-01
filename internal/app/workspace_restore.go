@@ -123,7 +123,7 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 		switch section {
 		case workspacebackup.SectionCore, workspacebackup.SectionKnowledge:
 			return service.SnapshotDriver.ApplySection(ctx, providerRequest, section, reader)
-		case workspacebackup.SectionSecrets:
+		case workspacebackup.SectionSecrets, workspacebackup.SectionMLink:
 			return service.WorkspaceRestorer.StageSection(ctx, section, reader)
 		default:
 			return nil
