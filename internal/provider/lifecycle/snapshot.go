@@ -29,6 +29,8 @@ type SnapshotSource struct {
 	HubContainer  string
 	CoreImage     string
 	HubImage      string
+	CoreRunning   bool
+	HubRunning    bool
 	Volumes       []SnapshotVolume
 }
 
@@ -61,14 +63,17 @@ type RestoreRequest struct {
 	CoreContainer   string
 	CoreVolume      string
 	KnowledgeVolume string
+	CoreNetwork     string
+	CoreConfigPath  string
+	Endpoint        string
 	GatewayToken    []byte
 	LLMAPIKey       []byte
 	OwnerUserKey    []byte
 }
 
 func (request RestoreRequest) String() string {
-	return fmt.Sprintf("RestoreRequest{ProviderID:%q Bundle:%q CoreContainer:%q CoreVolume:%q KnowledgeVolume:%q GatewayToken:<redacted> LLMAPIKey:<redacted> OwnerUserKey:<redacted>}",
-		request.ProviderID, filepath.Base(request.BundlePath), request.CoreContainer, request.CoreVolume, request.KnowledgeVolume)
+	return fmt.Sprintf("RestoreRequest{ProviderID:%q Bundle:%q CoreContainer:%q CoreVolume:%q KnowledgeVolume:%q CoreNetwork:%q Endpoint:<redacted> CoreConfigPath:<redacted> GatewayToken:<redacted> LLMAPIKey:<redacted> OwnerUserKey:<redacted>}",
+		request.ProviderID, filepath.Base(request.BundlePath), request.CoreContainer, request.CoreVolume, request.KnowledgeVolume, request.CoreNetwork)
 }
 
 func (request RestoreRequest) GoString() string { return request.String() }
