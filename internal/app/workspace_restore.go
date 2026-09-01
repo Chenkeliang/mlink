@@ -39,7 +39,7 @@ func (request *WorkspaceRestoreRequest) Wipe() {
 }
 
 func (service *Service) PlanWorkspaceRestore(ctx context.Context, request WorkspaceRestoreRequest) (install.ChangeSet, error) {
-	if service == nil || service.Target == nil || service.Ledger == nil || service.WorkspacePacker == nil || service.WorkspaceFingerprinter == nil || service.SnapshotDriver == nil || service.WorkspaceRestorer == nil {
+	if service == nil || service.Target == nil || service.Ledger == nil || service.WorkspacePacker == nil || service.WorkspaceFingerprinter == nil || service.WorkspaceStager == nil || service.SnapshotDriver == nil || service.WorkspaceRestorer == nil {
 		return install.ChangeSet{}, errors.New("full workspace restore dependencies are required")
 	}
 	if !filepath.IsAbs(request.BundlePath) || len(request.Passphrase) < 12 || len(request.Passphrase) > 4096 {
@@ -99,6 +99,16 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 	if plan.PlanID != planID {
 		return fmt.Errorf("%w: workspace restore plan changed", install.ErrPlanStale)
 	}
+	expectedFingerprint, err := restorePlanBundleFingerprint(plan)
+	if err != nil {
+		return err
+	}
+	stagedPath, cleanupStage, err := service.WorkspaceStager.Stage(ctx, request.BundlePath, expectedFingerprint)
+	if err != nil {
+		return err
+	}
+	defer cleanupStage()
+	request.BundlePath = stagedPath
 	operation := workspaceRestoreOperation(plan, request.BundlePath)
 	if err := service.saveRestoreOperation(ctx, operation, journal.RestorePhasePlanned, ""); err != nil {
 		return err
@@ -108,11 +118,11 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 	}
 	manifest, err := service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(workspacebackup.Section, io.Reader) error { return nil })
 	if err != nil {
-		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseFailed, "bundle_open_failed"))
+		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseRolledBack, "bundle_open_failed"))
 	}
 	providerRequest, err := service.WorkspaceRestorer.ProviderRequest(ctx, manifest)
 	if err != nil {
-		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseFailed, "provider_request_failed"))
+		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseRolledBack, "provider_request_failed"))
 	}
 	transaction := install.NewTransaction(service.Target, service.Ledger)
 	applied, err := transaction.ApplyDeferredOwnership(ctx, plan)
@@ -174,6 +184,15 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 		return rollback(err)
 	}
 	return nil
+}
+
+func restorePlanBundleFingerprint(plan install.ChangeSet) (string, error) {
+	for _, operation := range plan.Operations {
+		if operation.OwnerID == "dev.mlink.workspace-restore" && len(operation.Content) == 64 {
+			return string(operation.Content), nil
+		}
+	}
+	return "", errors.New("confirmed restore Plan has no bundle fingerprint")
 }
 
 func validateWorkspaceRestoreManifest(manifest workspacebackup.Manifest) error {

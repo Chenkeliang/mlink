@@ -34,6 +34,9 @@ func (bundle *restoreBundle) Fingerprint(context.Context, string) (string, error
 	}
 	return bundle.fingerprint, nil
 }
+func (bundle *restoreBundle) Stage(_ context.Context, path, _ string) (string, func(), error) {
+	return path, func() {}, nil
+}
 
 func (*restoreBundle) Pack(context.Context, string, []byte, *workspacebackup.Manifest, ...workspacebackup.SectionSource) error {
 	return errors.New("not used")
@@ -240,7 +243,7 @@ func TestWorkspaceRestoreFailureRollsBackOnlyCreatedResources(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRestoreReopenFailureRecordsTerminalState(t *testing.T) {
+func TestWorkspaceRestoreReopenFailureRecordsRetryableRolledBackState(t *testing.T) {
 	service, _, bundle, _, _ := workspaceRestoreFixture(t)
 	operations := &restoreOperationStore{}
 	service.RestoreOperations = operations
@@ -253,7 +256,7 @@ func TestWorkspaceRestoreReopenFailureRecordsTerminalState(t *testing.T) {
 	if err := service.ApplyWorkspaceRestore(context.Background(), plan.PlanID, request); err == nil {
 		t.Fatal("bundle reopen failure was accepted")
 	}
-	if got := operations.values[len(operations.values)-1].Phase; got != journal.RestorePhaseFailed {
+	if got := operations.values[len(operations.values)-1].Phase; got != journal.RestorePhaseRolledBack {
 		t.Fatalf("final restore phase = %s", got)
 	}
 }
@@ -303,6 +306,7 @@ func workspaceRestoreFixture(t *testing.T) (*Service, *memoryTarget, *restoreBun
 	local := &restoreLocal{target: target, provider: lifecycle.RestoreRequest{ProviderID: "dev.mlink.tencentdb", CoreVolume: "core", KnowledgeVolume: "knowledge", OwnerUserKey: []byte("owner")}}
 	service := &Service{Target: target, Ledger: newMemoryLedger(), WorkspacePacker: bundle, SnapshotDriver: snapshot, WorkspaceRestorer: local}
 	service.WorkspaceFingerprinter = bundle
+	service.WorkspaceStager = bundle
 	return service, target, bundle, snapshot, local
 }
 

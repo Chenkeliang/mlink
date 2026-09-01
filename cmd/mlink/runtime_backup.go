@@ -1008,7 +1008,7 @@ func (runtime *runtimeApplication) workspaceRestoreService(request app.Workspace
 	return &app.Service{
 		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: &restoreMemoryLedger{}, Secrets: runtime.secretStore(),
 		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")},
-		WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: local,
+		WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceStager: workspacebackup.Packer{}, WorkspaceRestorer: local,
 		RestoreOperations: &deferredRestoreOperationStore{path: runtime.paths.Journal, statePath: filepath.Join(runtime.paths.Run, "restore-operation.json")},
 	}
 }

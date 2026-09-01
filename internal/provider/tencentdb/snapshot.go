@@ -175,6 +175,9 @@ func (driver SnapshotDriver) PlanRestore(ctx context.Context, request lifecycle.
 	if _, err := ValidateDeploymentEndpoint(request.Endpoint); err != nil {
 		return install.ChangeSet{}, err
 	}
+	if err := driver.verifyRestoreCapacity(ctx, provider.Volumes); err != nil {
+		return install.ChangeSet{}, err
+	}
 	for _, object := range []struct{ kind, name string }{{"volume", request.CoreVolume}, {"volume", request.KnowledgeVolume}, {"network", request.CoreNetwork}} {
 		if driver.objectExists(ctx, object.kind, object.name) {
 			return install.ChangeSet{}, fmt.Errorf("restore target %s %q already exists", object.kind, object.name)
@@ -323,10 +326,9 @@ func (driver SnapshotDriver) validateVolumeSQLite(ctx context.Context, volume st
 	if driver.Runner == nil || volume == "" {
 		return errors.New("snapshot SQLite validation dependencies are required")
 	}
-	script := `const fs=require('fs'),path=require('path'),sqlite=require('node:sqlite');let n=0;function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(/\.(db|sqlite|sqlite3)$/.test(e.name)){const t='/check/db-'+n++;fs.copyFileSync(f,t);for(const s of ['-wal','-shm'])if(fs.existsSync(f+s))fs.copyFileSync(f+s,t+s);const d=new sqlite.DatabaseSync(t,{readOnly:true});const r=d.prepare('PRAGMA quick_check').all();d.close();for(const s of ['', '-wal','-shm'])try{fs.unlinkSync(t+s)}catch{};if(r.length!==1||r[0].quick_check!=='ok')throw new Error('quick_check');}}}walk('/source');`
+	script := `const fs=require('fs'),path=require('path'),sqlite=require('node:sqlite');let n=0;function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(/\.(db|sqlite|sqlite3)$/.test(e.name)){const t='/tmp/db-'+n++;fs.copyFileSync(f,t);for(const s of ['-wal','-shm'])if(fs.existsSync(f+s))fs.copyFileSync(f+s,t+s);const d=new sqlite.DatabaseSync(t,{readOnly:true});const r=d.prepare('PRAGMA quick_check').all();d.close();for(const s of ['', '-wal','-shm'])try{fs.unlinkSync(t+s)}catch{};if(r.length!==1||r[0].quick_check!=='ok')throw new Error('quick_check');}}}walk('/source');`
 	_, err := driver.Runner.Run(ctx, []string{
-		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--tmpfs", "/check:rw,nosuid,nodev,noexec,size=1g",
+		"docker", "run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume + ":/source:ro", MemoryCoreImageReference, "node", "--experimental-sqlite", "-e", script,
 	}, nil)
 	if err != nil {
@@ -369,7 +371,7 @@ func (driver SnapshotDriver) volumeContentDigest(ctx context.Context, volume str
 	if driver.Runner == nil || volume == "" {
 		return "", errors.New("volume content fingerprint dependencies are required")
 	}
-	script := `const fs=require('fs'),path=require('path'),crypto=require('crypto');const files=[];function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(e.isFile())files.push(f);}}walk('/source');files.sort();const h=crypto.createHash('sha256');for(const f of files){const r=path.relative('/source',f);const b=fs.readFileSync(f);h.update(r);h.update('\0');h.update(String(b.length));h.update('\0');h.update(b);}process.stdout.write(h.digest('hex'));`
+	script := `const fs=require('fs'),path=require('path'),crypto=require('crypto');const files=[];function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(e.isFile())files.push(f);}}walk('/source');files.sort();(async()=>{const h=crypto.createHash('sha256');for(const f of files){const r=path.relative('/source',f),s=fs.statSync(f);h.update(r);h.update('\0');h.update(String(s.size));h.update('\0');for await(const chunk of fs.createReadStream(f))h.update(chunk);}process.stdout.write(h.digest('hex'));})().catch(()=>process.exit(1));`
 	output, err := driver.Runner.Run(ctx, []string{
 		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume + ":/source:ro", MemoryCoreImageReference, "node", "-e", script,
@@ -382,6 +384,31 @@ func (driver SnapshotDriver) volumeContentDigest(ctx context.Context, volume str
 		return "", errors.New("canonical volume content fingerprint is invalid")
 	}
 	return value, nil
+}
+
+func (driver SnapshotDriver) verifyRestoreCapacity(ctx context.Context, volumes []workspacebackup.VolumeManifest) error {
+	var logicalBytes int64
+	for _, volume := range volumes {
+		if volume.LogicalBytes < 0 || logicalBytes > (1<<62)-volume.LogicalBytes {
+			return errors.New("restore volume size is invalid")
+		}
+		logicalBytes += volume.LogicalBytes
+	}
+	if logicalBytes == 0 {
+		return nil
+	}
+	if logicalBytes > (1<<62)-1 {
+		return errors.New("restore volume size exceeds safe headroom calculation")
+	}
+	output, err := driver.Runner.Run(ctx, []string{
+		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		SnapshotHelperImage, "sh", "-c", `df -Pk / | awk 'NR==2 {printf "%.0f", $4*1024}'`,
+	}, nil)
+	available, parseErr := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil || parseErr != nil || available < logicalBytes*2 {
+		return errors.New("restore target lacks required capacity and rollback headroom")
+	}
+	return nil
 }
 
 func (driver SnapshotDriver) startRestoredCore(ctx context.Context, request lifecycle.RestoreRequest) error {

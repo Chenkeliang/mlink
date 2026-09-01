@@ -44,6 +44,7 @@ type fakeApplication struct {
 	workspaceBackupApplies  int
 	credentialStatuses      []app.CredentialStatus
 	credentialCopies        int
+	doctorAgents            []app.Agent
 	workspaceRestorePlanErr error
 	workspaceBackupPlanErr  error
 }
@@ -60,7 +61,8 @@ func (application *fakeApplication) ApplyInstall(context.Context, string, app.In
 func (application *fakeApplication) Status(context.Context) (app.Status, error) {
 	return app.Status{Adapters: map[app.Agent]bool{}}, nil
 }
-func (application *fakeApplication) Doctor(context.Context, []app.Agent) (doctor.Report, error) {
+func (application *fakeApplication) Doctor(_ context.Context, agents []app.Agent) (doctor.Report, error) {
+	application.doctorAgents = append([]app.Agent(nil), agents...)
 	return doctor.Report{Checks: []doctor.Check{{ID: "broker.socket", State: doctor.StatePassed, Code: "reachable"}}}, nil
 }
 func (application *fakeApplication) DetectIdentityCandidates(context.Context) ([]identity.Candidate, error) {
@@ -184,6 +186,9 @@ func TestRestoreFlowMasksPassphraseUsesExactPlanAndWipesAfterApply(t *testing.T)
 	model = advance(t, model, enterKey())
 	if model.step != StepRestoreVerify || application.workspaceRestoreApplies != 1 || model.restorePassphrase.Value() != "" {
 		t.Fatalf("apply = step:%d applies:%d passphrase:%q", model.step, application.workspaceRestoreApplies, model.restorePassphrase.Value())
+	}
+	if len(application.doctorAgents) != 0 {
+		t.Fatalf("restore Doctor overrode bundle Agent selection: %#v", application.doctorAgents)
 	}
 }
 

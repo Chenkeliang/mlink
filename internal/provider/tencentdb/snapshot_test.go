@@ -20,6 +20,7 @@ type snapshotRunner struct {
 	hubInspect  []byte
 	objects     map[string]bool
 	commands    [][]string
+	capacity    []byte
 }
 
 func (runner *snapshotRunner) Run(_ context.Context, args []string, _ io.Reader) ([]byte, error) {
@@ -45,6 +46,12 @@ func (runner *snapshotRunner) Run(_ context.Context, args []string, _ io.Reader)
 	default:
 		if strings.Contains(joined, "find /source") {
 			return []byte("files=3\nbytes=12\n"), nil
+		}
+		if strings.Contains(joined, "df -Pk /") {
+			if runner.capacity != nil {
+				return append([]byte(nil), runner.capacity...), nil
+			}
+			return []byte("1099511627776"), nil
 		}
 		if strings.Contains(joined, "createHash('sha256')") {
 			return []byte(strings.Repeat("b", 64)), nil
@@ -213,7 +220,7 @@ func TestSnapshotStreamsReadOnlyPinnedVolumeTar(t *testing.T) {
 		}
 	}
 	validationCommands := strings.Join(flattenCommands(runner.commands), "\n")
-	if !strings.Contains(validationCommands, "--tmpfs /check:rw,nosuid,nodev,noexec,size=1g") || !strings.Contains(validationCommands, "PRAGMA quick_check") {
+	if !strings.Contains(validationCommands, "PRAGMA quick_check") || strings.Contains(validationCommands, "--tmpfs") {
 		t.Fatalf("SQLite validation command is incomplete: %s", validationCommands)
 	}
 }
@@ -252,6 +259,20 @@ func TestSnapshotRestorePlanCreatesOnlyEmptyFormalResourcesAndApplyStreamsTar(t 
 	}
 	if stream.input.String() != "restored-tar" || !strings.Contains(strings.Join(stream.commands[0], " "), "-v "+MemoryCoreVolumeName+":/target") {
 		t.Fatalf("restore stream/input = %#v/%q", stream.commands, stream.input.String())
+	}
+}
+
+func TestSnapshotRestorePlanRejectsInsufficientCapacityBeforeCreatingResources(t *testing.T) {
+	runner := &snapshotRunner{objects: map[string]bool{}, capacity: []byte("100")}
+	driver := SnapshotDriver{Runner: runner, Target: install.LocalTarget{Runner: runner}, InstanceID: "default"}
+	request := lifecycle.RestoreRequest{ProviderID: providerID, CoreContainer: MemoryCoreContainerName, CoreVolume: MemoryCoreVolumeName, KnowledgeVolume: panel.VolumeName, CoreNetwork: MemoryCoreNetworkName, Endpoint: "http://127.0.0.1:8420"}
+	provider := workspacebackup.ProviderManifest{
+		ProviderID: providerID, DriverVersion: SnapshotDriverVersion, InstanceID: "default",
+		CoreImageDigest: imageDigestReference(MemoryCoreImageReference), HubImageDigest: imageDigestReference(panel.ImageReference),
+		Volumes: []workspacebackup.VolumeManifest{{Kind: workspacebackup.VolumeCore, Name: MemoryCoreVolumeName, LogicalBytes: 80, FileCount: 1, SHA256: strings.Repeat("a", 64)}},
+	}
+	if _, err := driver.PlanRestore(context.Background(), request, provider); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("capacity error = %v", err)
 	}
 }
 

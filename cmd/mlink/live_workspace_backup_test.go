@@ -78,7 +78,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	}
 	service := &app.Service{
 		Paths: paths, UID: os.Getuid(), Target: target, Ledger: &restoreMemoryLedger{}, Secrets: keys,
-		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: staging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: local,
+		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: staging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceStager: workspacebackup.Packer{}, WorkspaceRestorer: local,
 	}
 	request := app.WorkspaceRestoreRequest{BundlePath: bundlePath, Passphrase: append([]byte(nil), passphrase...)}
 	defer request.Wipe()
@@ -194,7 +194,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	}
 	secondService := &app.Service{
 		Paths: secondPaths, UID: os.Getuid(), Target: target, Ledger: &restoreMemoryLedger{}, Secrets: secondKeys,
-		SnapshotDriver: secondDriver, WorkspacePacker: workspacebackup.Packer{StagingParent: secondStaging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: secondLocal,
+		SnapshotDriver: secondDriver, WorkspacePacker: workspacebackup.Packer{StagingParent: secondStaging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceStager: workspacebackup.Packer{}, WorkspaceRestorer: secondLocal,
 	}
 	secondRequest := app.WorkspaceRestoreRequest{BundlePath: dynamicBundle, Passphrase: append([]byte(nil), passphrase...)}
 	secondPlan, err := secondService.PlanWorkspaceRestore(context.Background(), secondRequest)

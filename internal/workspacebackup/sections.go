@@ -65,6 +65,47 @@ func (Packer) Fingerprint(ctx context.Context, path string) (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
+func (Packer) Stage(ctx context.Context, input, expectedFingerprint string) (string, func(), error) {
+	cleanup := func() {}
+	if ctx == nil || !filepath.IsAbs(input) || len(expectedFingerprint) != 64 {
+		return "", cleanup, errors.New("valid immutable workspace staging request is required")
+	}
+	info, err := os.Lstat(input)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
+		return "", cleanup, errors.New("safe workspace bundle is required")
+	}
+	directory, err := os.MkdirTemp("", ".mlink-restore-*")
+	if err != nil {
+		return "", cleanup, errors.New("create private restore staging directory")
+	}
+	cleanup = func() { _ = os.RemoveAll(directory) }
+	if err := os.Chmod(directory, 0o700); err != nil {
+		cleanup()
+		return "", func() {}, errors.New("protect restore staging directory")
+	}
+	source, err := os.Open(input)
+	if err != nil {
+		cleanup()
+		return "", func() {}, errors.New("open workspace bundle for staging")
+	}
+	defer source.Close()
+	path := filepath.Join(directory, "workspace.mlink-backup")
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
+		return "", func() {}, errors.New("create immutable restore staging file")
+	}
+	digest := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(destination, digest), &contextReader{ctx: ctx, reader: source})
+	syncErr := destination.Sync()
+	closeErr := destination.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil || hex.EncodeToString(digest.Sum(nil)) != expectedFingerprint {
+		cleanup()
+		return "", func() {}, errors.New("workspace bundle changed after confirmed Plan")
+	}
+	return path, cleanup, nil
+}
+
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader

@@ -360,7 +360,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.wipeRestorePassphrase()
 		if value.err == nil {
 			model.step, model.busy = StepRestoreVerify, true
-			return model, model.doctorCommand()
+			return model, model.restoreDoctorCommand()
 		}
 		return model, nil
 	case backupPlanMsg:
@@ -953,6 +953,12 @@ func (model Model) doctorCommand() tea.Cmd {
 	agents := model.selectedAgents()
 	return func() tea.Msg {
 		report, err := model.application.Doctor(context.Background(), agents)
+		return doctorMsg{report, err}
+	}
+}
+func (model Model) restoreDoctorCommand() tea.Cmd {
+	return func() tea.Msg {
+		report, err := model.application.Doctor(context.Background(), nil)
 		return doctorMsg{report, err}
 	}
 }

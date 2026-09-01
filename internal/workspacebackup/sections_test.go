@@ -52,6 +52,10 @@ func TestPackerFingerprintChangesWithBundleContentAndRejectsSymlink(t *testing.T
 	if err != nil || first == second {
 		t.Fatalf("fingerprints/error = %s/%s/%v", first, second, err)
 	}
+	if _, cleanup, err := (Packer{}).Stage(context.Background(), path, first); err == nil {
+		cleanup()
+		t.Fatal("staging accepted bundle content that differed from the confirmed fingerprint")
+	}
 	link := filepath.Join(t.TempDir(), "bundle-link")
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)

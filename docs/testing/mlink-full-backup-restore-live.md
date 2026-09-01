@@ -47,13 +47,13 @@ Protected inputs are loaded from Keychain or test-process memory. They are not c
 
 ## Evidence
 
-- Full bundle size: `296,595,331` bytes.
-- Full bundle SHA-256: `7a6372ef714ec26a35d3fdeed5f93b3d53610c295fee07e96cb63ee6924972f0`.
+- Full bundle size: `296,645,523` bytes.
+- Full bundle SHA-256: `659a86d17aa287b7422ead5b93dcafdfdd1dd414b84788c854b63e9b3f185caa`.
 - Bundle format: `mlink-full-backup/v1`.
 - Encrypted sections: Core, Knowledge, MLink state, identity, credentials, and Agent selection.
 - Agent selection: Codex, Cursor, Pi, and Hermes.
 - First isolated restore duration: `40.69s`.
-- Two-stage dynamic-Agent acceptance duration with SQLite and canonical volume verification (final hardened run): `103.86s`.
+- Two-stage dynamic-Agent acceptance duration with immutable staging, capacity, SQLite, and canonical volume verification (final run): `106.27s`.
 - Fixed Owner User / Team / Agent / Asset IDs matched the encrypted manifest.
 - The first restored Core recalled at least one pre-existing Owner memory item through the restored identity dimensions.
 - Two isolated dynamic principals were provisioned through the official metadata API (`hermes-private` and `hermes-group`), persisted to the restored Journal, backed up again, and restored into a second isolated Core.

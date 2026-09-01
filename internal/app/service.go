@@ -110,6 +110,10 @@ type WorkspaceBundleFingerprinter interface {
 	Fingerprint(context.Context, string) (string, error)
 }
 
+type WorkspaceBundleStager interface {
+	Stage(context.Context, string, string) (string, func(), error)
+}
+
 type WorkspaceStateArchiver interface {
 	Open(context.Context, layout.Paths) (io.ReadCloser, error)
 }
@@ -187,6 +191,7 @@ type Service struct {
 	SnapshotDriver         lifecycle.SnapshotDriver
 	WorkspacePacker        WorkspaceBundle
 	WorkspaceFingerprinter WorkspaceBundleFingerprinter
+	WorkspaceStager        WorkspaceBundleStager
 	WorkspaceArchiver      WorkspaceStateArchiver
 	WorkspaceRestorer      WorkspaceRestoreLocal
 	WorkspaceEvidence      WorkspaceEvidenceStore
