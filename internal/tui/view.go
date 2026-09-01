@@ -143,9 +143,15 @@ func (model Model) stepView(width int) []string {
 		}
 		return lines
 	case StepPanelPreview:
-		return append(model.planLines(model.panelPlan, width), "", model.mutedStyle().Render("Creates Core metadata and the official Panel only. Active routing is unchanged."))
+		lines := []string{
+			model.row("Official Memory Hub", "selected"),
+			model.row("Panel", "http://127.0.0.1:8125"),
+			model.row("Knowledge", "http://127.0.0.1:8424"),
+		}
+		lines = append(lines, model.planLines(model.panelPlan, width)...)
+		return append(lines, "", model.mutedStyle().Render("Knowledge assets are not automatically imported or injected. Active routing is unchanged."))
 	case StepPanelApply:
-		return model.confirmationLines(model.panelPlan.PlanID, "Stage A creates Core IDs and the loopback Panel. It does not cut over memory routing.")
+		return model.confirmationLines(model.panelPlan.PlanID, "Stage A creates Core IDs and starts the official loopback Hub. It does not cut over memory routing.")
 	case StepCapacity:
 		return []string{
 			"Set the maximum number of dynamically created private/group Agents.",
@@ -160,7 +166,10 @@ func (model Model) stepView(width int) []string {
 	case StepComplete:
 		return []string{
 			model.row("Control plane", model.panelStatus.ControlPlane.State),
-			model.row("Panel", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.Healthy]),
+			model.row("Hub container", map[bool]string{true: "present", false: "missing"}[model.panelStatus.Panel.ContainerPresent]),
+			model.row("Panel", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.PanelHealthy]),
+			model.row("Knowledge", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.KnowledgeHealthy]),
+			model.row("Memory instance", map[bool]string{true: "visible", false: "missing"}[model.panelStatus.Panel.InstanceVisible]),
 			model.row("Legacy memory", "retained · inactive · not migrated"),
 		}
 	default:

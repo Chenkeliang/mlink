@@ -45,9 +45,12 @@ func runPanel(ctx context.Context, args []string, deps Dependencies, input *bufi
 			_, _ = deps.Stdout.Write(append(data, '\n'))
 		} else {
 			writeLine(deps.Stdout, "control-plane: "+status.ControlPlane.State)
-			writeLine(deps.Stdout, "panel healthy: "+strconv.FormatBool(status.Panel.Healthy))
+			writeLine(deps.Stdout, "hub.container: "+strconv.FormatBool(status.Panel.ContainerPresent))
+			writeLine(deps.Stdout, "hub.panel: "+strconv.FormatBool(status.Panel.PanelHealthy))
+			writeLine(deps.Stdout, "hub.knowledge: "+strconv.FormatBool(status.Panel.KnowledgeHealthy))
+			writeLine(deps.Stdout, "hub.instance: "+strconv.FormatBool(status.Panel.InstanceVisible))
 		}
-		if args[0] == "doctor" && !status.Panel.Healthy {
+		if args[0] == "doctor" && (!status.Panel.ContainerPresent || !status.Panel.PanelHealthy || !status.Panel.KnowledgeHealthy || !status.Panel.InstanceVisible) {
 			return 4
 		}
 		return 0

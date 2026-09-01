@@ -49,3 +49,15 @@ func TestStatusMarkerAppearsAfterLabel(t *testing.T) {
 	}
 	t.Fatalf("TencentDB status row is missing:\n%s", view)
 }
+
+func TestPanelPreviewExplainsOfficialHubAndOptInKnowledge(t *testing.T) {
+	model := New(&fakeApplication{}, fixtureRequest())
+	model.width = 120
+	model.step = StepPanelPreview
+	view := model.View()
+	for _, want := range []string{"Official Memory Hub", "8125", "8424", "not automatically imported"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Hub preview missing %q:\n%s", want, view)
+		}
+	}
+}

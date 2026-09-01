@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Scope: Schema v3, Core-generated identities, dynamic private/group Agents, official Panel-only runtime, no-migration cutover, encrypted portability, and local-only uninstall. All tests use fakes or loopback test servers; no production metadata or memory is mutated.
+Scope: Schema v3, Core-generated identities, dynamic private/group Agents, digest-pinned official Memory Hub runtime, no-migration cutover, encrypted portability, and local-only uninstall. Knowledge runs on port 8424 but no asset is automatically imported or bound. All tests use fakes or loopback test servers; no production metadata or memory is mutated.
 
 ## Matrix
 
@@ -19,7 +19,7 @@ Scope: Schema v3, Core-generated identities, dynamic private/group Agents, offic
 | Raw Feishu IDs absent from Core metadata and authorization | `internal/controlplane/agents_test.go`, `internal/e2e/control_plane_test.go` |
 | Encrypted export/import retains IDs, mappings and user keys | `internal/identity/bundle_test.go`, `internal/app/identity_test.go` |
 | Imported mappings require marker reconciliation | `internal/controlplane/agents_test.go` |
-| Panel is pinned, loopback-only, and has no 8096/model proxy | `internal/panel/runtime_test.go`, `internal/e2e/panel_lifecycle_test.go` |
+| Official Hub digest is pinned, Panel/Knowledge are loopback-only, and no 8096/model proxy exists | `internal/panel/runtime_test.go`, `internal/e2e/panel_lifecycle_test.go` |
 | Default uninstall removes local Panel only | `internal/app/uninstall_test.go` |
 | Legacy memory is never queried or migrated after cutover | `internal/app/control_plane_cutover_test.go` |
 

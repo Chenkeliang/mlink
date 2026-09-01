@@ -6,6 +6,10 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"mlink/internal/app"
+	"mlink/internal/journal"
+	"mlink/internal/panel"
 )
 
 func TestPanelProvisionPreviewNeverAppliesOrPrintsKeys(t *testing.T) {
@@ -64,5 +68,26 @@ func TestPanelOwnerKeyCopyIsSeparateAndWarnsWithoutPrintingKey(t *testing.T) {
 	}
 	if code := Run(context.Background(), []string{"panel", "copy-owner-key"}, Dependencies{App: application, Stdout: io.Discard, Stderr: io.Discard}); code != 2 {
 		t.Fatalf("unconfirmed copy code = %d", code)
+	}
+}
+
+func TestPanelStatusAndDoctorRequireHubPanelKnowledgeAndInstance(t *testing.T) {
+	application := &fakeApplication{panelStatus: app.PanelControlStatus{
+		ControlPlane: journal.ControlPlaneState{State: "provisioned"},
+		Panel:        panel.Status{ContainerPresent: true, PanelHealthy: true, KnowledgeHealthy: true, InstanceVisible: true, Healthy: true},
+	}}
+	stdout := &bytes.Buffer{}
+	if code := Run(context.Background(), []string{"panel", "status", "--json"}, Dependencies{App: application, Stdout: stdout, Stderr: io.Discard}); code != 0 {
+		t.Fatalf("status code = %d", code)
+	}
+	for _, field := range []string{`"container_present": true`, `"panel_healthy": true`, `"knowledge_healthy": true`, `"instance_visible": true`} {
+		if !strings.Contains(stdout.String(), field) {
+			t.Fatalf("status missing %s: %s", field, stdout)
+		}
+	}
+	application.panelStatus.Panel.KnowledgeHealthy = false
+	application.panelStatus.Panel.Healthy = false
+	if code := Run(context.Background(), []string{"panel", "doctor", "--json"}, Dependencies{App: application, Stdout: io.Discard, Stderr: io.Discard}); code != 4 {
+		t.Fatalf("degraded doctor code = %d", code)
 	}
 }

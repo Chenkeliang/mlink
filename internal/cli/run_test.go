@@ -25,6 +25,7 @@ type fakeApplication struct {
 	report       doctor.Report
 	drift        app.DriftReport
 	backups      []journal.BackupSummary
+	panelStatus  app.PanelControlStatus
 }
 
 func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
@@ -73,7 +74,7 @@ func (application *fakeApplication) ApplyPanelCutover(_ context.Context, planID 
 	return nil
 }
 func (application *fakeApplication) PanelControlStatus(context.Context) (app.PanelControlStatus, error) {
-	return app.PanelControlStatus{}, nil
+	return application.panelStatus, nil
 }
 func (application *fakeApplication) OpenPanel(context.Context) error         { return nil }
 func (application *fakeApplication) CopyPanelOwnerKey(context.Context) error { return nil }
