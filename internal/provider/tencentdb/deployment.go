@@ -1,19 +1,26 @@
 package tencentdb
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"mlink/internal/config"
 	"mlink/internal/install"
 	"mlink/internal/provider/lifecycle"
+	"mlink/internal/secret"
 )
 
 const (
@@ -24,9 +31,19 @@ const (
 )
 
 type Deployment struct {
-	Runner     install.CommandRunner
-	HTTPClient *http.Client
+	Runner        install.CommandRunner
+	Target        install.Target
+	Ledger        install.Ledger
+	Secrets       secret.Store
+	HTTPClient    *http.Client
+	ConfigPath    string
+	EnvPath       string
+	HealthTimeout time.Duration
+	PollInterval  time.Duration
 }
+
+//go:embed templates/tdai-gateway.yaml.tmpl
+var gatewayConfigTemplate string
 
 func (deployment Deployment) Detect(ctx context.Context, connection config.Connection) (lifecycle.BackendStatus, error) {
 	if connection.ProviderID != providerID || connection.ProviderVersion != providerVersion {
@@ -176,4 +193,239 @@ func (value coreInspect) compatible() bool {
 		port = port || binding.HostIP == "127.0.0.1" && binding.HostPort == "8420"
 	}
 	return volume && port
+}
+
+func (deployment Deployment) PlanInstall(ctx context.Context, request lifecycle.BackendInstallRequest) (install.ChangeSet, error) {
+	if err := deployment.validateInstallRequest(request); err != nil {
+		return install.ChangeSet{}, err
+	}
+	if _, err := deployment.inspect(ctx); err == nil {
+		return install.ChangeSet{}, errors.New("MemoryCore container already exists")
+	}
+	configData, err := renderGatewayConfig(request)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	resources := []install.DesiredResource{{
+		OwnerID: "dev.mlink.memorycore.config", Target: deployment.ConfigPath, Content: configData, Mode: 0o600,
+		SemanticDiff: []install.SemanticDiff{{Path: "memorycore.config", Before: "absent or owned", After: "official standalone config; secret values supplied at runtime"}},
+	}}
+	resources = append(resources, install.DesiredResource{
+		OwnerID: "dev.mlink.memorycore.image", Target: "service:docker-pull:" + MemoryCoreImageReference, Action: install.ActionService,
+		Command:      []string{"docker", "pull", MemoryCoreImageReference},
+		SemanticDiff: []install.SemanticDiff{{Path: "memorycore.image", Before: "absent or cached", After: MemoryCoreImageReference}},
+	})
+	if !deployment.dockerObjectExists(ctx, "network", MemoryCoreNetworkName) {
+		resources = append(resources, install.DesiredResource{
+			OwnerID: "dev.mlink.memorycore.network", Target: "service:docker-network:" + MemoryCoreNetworkName, Action: install.ActionService,
+			Command:         []string{"docker", "network", "create", "--label", "dev.mlink.component=memory-core", MemoryCoreNetworkName},
+			RollbackCommand: []string{"docker", "network", "rm", MemoryCoreNetworkName},
+			SemanticDiff:    []install.SemanticDiff{{Path: "memorycore.network", Before: "absent", After: MemoryCoreNetworkName}},
+		})
+	}
+	if !deployment.dockerObjectExists(ctx, "volume", MemoryCoreVolumeName) {
+		resources = append(resources, install.DesiredResource{
+			OwnerID: "dev.mlink.memorycore.volume", Target: "service:docker-volume:" + MemoryCoreVolumeName, Action: install.ActionService,
+			Command:      []string{"docker", "volume", "create", "--label", "dev.mlink.component=memory-core", MemoryCoreVolumeName},
+			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.data-volume", Before: "absent", After: MemoryCoreVolumeName + "; retained on rollback and ordinary uninstall"}},
+		})
+	}
+	run := []string{
+		"docker", "run", "-d", "--name", MemoryCoreContainerName, "--restart", "unless-stopped",
+		"--label", "dev.mlink.component=memory-core", "--network", MemoryCoreNetworkName,
+		"-p", "127.0.0.1:8420:8420", "-v", MemoryCoreVolumeName + ":/data/tdai-memory",
+		"-v", deployment.ConfigPath + ":/data/config/tdai-gateway.yaml:ro", "--env-file", deployment.EnvPath,
+		"-e", "TDAI_GATEWAY_PORT=8420", "-e", "TDAI_GATEWAY_HOST=0.0.0.0", "-e", "TDAI_DATA_DIR=/data/tdai-memory",
+		MemoryCoreImageReference,
+	}
+	resources = append(resources, install.DesiredResource{
+		OwnerID: "dev.mlink.memorycore.container", Target: "service:docker-run:" + MemoryCoreContainerName, Action: install.ActionService,
+		Command: run, RollbackCommand: []string{"docker", "rm", "-f", MemoryCoreContainerName},
+		SemanticDiff: []install.SemanticDiff{
+			{Path: "memorycore.container", Before: "absent", After: MemoryCoreContainerName},
+			{Path: "memorycore.port", Before: "available", After: "127.0.0.1:8420:8420"},
+			{Path: "memorycore.secret-transport", Before: "Keychain inputs", After: "private temporary env file removed after startup"},
+		},
+	})
+	plan, err := install.BuildChangeSet(deployment.Target, resources)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	plan.SelectedConnection = "local"
+	return plan, nil
+}
+
+func (deployment Deployment) ApplyInstall(ctx context.Context, planID string, request lifecycle.BackendInstallRequest) error {
+	plan, err := deployment.PlanInstall(ctx, request)
+	if err != nil {
+		return err
+	}
+	if plan.PlanID != planID {
+		return fmt.Errorf("%w: MemoryCore install changed after preview", install.ErrPlanStale)
+	}
+	previous, err := deployment.putInstallSecrets(ctx, request)
+	if err != nil {
+		return err
+	}
+	defer wipeSecretSnapshots(previous)
+	envData := []byte("TDAI_GATEWAY_API_KEY=" + string(request.GatewayToken) + "\nTDAI_LLM_BASE_URL=" + request.LLMBaseURL + "\nTDAI_LLM_MODEL=" + request.LLMModel + "\nTDAI_LLM_API_KEY=" + string(request.LLMAPIKey) + "\n")
+	defer wipeBytes(envData)
+	if err := deployment.Target.WriteAtomic(ctx, deployment.EnvPath, envData, 0o600); err != nil {
+		_ = deployment.restoreInstallSecrets(ctx, previous)
+		return err
+	}
+	defer deployment.Target.Remove(context.Background(), deployment.EnvPath)
+	transaction := install.NewTransaction(deployment.Target, deployment.Ledger)
+	applied, err := transaction.ApplyDeferredOwnership(ctx, plan)
+	if err != nil {
+		_ = deployment.restoreInstallSecrets(ctx, previous)
+		return err
+	}
+	if err := deployment.waitHealthy(ctx, request.Endpoint); err != nil {
+		rollbackErr := transaction.Rollback(ctx, plan)
+		secretErr := deployment.restoreInstallSecrets(ctx, previous)
+		return errors.Join(err, rollbackErr, secretErr)
+	}
+	if err := transaction.RecordOwnership(ctx, applied); err != nil {
+		rollbackErr := transaction.Rollback(ctx, plan)
+		secretErr := deployment.restoreInstallSecrets(ctx, previous)
+		return errors.Join(err, rollbackErr, secretErr)
+	}
+	return nil
+}
+
+func (deployment Deployment) validateInstallRequest(request lifecycle.BackendInstallRequest) error {
+	if deployment.Target == nil || deployment.Ledger == nil || deployment.Secrets == nil || !filepath.IsAbs(deployment.ConfigPath) || !filepath.IsAbs(deployment.EnvPath) {
+		return errors.New("MemoryCore install target, ledger, Keychain, and absolute paths are required")
+	}
+	endpoint, local, err := deploymentEndpoint(request.Endpoint)
+	if err != nil || !local || strings.TrimRight(endpoint.String(), "/") != "http://127.0.0.1:8420" {
+		return errors.New("official local MemoryCore install requires http://127.0.0.1:8420")
+	}
+	if err := validateLLMEndpoint(request.LLMBaseURL); err != nil {
+		return errors.New("valid HTTPS or loopback memory LLM endpoint is required")
+	}
+	if request.ProviderID != providerID || strings.TrimSpace(request.LLMModel) == "" || len(request.GatewayToken) < 16 || len(request.LLMAPIKey) == 0 || len(request.GatewayToken) > 16<<10 || len(request.LLMAPIKey) > 16<<10 || bytes.ContainsAny(request.GatewayToken, "\r\n\x00") || bytes.ContainsAny(request.LLMAPIKey, "\r\n\x00") {
+		return errors.New("valid protected MemoryCore and memory LLM inputs are required")
+	}
+	return nil
+}
+
+func validateLLMEndpoint(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("invalid memory LLM endpoint")
+	}
+	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	address := net.ParseIP(hostname)
+	local := hostname == "localhost" || address != nil && address.IsLoopback()
+	if parsed.Scheme == "https" || local && parsed.Scheme == "http" {
+		return nil
+	}
+	return errors.New("invalid memory LLM endpoint")
+}
+
+func renderGatewayConfig(request lifecycle.BackendInstallRequest) ([]byte, error) {
+	tmpl, err := template.New("gateway").Funcs(template.FuncMap{"yaml": func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}}).Parse(gatewayConfigTemplate)
+	if err != nil {
+		return nil, err
+	}
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, request); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func (deployment Deployment) dockerObjectExists(ctx context.Context, kind, name string) bool {
+	runner := deployment.Runner
+	if runner == nil {
+		runner = install.LocalTarget{}
+	}
+	_, err := runner.Run(ctx, []string{"docker", kind, "inspect", name}, nil)
+	return err == nil
+}
+
+type secretSnapshot struct {
+	account string
+	value   []byte
+	existed bool
+}
+
+func (deployment Deployment) putInstallSecrets(ctx context.Context, request lifecycle.BackendInstallRequest) ([]secretSnapshot, error) {
+	values := []struct {
+		account string
+		value   []byte
+	}{{"connection/local/token", request.GatewayToken}, {"provider/tencentdb/llm-api-key", request.LLMAPIKey}}
+	result := make([]secretSnapshot, 0, len(values))
+	for _, item := range values {
+		previous, err := deployment.Secrets.Get(ctx, item.account)
+		snapshot := secretSnapshot{account: item.account}
+		if err == nil {
+			snapshot.value, snapshot.existed = previous, true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			wipeSecretSnapshots(result)
+			return nil, err
+		}
+		result = append(result, snapshot)
+		if err := deployment.Secrets.Put(ctx, item.account, item.value); err != nil {
+			_ = deployment.restoreInstallSecrets(ctx, result)
+			wipeSecretSnapshots(result)
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (deployment Deployment) restoreInstallSecrets(ctx context.Context, snapshots []secretSnapshot) error {
+	var restoreErrors []error
+	for index := len(snapshots) - 1; index >= 0; index-- {
+		if snapshots[index].existed {
+			restoreErrors = append(restoreErrors, deployment.Secrets.Put(ctx, snapshots[index].account, snapshots[index].value))
+		} else {
+			restoreErrors = append(restoreErrors, deployment.Secrets.Delete(ctx, snapshots[index].account))
+		}
+	}
+	return errors.Join(restoreErrors...)
+}
+
+func wipeSecretSnapshots(values []secretSnapshot) {
+	for index := range values {
+		wipeBytes(values[index].value)
+	}
+}
+
+func wipeBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
+}
+
+func (deployment Deployment) waitHealthy(ctx context.Context, endpoint string) error {
+	timeout := deployment.HealthTimeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	interval := deployment.PollInterval
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		_, compatible, err := deployment.health(ctx, endpoint)
+		if err == nil && compatible {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("MemoryCore did not become healthy before timeout")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }

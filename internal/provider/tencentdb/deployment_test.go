@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"mlink/internal/config"
+	"mlink/internal/install"
 	"mlink/internal/provider/lifecycle"
 )
 
@@ -105,6 +108,178 @@ type failingTransport struct{}
 
 func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("offline")
+}
+
+type installRunner struct {
+	commands [][]string
+	started  bool
+	failRun  bool
+}
+
+func (runner *installRunner) Run(_ context.Context, args []string, _ io.Reader) ([]byte, error) {
+	runner.commands = append(runner.commands, append([]string(nil), args...))
+	joined := strings.Join(args, " ")
+	switch {
+	case joined == "docker inspect "+MemoryCoreContainerName:
+		return nil, errors.New("not found")
+	case joined == "docker network inspect "+MemoryCoreNetworkName:
+		return nil, errors.New("not found")
+	case joined == "docker volume inspect "+MemoryCoreVolumeName:
+		return nil, errors.New("not found")
+	case strings.HasPrefix(joined, "docker run "):
+		if runner.failRun {
+			return nil, errors.New("run failed")
+		}
+		runner.started = true
+		return []byte("container-id"), nil
+	default:
+		return []byte("ok"), nil
+	}
+}
+
+type installHealthTransport struct{ runner *installRunner }
+
+func (transport installHealthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if !transport.runner.started {
+		return nil, errors.New("offline")
+	}
+	body := io.NopCloser(strings.NewReader(`{"status":"ok","version":"0.1.0","services":{"pipelineWorker":{"status":"ok"}}}`))
+	return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header), Request: request}, nil
+}
+
+type deploymentSecrets struct{ values map[string][]byte }
+
+func (store *deploymentSecrets) Get(_ context.Context, account string) ([]byte, error) {
+	value, ok := store.values[account]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return append([]byte(nil), value...), nil
+}
+func (store *deploymentSecrets) Put(_ context.Context, account string, value []byte) error {
+	store.values[account] = append([]byte(nil), value...)
+	return nil
+}
+func (store *deploymentSecrets) Delete(_ context.Context, account string) error {
+	delete(store.values, account)
+	return nil
+}
+
+type deploymentLedger struct{ backups map[string]install.Backup }
+
+func (ledger *deploymentLedger) SaveBackup(_ context.Context, backup install.Backup) error {
+	if ledger.backups == nil {
+		ledger.backups = make(map[string]install.Backup)
+	}
+	ledger.backups[backup.PlanID+"\x00"+backup.Target] = backup
+	return nil
+}
+func (ledger *deploymentLedger) LoadBackup(_ context.Context, planID, target string) (install.Backup, error) {
+	backup, ok := ledger.backups[planID+"\x00"+target]
+	if !ok {
+		return install.Backup{}, errors.New("missing backup")
+	}
+	return backup, nil
+}
+func (*deploymentLedger) RecordOwned(context.Context, install.OwnedResource) error { return nil }
+
+func installRequest() lifecycle.BackendInstallRequest {
+	return lifecycle.BackendInstallRequest{
+		ProviderID: providerID, Endpoint: "http://127.0.0.1:8420", GatewayToken: []byte("gateway-secret-1234"),
+		LLMBaseURL: "https://llm.example/v1", LLMModel: "model-a", LLMAPIKey: []byte("llm-secret"),
+	}
+}
+
+func deploymentFixture(t *testing.T, runner *installRunner) Deployment {
+	t.Helper()
+	root := t.TempDir()
+	return Deployment{
+		Runner: runner, Target: install.LocalTarget{Runner: runner}, Ledger: &deploymentLedger{},
+		Secrets:    &deploymentSecrets{values: map[string][]byte{}},
+		ConfigPath: root + "/tdai-gateway.yaml", EnvPath: root + "/memorycore.env",
+		HTTPClient:    &http.Client{Transport: installHealthTransport{runner: runner}},
+		HealthTimeout: time.Second, PollInterval: time.Millisecond,
+	}
+}
+
+func TestDeploymentInstallPlanIsPinnedSecretFreeAndZeroWrite(t *testing.T) {
+	runner := &installRunner{}
+	deployment := deploymentFixture(t, runner)
+	request := installRequest()
+	plan, err := deployment.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, _ := install.RenderJSON(plan)
+	for _, secret := range []string{"gateway-secret-1234", "llm-secret"} {
+		if strings.Contains(string(rendered), secret) {
+			t.Fatalf("Plan leaked %q: %s", secret, rendered)
+		}
+	}
+	joined := string(rendered)
+	for _, expected := range []string{MemoryCoreImageReference, "127.0.0.1:8420:8420", MemoryCoreVolumeName, MemoryCoreNetworkName} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Plan missing %q: %s", expected, rendered)
+		}
+	}
+	if _, _, err := deployment.Target.Read(context.Background(), deployment.ConfigPath); err == nil {
+		t.Fatal("preview wrote gateway config")
+	}
+}
+
+func TestDeploymentApplyInstallsAndDeletesTemporarySecretFile(t *testing.T) {
+	runner := &installRunner{}
+	deployment := deploymentFixture(t, runner)
+	request := installRequest()
+	plan, err := deployment.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.ApplyInstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.started {
+		t.Fatal("MemoryCore container did not start")
+	}
+	if _, _, err := deployment.Target.Read(context.Background(), deployment.EnvPath); err == nil {
+		t.Fatal("temporary env file still exists")
+	}
+	configData, _, err := deployment.Target.Read(context.Background(), deployment.ConfigPath)
+	if err != nil || strings.Contains(string(configData), "llm-secret") || !strings.Contains(string(configData), "model-a") {
+		t.Fatalf("config/error = %s/%v", configData, err)
+	}
+	secrets := deployment.Secrets.(*deploymentSecrets)
+	if string(secrets.values["connection/local/token"]) != "gateway-secret-1234" || string(secrets.values["provider/tencentdb/llm-api-key"]) != "llm-secret" {
+		t.Fatal("Keychain values were not installed")
+	}
+	for _, command := range runner.commands {
+		joined := strings.Join(command, " ")
+		if strings.Contains(joined, "gateway-secret-1234") || strings.Contains(joined, "llm-secret") {
+			t.Fatalf("secret leaked into argv: %q", joined)
+		}
+	}
+}
+
+func TestDeploymentApplyFailureRestoresSecretsAndConfiguration(t *testing.T) {
+	runner := &installRunner{failRun: true}
+	deployment := deploymentFixture(t, runner)
+	secrets := deployment.Secrets.(*deploymentSecrets)
+	secrets.values["connection/local/token"] = []byte("old-gateway")
+	secrets.values["provider/tencentdb/llm-api-key"] = []byte("old-llm")
+	request := installRequest()
+	plan, _ := deployment.PlanInstall(context.Background(), request)
+	if err := deployment.ApplyInstall(context.Background(), plan.PlanID, request); err == nil {
+		t.Fatal("expected Docker run failure")
+	}
+	if string(secrets.values["connection/local/token"]) != "old-gateway" || string(secrets.values["provider/tencentdb/llm-api-key"]) != "old-llm" {
+		t.Fatal("Keychain values were not restored")
+	}
+	if _, _, err := deployment.Target.Read(context.Background(), deployment.ConfigPath); err == nil {
+		t.Fatal("failed install left gateway config")
+	}
+	if _, _, err := deployment.Target.Read(context.Background(), deployment.EnvPath); err == nil {
+		t.Fatal("failed install left env file")
+	}
 }
 
 func TestDeploymentDetectRejectsUnsafeEndpointBeforeNetwork(t *testing.T) {
