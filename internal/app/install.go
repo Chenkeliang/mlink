@@ -53,8 +53,11 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if err != nil {
 		return install.ChangeSet{}, fmt.Errorf("load provisioned Core identity: %w", err)
 	}
-	if (controlState.State != "provisioned" && controlState.State != "active") || controlState.InstallationID != namespaceID || request.DynamicAgentLimit <= 0 || request.DynamicAgentLimit > 10_000 {
+	if (controlState.State != "provisioned" && controlState.State != "active") || controlState.InstallationID != namespaceID {
 		return install.ChangeSet{}, errors.New("matching Core identity and explicit dynamic Agent limit are required")
+	}
+	if controlState.DynamicAgentLimit <= 0 || controlState.DynamicAgentLimit > 10_000 || request.DynamicAgentLimit != controlState.DynamicAgentLimit {
+		return install.ChangeSet{}, errors.New("installation capacity must match the provisioned Core identity")
 	}
 	if agentSelected(agents, Hermes) {
 		if err := validateOwnerBinding(request); err != nil {

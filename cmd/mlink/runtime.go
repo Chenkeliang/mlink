@@ -85,6 +85,11 @@ type localUpgradeLoader struct {
 
 type strictMCPBackend struct{ client adapterclient.Client }
 
+type runtimeIdentityStateStore interface {
+	controlplane.PrincipalAgentStore
+	LoadControlPlane(context.Context) (journal.ControlPlaneState, error)
+}
+
 func (backend strictMCPBackend) Recall(ctx context.Context, input broker.RecallInput) (model.ContextBundle, error) {
 	return backend.client.RecallStrict(ctx, input)
 }
@@ -389,13 +394,20 @@ func runtimeRouter(ctx context.Context, configuration config.Config, secrets sec
 	return router, grants, true, nil
 }
 
-func runtimeAuthorizer(ctx context.Context, configuration config.Config, secrets secret.Store, states controlplane.PrincipalAgentStore, router *identity.Router, grants []broker.Grant, hermesEnabled bool) (broker.Authorizer, error) {
+func runtimeAuthorizer(ctx context.Context, configuration config.Config, secrets secret.Store, states runtimeIdentityStateStore, router *identity.Router, grants []broker.Grant, hermesEnabled bool) (broker.Authorizer, error) {
 	authorizer := broker.Authorizer{Router: router, Grants: grants}
 	if configuration.SchemaVersion != 3 {
 		return authorizer, nil
 	}
 	if configuration.ControlPlane == nil {
 		return broker.Authorizer{}, errors.New("MLink control plane is missing")
+	}
+	state, err := states.LoadControlPlane(ctx)
+	if err != nil {
+		return broker.Authorizer{}, errors.New("load provisioned Core identity")
+	}
+	if err := validateRuntimeCoreIdentity(configuration, state); err != nil {
+		return broker.Authorizer{}, errors.New("configured IDs do not match the provisioned Core identity")
 	}
 	authorizer.ConnectionID = configuration.ActiveConnectionID
 	authorizer.ControlPlane = configuration.ControlPlane
@@ -1181,6 +1193,11 @@ func (runtime *runtimeApplication) prepare(ctx context.Context, request app.Inst
 	}
 	service.Target = router
 	service.Ledger = ledger
+	service.ProviderBackend = tencentdb.Deployment{
+		Runner: install.LocalTarget{}, Target: router, Ledger: ledger, Secrets: secret.Keychain{},
+		ConfigPath: filepath.Join(runtime.paths.Home, "memorycore", "tdai-gateway.yaml"),
+		EnvPath:    filepath.Join(runtime.paths.Run, "memorycore.env"),
+	}
 	request.HermesMachine = machine
 	request.HermesHome = hermesHome
 	return &service, request, nil

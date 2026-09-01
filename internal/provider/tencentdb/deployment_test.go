@@ -1,6 +1,7 @@
 package tencentdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -288,5 +289,44 @@ func TestDeploymentDetectRejectsUnsafeEndpointBeforeNetwork(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "endpoint") {
 			t.Fatalf("Detect(%q) error = %v", endpoint, err)
 		}
+	}
+}
+
+func TestDeploymentUninstallRemovesOnlyOwnedContainerAndRetainsDataVolume(t *testing.T) {
+	runner := &deploymentRunner{inspect: ownedCoreInspect("running", MemoryCoreImageReference)}
+	root := t.TempDir()
+	deployment := Deployment{
+		Runner: runner, Target: install.LocalTarget{Runner: runner},
+		ConfigPath: root + "/tdai-gateway.yaml",
+	}
+	if err := deployment.Target.WriteAtomic(context.Background(), deployment.ConfigPath, []byte("gateway: config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := deployment.PlanUninstall(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 2 || plan.Operations[0].Target != deployment.ConfigPath ||
+		strings.Join(plan.Operations[1].Command, " ") != "docker rm -f "+MemoryCoreContainerName {
+		t.Fatalf("uninstall Plan = %#v", plan.Operations)
+	}
+	for _, operation := range plan.Operations {
+		if strings.Contains(strings.Join(operation.Command, " "), "volume rm") || strings.Contains(operation.Target, "volume") {
+			t.Fatalf("uninstall removes data volume: %#v", operation)
+		}
+	}
+}
+
+func TestDeploymentUninstallRefusesUnownedOrDriftedContainer(t *testing.T) {
+	for name, inspect := range map[string][]byte{
+		"wrong image": ownedCoreInspect("running", "agentmemory/memory-core:other"),
+		"wrong label": bytes.ReplaceAll(ownedCoreInspect("running", MemoryCoreImageReference), []byte(`"memory-core"`), []byte(`"external"`)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			deployment := Deployment{Runner: &deploymentRunner{inspect: inspect}, Target: install.LocalTarget{}}
+			if _, err := deployment.PlanUninstall(context.Background()); err == nil || !strings.Contains(err.Error(), "refuses") {
+				t.Fatalf("PlanUninstall() error = %v", err)
+			}
+		})
 	}
 }

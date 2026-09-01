@@ -34,6 +34,7 @@ import (
 	"mlink/internal/journal"
 	"mlink/internal/launchagent"
 	"mlink/internal/panel"
+	"mlink/internal/provider/lifecycle"
 	"mlink/internal/secret"
 	"mlink/internal/version"
 )
@@ -149,10 +150,11 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 	}
 	report.Checks = append(report.Checks, runtime.preflightChecks(ctx)...)
 	report.Checks = append(report.Checks, runtime.checkLaunchAgent(ctx), runtime.checkBrokerSocket(ctx, agents))
-	if report.Checks[len(report.Checks)-1].State == doctor.StatePassed {
-		report.Checks = append(report.Checks, doctor.Check{ID: "provider.tencentdb", State: doctor.StatePassed, Code: "available"})
-	} else {
-		report.Checks = append(report.Checks, doctor.Check{ID: "provider.tencentdb", State: doctor.StateFailed, Code: "backend_unavailable"})
+	providerStatus, providerErr := runtime.ProviderStatus(ctx)
+	report.Checks = append(report.Checks, providerDiagnosticChecks(providerStatus, providerErr)...)
+	if status.Installed {
+		state, stateErr := runtime.loadControlPlaneState(ctx)
+		report.Checks = append(report.Checks, controlPlaneIdentityCheck(configuration, state, stateErr))
 	}
 	activity := runtime.adapterActivity(ctx)
 	for _, agent := range agents {
@@ -174,6 +176,84 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 	}
 	report.Checks = append(report.Checks, runtime.checkQueue(ctx))
 	return report, nil
+}
+
+func providerDiagnosticChecks(status lifecycle.BackendStatus, statusErr error) []doctor.Check {
+	backend := doctor.Check{ID: "provider.backend", State: doctor.StateFailed, Code: "detection_error", Message: "run: mlink provider status --json"}
+	image := doctor.Check{ID: "provider.image", State: doctor.StateFailed, Code: "unknown", Message: "backend ownership could not be verified"}
+	volume := doctor.Check{ID: "provider.volume", State: doctor.StateFailed, Code: "unknown", Message: "backend persistence could not be verified"}
+	if statusErr != nil {
+		return []doctor.Check{backend, image, volume}
+	}
+	backend.Code = string(status.State)
+	switch status.State {
+	case lifecycle.BackendReachable:
+		backend.State, backend.Message = doctor.StatePassed, status.Endpoint
+	case lifecycle.BackendAbsent:
+		backend.Message = "run: mlink provider install tencentdb --dry-run --json"
+	case lifecycle.BackendStopped:
+		backend.Message = "preview and apply the official provider install to restart the owned backend"
+	case lifecycle.BackendIncompatible:
+		backend.Message = "MLink refuses to overwrite an incompatible listener or container"
+	case lifecycle.BackendRemoteUnreachable:
+		backend.Message = "verify the remote HTTPS endpoint before enabling Agent capture"
+	}
+	if status.Installed {
+		image.State, image.Code, image.Message = doctor.StatePassed, "pinned", "official digest and MLink ownership verified"
+		volume.State, volume.Code, volume.Message = doctor.StatePassed, "persistent", "tdai-memory-core-data retained on ordinary uninstall"
+	} else if status.State == lifecycle.BackendReachable {
+		image.State, image.Code, image.Message = doctor.StatePassed, "external_compatible", "compatible backend is not managed by MLink"
+		volume.State, volume.Code, volume.Message = doctor.StatePassed, "external", "persistence is managed by the backend operator"
+	} else if status.State == lifecycle.BackendAbsent {
+		image.Code, volume.Code = "absent", "absent"
+	}
+	return []doctor.Check{backend, image, volume}
+}
+
+func (runtime *runtimeApplication) loadControlPlaneState(ctx context.Context) (journal.ControlPlaneState, error) {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return journal.ControlPlaneState{}, err
+	}
+	defer store.Close()
+	return store.LoadControlPlane(ctx)
+}
+
+func controlPlaneIdentityCheck(configuration config.Config, state journal.ControlPlaneState, stateErr error) doctor.Check {
+	check := doctor.Check{ID: "control_plane.identity_gate", State: doctor.StateFailed, Code: "pending_identity", Message: "Core identity must be provisioned before Agent capture is enabled"}
+	if stateErr != nil {
+		return check
+	}
+	if err := validateRuntimeCoreIdentity(configuration, state); err != nil {
+		check.Code = "identity_mismatch"
+		check.Message = "capture blocked: configured IDs do not match the Core-provisioned identity"
+		return check
+	}
+	check.State, check.Code, check.Message = doctor.StatePassed, "active", "Core-generated Owner, Team, Agent and Asset IDs are authoritative"
+	return check
+}
+
+func validateRuntimeCoreIdentity(configuration config.Config, state journal.ControlPlaneState) error {
+	control := configuration.ControlPlane
+	if configuration.SchemaVersion != 3 || control == nil || state.State != "active" ||
+		configuration.NamespaceID != state.InstallationID || control.InstanceID != state.InstanceID ||
+		control.OwnerUserID != state.OwnerUserID || control.OwnerTeamID != state.OwnerTeamID ||
+		control.OwnerAgentID != state.OwnerAgentID || control.OwnerAssetID != state.OwnerAssetID ||
+		control.DynamicAgentLimit != state.DynamicAgentLimit ||
+		configuration.Principals["owner"].CanonicalUserID != state.OwnerUserID {
+		return errors.New("runtime Core identity mismatch")
+	}
+	for _, connection := range configuration.Connections {
+		if connection.TenantID != "" || connection.AgentID != "" || connection.UserID != "" || connection.IncludeAgentShared {
+			return errors.New("legacy runtime identity remains active")
+		}
+		for _, key := range []string{"team_id", "tenant_id", "agent_id", "user_id", "include_agent_shared"} {
+			if _, exists := connection.ProviderConfig[key]; exists {
+				return errors.New("legacy Provider identity remains active")
+			}
+		}
+	}
+	return nil
 }
 
 func (runtime *runtimeApplication) preflightChecks(ctx context.Context) []doctor.Check {

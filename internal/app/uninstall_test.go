@@ -15,6 +15,15 @@ type blockingEvents struct {
 	events []journal.Event
 }
 
+type backendUninstallPlanner struct {
+	plan install.ChangeSet
+	err  error
+}
+
+func (planner backendUninstallPlanner) PlanUninstall(context.Context) (install.ChangeSet, error) {
+	return planner.plan, planner.err
+}
+
 func TestFullUninstallUsesLatestSemanticBackupAndDeletesConnectionSecret(t *testing.T) {
 	service, target, secrets := newInstallFixture(t)
 	installRequest := fixtureInstallRequest()
@@ -203,5 +212,48 @@ func TestControlPlaneUninstallRemovesOnlyLocalPanelAndKeepsBackendMetadata(t *te
 	}
 	if _, exists := secrets.values["control/tencentdb/owner-user-key"]; exists {
 		t.Fatal("local Owner key still exists")
+	}
+}
+
+func TestFullUninstallComposesOwnedMemoryCoreRemovalWithoutDataVolume(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	request := fixtureInstallRequest()
+	installPlan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	service.ProviderBackend = backendUninstallPlanner{plan: install.ChangeSet{
+		PlanID: "plan_backend", Operations: []install.Operation{{
+			ID: "op_backend_remove", OwnerID: "dev.mlink.memorycore.container", Target: "service:remove:tdai-memory-core",
+			Action: install.ActionService, Command: []string{"docker", "rm", "-f", "tdai-memory-core"},
+		}},
+	}}
+	plan, err := service.PlanUninstall(context.Background(), UninstallRequest{Agents: []Agent{Codex, Pi, Hermes}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, operation := range plan.Operations {
+		found = found || operation.Target == "service:remove:tdai-memory-core"
+		if strings.Contains(operation.Target, "volume") || strings.Contains(strings.Join(operation.Command, " "), "volume rm") {
+			t.Fatalf("ordinary uninstall removes MemoryCore data: %#v", operation)
+		}
+	}
+	if !found {
+		t.Fatalf("MemoryCore removal missing: %#v", plan.Operations)
+	}
+}
+
+func TestFullUninstallPropagatesUnownedBackendRefusal(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	request := fixtureInstallRequest()
+	installPlan, _ := service.PlanInstall(context.Background(), request)
+	_ = service.ApplyInstall(context.Background(), installPlan.PlanID, request)
+	service.ProviderBackend = backendUninstallPlanner{err: errors.New("MLink refuses to remove an unowned MemoryCore container")}
+	if _, err := service.PlanUninstall(context.Background(), UninstallRequest{Agents: []Agent{Codex, Pi, Hermes}}); err == nil || !strings.Contains(err.Error(), "unowned") {
+		t.Fatalf("PlanUninstall() error = %v", err)
 	}
 }

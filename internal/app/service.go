@@ -73,6 +73,10 @@ type ControlPlaneProvisioner interface {
 	ApplyProvision(context.Context, string, controlplane.ProvisionRequest) (controlplane.ProvisionResult, error)
 }
 
+type ProviderBackendUninstaller interface {
+	PlanUninstall(context.Context) (install.ChangeSet, error)
+}
+
 type PrincipalAgentStateStore interface {
 	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
 	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
@@ -121,6 +125,7 @@ type Service struct {
 	IdentityKey          []byte
 	ControlPlaneStates   ControlPlaneStateStore
 	ControlProvisioner   ControlPlaneProvisioner
+	ProviderBackend      ProviderBackendUninstaller
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime
 	PanelDesired         panel.Desired

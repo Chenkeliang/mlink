@@ -96,7 +96,18 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 	if full && activeConfiguration.SchemaVersion == 3 {
 		resources = append(resources, panelUninstallResources(service.Paths.PanelRegistry)...)
 	}
-	return install.BuildChangeSet(service.Target, resources)
+	localPlan, err := install.BuildChangeSet(service.Target, resources)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	if !full || service.ProviderBackend == nil {
+		return localPlan, nil
+	}
+	backendPlan, err := service.ProviderBackend.PlanUninstall(ctx)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	return install.ComposeChangeSets(localPlan, backendPlan)
 }
 
 func (service *Service) ApplyUninstall(ctx context.Context, planID string, request UninstallRequest) error {
@@ -163,7 +174,11 @@ func (service *Service) removeInstallSecrets(ctx context.Context, configuration 
 		{account: "adapter/hermes/token"},
 	}
 	if configuration.SchemaVersion == 3 {
-		values = append(values, managedSecret{account: controlplane.AdminUserKeyAccount}, managedSecret{account: controlplane.OwnerUserKeyAccount})
+		values = append(values,
+			managedSecret{account: controlplane.AdminUserKeyAccount},
+			managedSecret{account: controlplane.OwnerUserKeyAccount},
+			managedSecret{account: "provider/tencentdb/llm-api-key"},
+		)
 	}
 	for _, binding := range configuration.Bindings {
 		const prefix = "keychain://dev.mlink/"

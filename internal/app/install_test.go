@@ -216,10 +216,24 @@ func TestFreshInstallRequiresProvisionedCoreIdentity(t *testing.T) {
 	}
 }
 
+func TestFreshInstallRejectsCapacityThatDiffersFromProvisionedCoreIdentity(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	service.ControlPlaneStates = &cutoverStateStore{state: journal.ControlPlaneState{
+		InstallationID: "personal", InstanceID: "default", DynamicAgentLimit: 777,
+		OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
+	}}
+	request := fixtureInstallRequest()
+	request.DynamicAgentLimit = 500
+	if _, err := service.PlanInstall(context.Background(), request); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("PlanInstall() error = %v", err)
+	}
+}
+
 func TestFreshInstallWritesCoreGeneratedSchemaV3BeforeBrokerStart(t *testing.T) {
 	service, _, _ := newInstallFixture(t)
 	service.ControlPlaneStates = &cutoverStateStore{state: journal.ControlPlaneState{
-		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		InstallationID: "personal", InstanceID: "default", DynamicAgentLimit: 500, OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
 		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
 	}}
 	request := fixtureInstallRequest()
@@ -460,7 +474,7 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 	})
 	secrets := &memorySecrets{values: make(map[string][]byte)}
 	states := &cutoverStateStore{state: journal.ControlPlaneState{
-		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		InstallationID: "personal", InstanceID: "default", DynamicAgentLimit: 500, OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
 		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
 	}}
 	return &Service{

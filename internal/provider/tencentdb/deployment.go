@@ -294,6 +294,31 @@ func (deployment Deployment) ApplyInstall(ctx context.Context, planID string, re
 	return nil
 }
 
+// PlanUninstall removes only the MLink-owned runtime and configuration. The
+// persistent MemoryCore volume is deliberately outside the ordinary uninstall
+// ChangeSet so memory data survives reinstall and upgrades.
+func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeSet, error) {
+	inspected, inspectErr := deployment.inspect(ctx)
+	if inspectErr == nil && !inspected.compatible() {
+		return install.ChangeSet{}, errors.New("MLink refuses to remove an unowned or drifted MemoryCore container")
+	}
+	if deployment.Target == nil || !filepath.IsAbs(deployment.ConfigPath) {
+		return install.ChangeSet{}, errors.New("MemoryCore uninstall target and absolute configuration path are required")
+	}
+	resources := []install.DesiredResource{{
+		OwnerID: "dev.mlink.memorycore.config", Target: deployment.ConfigPath, Action: install.ActionRemoveOwned,
+		SemanticDiff: []install.SemanticDiff{{Path: "memorycore.config", Before: "MLink-owned", After: "removed"}},
+	}}
+	if inspectErr == nil {
+		resources = append(resources, install.DesiredResource{
+			OwnerID: "dev.mlink.memorycore.container", Target: "service:remove:" + MemoryCoreContainerName, Action: install.ActionService,
+			Command:      []string{"docker", "rm", "-f", MemoryCoreContainerName},
+			SemanticDiff: []install.SemanticDiff{{Path: "memorycore.container", Before: "MLink-owned", After: "removed; data volume retained"}},
+		})
+	}
+	return install.BuildChangeSet(deployment.Target, resources)
+}
+
 func (deployment Deployment) validateInstallRequest(request lifecycle.BackendInstallRequest) error {
 	if deployment.Target == nil || deployment.Ledger == nil || deployment.Secrets == nil || !filepath.IsAbs(deployment.ConfigPath) || !filepath.IsAbs(deployment.EnvPath) {
 		return errors.New("MemoryCore install target, ledger, Keychain, and absolute paths are required")

@@ -27,8 +27,58 @@ import (
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/model"
+	"mlink/internal/panel"
+	"mlink/internal/provider/lifecycle"
 	"mlink/internal/version"
 )
+
+func TestProviderDiagnosticChecksReportManagedBackendLifecycle(t *testing.T) {
+	checks := providerDiagnosticChecks(lifecycle.BackendStatus{
+		ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendReachable,
+		Endpoint: "http://127.0.0.1:8420", Installed: true, Local: true,
+	}, nil)
+	if len(checks) != 3 || checks[0].ID != "provider.backend" || checks[0].Code != "reachable" ||
+		checks[1].ID != "provider.image" || checks[1].Code != "pinned" ||
+		checks[2].ID != "provider.volume" || checks[2].Code != "persistent" {
+		t.Fatalf("managed checks = %#v", checks)
+	}
+
+	absent := providerDiagnosticChecks(lifecycle.BackendStatus{
+		ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendAbsent,
+		Endpoint: "http://127.0.0.1:8420", Local: true,
+	}, nil)
+	if absent[0].State != doctor.StateFailed || absent[0].Code != "absent" || !strings.Contains(absent[0].Message, "mlink provider install") {
+		t.Fatalf("absent checks = %#v", absent)
+	}
+
+	incompatible := providerDiagnosticChecks(lifecycle.BackendStatus{
+		ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendIncompatible,
+		Endpoint: "http://127.0.0.1:8420", Local: true,
+	}, nil)
+	if incompatible[0].State != doctor.StateFailed || incompatible[0].Code != "incompatible" || !strings.Contains(incompatible[0].Message, "refuses") {
+		t.Fatalf("incompatible checks = %#v", incompatible)
+	}
+}
+
+func TestControlPlaneIdentityGateBlocksCustomAgentID(t *testing.T) {
+	configuration := fixtureRuntimeConfigV3()
+	state := fixtureRuntimeControlPlaneState()
+	active := controlPlaneIdentityCheck(configuration, state, nil)
+	if active.State != doctor.StatePassed || active.Code != "active" {
+		t.Fatalf("active = %#v", active)
+	}
+
+	configuration.ControlPlane.OwnerAgentID = "custom-agent-id"
+	blocked := controlPlaneIdentityCheck(configuration, state, nil)
+	if blocked.State != doctor.StateFailed || blocked.Code != "identity_mismatch" || !strings.Contains(blocked.Message, "capture blocked") {
+		t.Fatalf("blocked = %#v", blocked)
+	}
+
+	pending := controlPlaneIdentityCheck(config.Config{}, journal.ControlPlaneState{}, os.ErrNotExist)
+	if pending.State != doctor.StateFailed || pending.Code != "pending_identity" {
+		t.Fatalf("pending = %#v", pending)
+	}
+}
 
 func TestRuntimeJournalMaintenanceUsesReadOnlyPreviewAndWritableApply(t *testing.T) {
 	ctx := context.Background()
@@ -253,6 +303,9 @@ func TestRuntimeAuthorizerV3UsesGeneratedOwnerControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if err := store.SaveControlPlane(ctx, fixtureRuntimeControlPlaneState()); err != nil {
+		t.Fatal(err)
+	}
 	authorizer, err := runtimeAuthorizer(ctx, configuration, secrets, store, router, grants, hermesEnabled)
 	if err != nil {
 		t.Fatal(err)
@@ -273,6 +326,34 @@ func TestRuntimeAuthorizerV3UsesGeneratedOwnerControlPlane(t *testing.T) {
 	}, "", "")
 	if err != nil || owner.Identity.UserID != fixed.Identity.UserID || owner.Identity.AgentID != fixed.Identity.AgentID || !owner.IncludeAgentShared {
 		t.Fatalf("Owner Hermes authorization = %#v, %v", owner, err)
+	}
+}
+
+func TestRuntimeAuthorizerRejectsConfigAgentIDOutsideProvisionedCoreState(t *testing.T) {
+	ctx := context.Background()
+	configuration := fixtureRuntimeConfigV3()
+	configuration.ControlPlane.OwnerAgentID = "custom-agent-id"
+	secrets := runtimeSecretStore{
+		"identity/hmac-key":                     bytes.Repeat([]byte{0x2a}, 32),
+		"identity/binding/owner-feishu-union-1": []byte("on_owner"),
+		"adapter/hermes/token":                  []byte("hermes-token"),
+		"connection/local/token":                []byte("gateway-token"),
+		"control/tencentdb/owner-user-key":      []byte("owner-key"),
+	}
+	router, grants, hermesEnabled, err := runtimeRouter(ctx, configuration, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.Open(ctx, t.TempDir()+"/journal.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SaveControlPlane(ctx, fixtureRuntimeControlPlaneState()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtimeAuthorizer(ctx, configuration, secrets, store, router, grants, hermesEnabled); err == nil || !strings.Contains(err.Error(), "Core identity") {
+		t.Fatalf("runtimeAuthorizer() error = %v", err)
 	}
 }
 
@@ -348,6 +429,15 @@ func fixtureRuntimeConfigV3() config.Config {
 			"hermes-private": {ID: "hermes-private", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicPrincipal},
 			"hermes-groups":  {ID: "hermes-groups", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicGroup, SessionPolicy: config.SessionPerTopic},
 		},
+	}
+}
+
+func fixtureRuntimeControlPlaneState() journal.ControlPlaneState {
+	return journal.ControlPlaneState{
+		InstallationID: "installation-1", InstanceID: "default", DynamicAgentLimit: 500,
+		OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated",
+		PanelContainer: panel.ContainerName, PanelImage: panel.ImageReference, State: "active",
 	}
 }
 
