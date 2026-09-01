@@ -1,0 +1,74 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+          cache: true
+      - name: Verify source
+        run: |
+          go test ./... -count=1
+          go test ./... -shuffle=on -count=1
+          go vet ./...
+      - name: Build Darwin arm64 release
+        env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
+            -ldflags "-s -w -X mlink/internal/version.Version=${version} -X mlink/internal/version.Commit=${COMMIT} -X mlink/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/mlink ./cmd/mlink
+          binary_sha="$(sha256sum dist/mlink | awk '{print $1}')"
+          asset="mlink_${version}_darwin_arm64.tar.gz"
+          tar -C dist -czf "dist/${asset}" mlink
+          archive_sha="$(sha256sum "dist/${asset}" | awk '{print $1}')"
+          printf '%s  %s\n%s  %s\n' "$binary_sha" mlink "$archive_sha" "$asset" > dist/checksums.txt
+          jq -n \
+            --arg version "$version" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg tag "$TAG" \
+            --arg name "$asset" \
+            --arg archive "$archive_sha" \
+            --arg binary "$binary_sha" \
+            '{version:$version,repo:$repo,tag:$tag,assets:{"darwin-arm64":{name:$name,archive_sha256:$archive,binary_sha256:$binary}}}' \
+            > dist/release.json
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/mlink
+            dist/*.tar.gz
+            dist/checksums.txt
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/mlink dist/*.tar.gz dist/checksums.txt dist/release.json --generate-notes --verify-tag
+      - uses: actions/setup-node@v4
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Publish npm bootstrap with provenance
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        working-directory: packages/cli
+        run: |
+          cp ../../dist/release.json release.json
+          npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+          npm test
+          npm publish --access public --provenance

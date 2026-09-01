@@ -1,0 +1,33 @@
+{
+  "name": "@mlink/cli",
+  "version": "0.0.0-development",
+  "description": "Verified bootstrap for the MLink native memory connector",
+  "type": "module",
+  "bin": {
+    "mlink": "bin/mlink.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "release.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chenkeliang/mlink.git"
+  },
+  "keywords": [
+    "agent-memory",
+    "codex",
+    "cursor",
+    "hermes-agent",
+    "mcp"
+  ]
+}
