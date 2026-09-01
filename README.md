@@ -1,5 +1,153 @@
-# TencentDB Memory Agent Kit
+<div align="center">
 
-Unofficial memory-only connector for attaching local AI agents to TencentDB MemoryCore without changing their model provider, base URL, subscription, or authentication path.
+```text
+█▀▄▀█  █      █  █▄ █  █▄▀
+█ ▀ █  █▄▄█  █  █ ▀█  █ █
+```
 
-Status: product and technical design in progress.
+# MLink
+
+### One memory plane. Your models stay yours.
+
+Connect Codex, Cursor, Pi, and Hermes Agent to one local memory service—without replacing their model provider, subscription, API key, or authentication flow.
+
+[![Go 1.27](https://img.shields.io/badge/Go-1.27-65D1FF?style=flat-square)](https://go.dev/)
+[![Memory only](https://img.shields.io/badge/scope-memory_only-FFD700?style=flat-square)](#what-mlink-does-not-touch)
+[![Local first](https://img.shields.io/badge/runtime-local_first-35E0A1?style=flat-square)](#architecture)
+
+</div>
+
+## Why MLink
+
+Every coding agent has its own lifecycle, configuration, and memory surface. MLink gives them a shared memory plane while preserving those boundaries:
+
+- **Codex** — lifecycle Hooks for recall and capture.
+- **Cursor Desktop / CLI** — fail-open Hooks for capture and stdio MCP for query-specific recall.
+- **Pi** — native Extension integration.
+- **Hermes Agent** — MemoryProvider bridge with Feishu DM, group, and topic routing.
+- **TencentDB MemoryCore** — the first production Provider, including the official Memory Hub Panel.
+
+MLink is not an LLM proxy. Your agent continues using the model account and provider it already had.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    C[Codex Hooks] --> B
+    U[Cursor Hooks + MCP] --> B
+    P[Pi Extension] --> B
+    H[Hermes MemoryProvider] --> B
+
+    B[MLink Broker<br/>Unix Socket + private Hermes bridge]
+    B --> J[(SQLite Journal<br/>dedupe · audit · retry)]
+    B --> R[Provider Host]
+    R --> M[TencentDB MemoryCore]
+    M --> L1[L1 · user memory]
+    M --> L2[L2 · agent scenarios]
+    M --> L3[L3 · agent profile]
+    M --> HUB[Official Memory Hub<br/>Panel + Knowledge]
+```
+
+The Broker is the single policy boundary. Adapters never receive a MemoryCore token; Provider-specific behavior stays behind the versioned Provider interface.
+
+## Memory isolation
+
+| Context | User identity | Session identity | Layers |
+|---|---|---|---|
+| Local owner: Codex / Cursor / Pi | Core-generated Owner | Agent conversation | L1 + L2 + L3 |
+| Owner in Hermes DM | Stable Feishu binding → Owner | Feishu conversation | L1 + L2 + L3 |
+| Other Hermes DM users | Stable principal → dynamic Agent | Feishu conversation | L1 |
+| Feishu group | Stable group principal → dynamic Agent | Group or topic ID | L1 |
+
+Changing a display name does not change identity. Raw Feishu IDs are stored in Keychain-backed bindings or reduced to HMAC fingerprints; they are not used as public backend labels.
+
+## Quick start
+
+### Native binary
+
+Build with Go 1.27 and start the guided TUI:
+
+```bash
+go build -trimpath -o mlink ./cmd/mlink
+./mlink
+```
+
+The wizard detects local agents, lets you select adapters, previews every file and service operation, and only applies the exact confirmed Plan.
+
+### Existing installation: enable Cursor
+
+```bash
+mlink adapter enable cursor --dry-run --json
+mlink adapter enable cursor --apply-plan <exact-plan-id> --yes
+```
+
+### Verify the installation
+
+```bash
+mlink status --json
+mlink doctor --json
+mlink version --json
+```
+
+## Operational commands
+
+```text
+mlink                                      Guided TUI
+mlink install ...                          Preview/apply first installation
+mlink status [--json]                      Installed adapters and active plan
+mlink doctor [agent] [--json]              Read-only dependency/runtime checks
+mlink config diff [--json]                 Owned-resource drift
+mlink backup list [--json]                 Automatic rollback backups
+mlink identity list [--json]               Stable identity bindings
+mlink identity export / import ...         Encrypted identity portability
+mlink panel status | open                  Official Memory Hub Panel
+mlink maintenance journal ...              Audited unresolved-event handling
+mlink maintenance credentials rotate ...  Hermes grant rotation
+mlink maintenance upgrade ...              Versioned atomic binary upgrade
+mlink adapter enable cursor ...            Incremental local Cursor setup
+```
+
+Every mutation follows the same shape:
+
+```text
+detect → preview → exact Plan ID → explicit --yes → backup → apply → verify
+                                                         ↘ rollback on failure
+```
+
+## What MLink does not touch
+
+MLink does **not**:
+
+- change an agent's model, base URL, vendor, API key, subscription, or login session;
+- proxy prompts or completions to an LLM provider;
+- expose MemoryCore credentials to agent Hooks, Extensions, or MCP configuration;
+- merge Feishu users into one personal profile;
+- replay an ambiguous non-replay-safe memory write automatically;
+- delete MemoryCore data or the Knowledge volume during an ordinary uninstall.
+
+## Provider boundary
+
+TencentDB MemoryCore is the first real connector, not a hard-coded product ceiling. A Provider runs as a separately manifested process and implements the versioned health, recall, capture, and shutdown contract. Future connectors such as mem0 belong behind this boundary and do not require rewriting the Agent adapters.
+
+## Safety and recovery
+
+- Secrets live in macOS Keychain; plans and logs contain fingerprints only.
+- The Journal separates delivery state from operator resolution and clears payloads after audited resolution.
+- Cursor and Codex Hooks fail open so memory downtime does not block the agent.
+- The Memory Hub image is digest-pinned and its Knowledge volume is persistent.
+- Binary upgrades validate platform and config-schema compatibility, then replace atomically and restart the Broker with rollback.
+- Semantic install/uninstall preserves unrelated JSON, YAML, MCP servers, Hooks, and protected Hermes model/auth fields.
+
+## Development
+
+```bash
+go test ./...
+go test ./... -shuffle=on -count=1
+go vet ./...
+```
+
+The release baseline is Go 1.27.x. See [AGENTS.md](AGENTS.md) for product, security, and distribution constraints, and [docs/testing](docs/testing) for isolated and real-machine acceptance evidence.
+
+## Project status
+
+The local memory lifecycle for Codex, Cursor, Pi, Hermes, TencentDB MemoryCore, and the official Memory Hub is implemented and tested on macOS arm64. Release packaging, signed artifacts, and the npm bootstrap are prepared separately from the native runtime so they cannot duplicate or bypass MLink's safety gates.
