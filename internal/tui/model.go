@@ -293,7 +293,7 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				model.cursor--
 			}
 		case "down", "j":
-			if model.cursor < 2 {
+			if model.cursor+1 < len(orderedAgents()) {
 				model.cursor++
 			}
 		case " ":

@@ -129,6 +129,21 @@ func TestWizardRequiresExplicitOwnerSelection(t *testing.T) {
 	}
 }
 
+func TestAgentSelectionCanReachFourthCursorOption(t *testing.T) {
+	model := New(&fakeApplication{}, fixtureRequest())
+	model.step = StepAgents
+	for range 3 {
+		model = advance(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if model.cursor != 3 || orderedAgents()[model.cursor] != app.Cursor {
+		t.Fatalf("cursor/index = %d/%s", model.cursor, orderedAgents()[model.cursor])
+	}
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeySpace})
+	if model.selected[app.Cursor] {
+		t.Fatal("Space did not toggle Cursor option")
+	}
+}
+
 func TestWizardTrimsTokenBeforePlanning(t *testing.T) {
 	application := &fakeApplication{plan: install.ChangeSet{PlanID: "plan_test"}}
 	model := New(application, fixtureRequest())

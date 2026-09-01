@@ -384,6 +384,25 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestRunRendersRootAndCommandHelpWithoutApplication(t *testing.T) {
+	for name, args := range map[string][]string{
+		"root flag":    {"--help"},
+		"root command": {"help"},
+		"maintenance":  {"help", "maintenance"},
+		"install flag": {"install", "--help"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout := &bytes.Buffer{}
+			if code := Run(context.Background(), args, Dependencies{Stdout: stdout, Stderr: io.Discard}); code != 0 {
+				t.Fatalf("Run(%q) = %d", args, code)
+			}
+			if !strings.Contains(stdout.String(), "Usage:") || !strings.Contains(stdout.String(), "doctor") {
+				t.Fatalf("help = %q", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunDispatchesCodexHookEvent(t *testing.T) {
 	calls := 0
 	code := Run(context.Background(), []string{"hook", "codex", "Stop"}, Dependencies{

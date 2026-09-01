@@ -50,6 +50,9 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 		}
 		return 0
 	}
+	if topic, ok := helpTopic(args); ok {
+		return renderHelp(deps.Stdout, topic)
+	}
 	if slices.Equal(args, []string{"provider", "run", "tencentdb"}) {
 		if deps.ServeTencentDB == nil || deps.ServeTencentDB(ctx) != nil {
 			writeLine(deps.Stderr, "mlink provider command failed")
