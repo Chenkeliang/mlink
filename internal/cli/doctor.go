@@ -58,7 +58,7 @@ func runDoctor(ctx context.Context, args []string, deps Dependencies) int {
 		}
 	} else {
 		for _, check := range report.Checks {
-			_, _ = fmt.Fprintf(deps.Stdout, "%s\t%s\t%s\n", check.ID, check.State, check.Code)
+			_, _ = fmt.Fprintf(deps.Stdout, "%s\t%s\t%s\t%s\n", check.ID, check.State, check.Code, check.Message)
 		}
 	}
 	return report.ExitCode()

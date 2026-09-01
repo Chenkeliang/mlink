@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +13,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	gorruntime "runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -26,7 +32,9 @@ import (
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/launchagent"
+	"mlink/internal/panel"
 	"mlink/internal/secret"
+	"mlink/internal/version"
 )
 
 func (runtime *runtimeApplication) Status(ctx context.Context) (app.Status, error) {
@@ -124,7 +132,9 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 		}
 		report.Checks = append(report.Checks, doctor.IdentityChecks(configuration, identityKey, bindingErr)...)
 		wipeRuntimeSecret(identityKey)
+		report.Checks = append(report.Checks, doctor.CompatibilityChecks(version.Current(), configuration.SchemaVersion, gorruntime.GOOS, gorruntime.GOARCH)...)
 	}
+	report.Checks = append(report.Checks, runtime.preflightChecks(ctx)...)
 	report.Checks = append(report.Checks, runtime.checkLaunchAgent(ctx), runtime.checkBrokerSocket(ctx, agents))
 	if report.Checks[len(report.Checks)-1].State == doctor.StatePassed {
 		report.Checks = append(report.Checks, doctor.Check{ID: "provider.tencentdb", State: doctor.StatePassed, Code: "available"})
@@ -140,11 +150,131 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 			report.Checks = append(report.Checks, runtime.checkPi(ctx, activity))
 		case app.Hermes:
 			providerCheck, bridgeCheck, sessionCheck := runtime.checkHermes(ctx, configuration)
-			report.Checks = append(report.Checks, providerCheck, bridgeCheck, sessionCheck)
+			report.Checks = append(report.Checks, providerCheck, bridgeCheck, sessionCheck, runtime.checkHermesGrantFingerprint(ctx))
 		}
+	}
+	if status.Installed && configuration.ControlPlane != nil {
+		report.Checks = append(report.Checks, runtime.checkHubContainer(ctx)...)
 	}
 	report.Checks = append(report.Checks, runtime.checkQueue(ctx))
 	return report, nil
+}
+
+func (runtime *runtimeApplication) preflightChecks(ctx context.Context) []doctor.Check {
+	checks := make([]doctor.Check, 0, 7)
+	for _, dependency := range []struct{ id, command string }{
+		{"dependency.docker", "docker"}, {"dependency.orb", "orb"}, {"dependency.keychain", "security"},
+	} {
+		check := doctor.Check{ID: dependency.id, State: doctor.StatePassed, Code: "available"}
+		if _, err := exec.LookPath(dependency.command); err != nil {
+			check.State, check.Code, check.Message = doctor.StateFailed, "missing", "install required dependency: "+dependency.command
+		}
+		checks = append(checks, check)
+	}
+	arch := doctor.Check{ID: "system.architecture", State: doctor.StatePassed, Code: "supported", Message: gorruntime.GOOS + "/" + gorruntime.GOARCH}
+	if gorruntime.GOOS != "darwin" || gorruntime.GOARCH != "arm64" {
+		arch.State, arch.Code = doctor.StateFailed, "unsupported"
+	}
+	checks = append(checks, arch)
+	var stats syscall.Statfs_t
+	disk := doctor.Check{ID: "system.disk", State: doctor.StatePassed, Code: "sufficient"}
+	if err := syscall.Statfs(filepath.Dir(runtime.paths.Home), &stats); err != nil || uint64(stats.Bavail)*uint64(stats.Bsize) < 256<<20 {
+		disk.State, disk.Code, disk.Message = doctor.StateFailed, "insufficient", "at least 256 MiB free space is required"
+	}
+	checks = append(checks, disk)
+	core := doctor.Check{ID: "network.memorycore", State: doctor.StatePassed, Code: "reachable"}
+	connection, err := net.DialTimeout("tcp", "127.0.0.1:8420", 500*time.Millisecond)
+	if err != nil {
+		core.State, core.Code, core.Message = doctor.StateFailed, "unreachable", "start TencentDB MemoryCore on 127.0.0.1:8420"
+	} else {
+		_ = connection.Close()
+	}
+	checks = append(checks, core)
+	return checks
+}
+
+func (runtime *runtimeApplication) checkHubContainer(ctx context.Context) []doctor.Check {
+	output, err := (install.LocalTarget{}).Run(ctx, []string{"docker", "inspect", panel.ContainerName}, nil)
+	if err != nil {
+		failed := doctor.Check{State: doctor.StateFailed, Code: "missing", Message: "run: mlink panel provision --dry-run --json"}
+		return []doctor.Check{{ID: "hub.image", State: failed.State, Code: failed.Code, Message: failed.Message}, {ID: "hub.args", State: failed.State, Code: failed.Code, Message: failed.Message}, {ID: "hub.knowledge_volume", State: failed.State, Code: failed.Code, Message: failed.Message}}
+	}
+	return inspectHubContainer(output)
+}
+
+func inspectHubContainer(content []byte) []doctor.Check {
+	var values []struct {
+		Config struct {
+			Image  string            `json:"Image"`
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		HostConfig struct {
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+		} `json:"HostConfig"`
+		Mounts []struct {
+			Name, Destination string
+		} `json:"Mounts"`
+	}
+	invalid := func(id, code string) doctor.Check { return doctor.Check{ID: id, State: doctor.StateFailed, Code: code} }
+	if json.Unmarshal(content, &values) != nil || len(values) != 1 {
+		return []doctor.Check{invalid("hub.image", "inspect_invalid"), invalid("hub.args", "inspect_invalid"), invalid("hub.knowledge_volume", "inspect_invalid")}
+	}
+	value := values[0]
+	image := doctor.Check{ID: "hub.image", State: doctor.StatePassed, Code: "pinned"}
+	if value.Config.Image != panel.ImageReference {
+		image.State, image.Code = doctor.StateFailed, "digest_mismatch"
+	}
+	args := doctor.Check{ID: "hub.args", State: doctor.StatePassed, Code: "compatible"}
+	if value.Config.Labels["dev.mlink.component"] != "memory-hub" || value.HostConfig.RestartPolicy.Name != "unless-stopped" {
+		args.State, args.Code = doctor.StateFailed, "argument_drift"
+	}
+	volume := doctor.Check{ID: "hub.knowledge_volume", State: doctor.StateFailed, Code: "volume_mismatch"}
+	for _, mount := range value.Mounts {
+		if mount.Name == panel.VolumeName && mount.Destination == "/data/knowledge" {
+			volume.State, volume.Code = doctor.StatePassed, "persistent"
+		}
+	}
+	return []doctor.Check{image, args, volume}
+}
+
+func (runtime *runtimeApplication) checkHermesGrantFingerprint(ctx context.Context) doctor.Check {
+	grant, err := (secret.Keychain{}).Get(ctx, "adapter/hermes/token")
+	if err != nil {
+		return doctor.Check{ID: "hermes.grant", State: doctor.StateFailed, Code: "keychain_missing"}
+	}
+	defer wipeRuntimeSecret(grant)
+	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
+	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
+	if err != nil {
+		return doctor.Check{ID: "hermes.grant", State: doctor.StateFailed, Code: "orb_unavailable"}
+	}
+	target, err := hermes.NewOrbTarget(machine, detection.HermesHome, nil)
+	if err != nil {
+		return doctor.Check{ID: "hermes.grant", State: doctor.StateFailed, Code: "orb_unavailable"}
+	}
+	content, _, err := target.Read(ctx, filepath.Join(detection.HermesHome, "mlink.json"))
+	if err != nil {
+		return doctor.Check{ID: "hermes.grant", State: doctor.StateFailed, Code: "config_missing"}
+	}
+	return compareHermesGrant(content, grant)
+}
+
+func compareHermesGrant(content, keychainGrant []byte) doctor.Check {
+	var value struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(content, &value) != nil || value.Token == "" {
+		return doctor.Check{ID: "hermes.grant", State: doctor.StateFailed, Code: "config_invalid"}
+	}
+	left := sha256.Sum256([]byte(value.Token))
+	right := sha256.Sum256(keychainGrant)
+	check := doctor.Check{ID: "hermes.grant", State: doctor.StatePassed, Code: "fingerprint_match", Message: "sha256:" + hex.EncodeToString(right[:])[:12]}
+	if !hmac.Equal(left[:], right[:]) {
+		check.State, check.Code, check.Message = doctor.StateFailed, "fingerprint_mismatch", "run: mlink maintenance credentials rotate hermes-grant --dry-run --json"
+	}
+	return check
 }
 
 func (runtime *runtimeApplication) checkLaunchAgent(ctx context.Context) doctor.Check {
@@ -376,14 +506,5 @@ func (runtime *runtimeApplication) checkQueue(ctx context.Context) doctor.Check 
 	if err != nil {
 		return doctor.Check{ID: "journal.queue", State: doctor.StateFailed, Code: "permanent_failure"}
 	}
-	switch {
-	case summary.Ambiguous > 0:
-		return doctor.Check{ID: "journal.queue", State: doctor.StateFailed, Code: "ambiguous"}
-	case summary.Permanent > 0:
-		return doctor.Check{ID: "journal.queue", State: doctor.StateFailed, Code: "permanent_failure"}
-	case summary.Retrying > 0 || summary.Queued > 0:
-		return doctor.Check{ID: "journal.queue", State: doctor.StatePendingAction, Code: "retrying"}
-	default:
-		return doctor.Check{ID: "journal.queue", State: doctor.StatePassed, Code: "clean"}
-	}
+	return doctor.JournalCheck(summary)
 }

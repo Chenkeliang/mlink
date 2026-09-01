@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"mlink/internal/config"
+	"mlink/internal/journal"
+	"mlink/internal/version"
 )
 
 func TestReportDistinguishesPendingActionFromFailure(t *testing.T) {
@@ -74,5 +76,26 @@ func TestIdentityChecksUseRoutingPoliciesForSchemaV3(t *testing.T) {
 		if checks[index+2].ID != id || checks[index+2].State != StatePassed {
 			t.Fatalf("routing check = %#v", checks[index+2])
 		}
+	}
+}
+
+func TestCompatibilityChecksReportBinaryAndActiveSchema(t *testing.T) {
+	checks := CompatibilityChecks(version.Info{Version: "1.0.0", GOOS: "darwin", GOARCH: "arm64", SchemaMin: 2, SchemaMax: 3}, 3, "darwin", "arm64")
+	if len(checks) != 3 || checks[0].Code != "compatible" || checks[1].Code != "compatible" || checks[2].Code != "compatible" {
+		t.Fatalf("checks = %#v", checks)
+	}
+	checks = CompatibilityChecks(version.Info{Version: "1.0.0", GOOS: "linux", GOARCH: "amd64", SchemaMin: 1, SchemaMax: 2}, 3, "darwin", "arm64")
+	if checks[1].State != StateFailed || checks[2].State != StateFailed {
+		t.Fatalf("incompatible checks = %#v", checks)
+	}
+}
+
+func TestJournalCheckIncludesAuditedRemediation(t *testing.T) {
+	check := JournalCheck(journal.QueueStatus{Ambiguous: 1})
+	if check.State != StateFailed || check.Code != "ambiguous" || check.Message != "run: mlink maintenance journal list --json" {
+		t.Fatalf("check = %#v", check)
+	}
+	if clean := JournalCheck(journal.QueueStatus{}); clean.State != StatePassed || clean.Code != "clean" {
+		t.Fatalf("clean = %#v", clean)
 	}
 }

@@ -162,6 +162,33 @@ func TestLocalInstalledVerifierChecksHashAndVersion(t *testing.T) {
 	}
 }
 
+func TestInspectHubContainerChecksPinnedImageArgsAndVolume(t *testing.T) {
+	fixture := []byte(`[{
+		"Config":{"Image":"agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104","Cmd":null,"Labels":{"dev.mlink.component":"memory-hub"}},
+		"HostConfig":{"RestartPolicy":{"Name":"unless-stopped"}},
+		"Mounts":[{"Name":"tdai-panel-data","Destination":"/data/knowledge"}]
+	}]`)
+	checks := inspectHubContainer(fixture)
+	if len(checks) != 3 || checks[0].State != doctor.StatePassed || checks[1].State != doctor.StatePassed || checks[2].State != doctor.StatePassed {
+		t.Fatalf("checks = %#v", checks)
+	}
+	checks = inspectHubContainer(bytes.ReplaceAll(fixture, []byte("tdai-panel-data"), []byte("wrong-volume")))
+	if checks[2].Code != "volume_mismatch" {
+		t.Fatalf("volume checks = %#v", checks)
+	}
+}
+
+func TestCompareHermesGrantUsesFingerprintWithoutReturningSecret(t *testing.T) {
+	check := compareHermesGrant([]byte(`{"endpoint":"http://host.internal:8097","token":"same-secret"}`), []byte("same-secret"))
+	if check.State != doctor.StatePassed || check.Code != "fingerprint_match" || strings.Contains(check.Message, "same-secret") {
+		t.Fatalf("check = %#v", check)
+	}
+	check = compareHermesGrant([]byte(`{"endpoint":"http://host.internal:8097","token":"other"}`), []byte("same-secret"))
+	if check.Code != "fingerprint_mismatch" {
+		t.Fatalf("mismatch = %#v", check)
+	}
+}
+
 type runtimeSecretStore map[string][]byte
 
 func (store runtimeSecretStore) Put(context.Context, string, []byte) error { return nil }

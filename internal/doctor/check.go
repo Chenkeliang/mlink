@@ -5,6 +5,8 @@ import (
 
 	"mlink/internal/config"
 	"mlink/internal/identity"
+	"mlink/internal/journal"
+	"mlink/internal/version"
 )
 
 type State string
@@ -86,4 +88,33 @@ func IdentityChecks(configuration config.Config, identityKey []byte, bindingErr 
 		checks = append(checks, check)
 	}
 	return checks
+}
+
+func CompatibilityChecks(info version.Info, activeSchema int, goos, goarch string) []Check {
+	versionCheck := Check{ID: "runtime.binary", State: StatePassed, Code: "compatible", Message: info.Version}
+	if info.Version == "" || info.SchemaMin <= 0 || info.SchemaMax < info.SchemaMin {
+		versionCheck.State, versionCheck.Code = StateFailed, "metadata_invalid"
+	}
+	platformCheck := Check{ID: "runtime.platform", State: StatePassed, Code: "compatible", Message: info.GOOS + "/" + info.GOARCH}
+	if info.GOOS != goos || info.GOARCH != goarch {
+		platformCheck.State, platformCheck.Code = StateFailed, "architecture_mismatch"
+	}
+	schemaCheck := Check{ID: "config.schema", State: StatePassed, Code: "compatible"}
+	if activeSchema < info.SchemaMin || activeSchema > info.SchemaMax {
+		schemaCheck.State, schemaCheck.Code = StateFailed, "schema_unsupported"
+	}
+	return []Check{versionCheck, platformCheck, schemaCheck}
+}
+
+func JournalCheck(summary journal.QueueStatus) Check {
+	switch {
+	case summary.Ambiguous > 0:
+		return Check{ID: "journal.queue", State: StateFailed, Code: "ambiguous", Message: "run: mlink maintenance journal list --json"}
+	case summary.Permanent > 0:
+		return Check{ID: "journal.queue", State: StateFailed, Code: "permanent_failure", Message: "run: mlink maintenance journal list --json"}
+	case summary.Retrying > 0 || summary.Queued > 0:
+		return Check{ID: "journal.queue", State: StatePendingAction, Code: "retrying", Message: "capture delivery is pending"}
+	default:
+		return Check{ID: "journal.queue", State: StatePassed, Code: "clean"}
+	}
 }
