@@ -725,6 +725,24 @@ func (runtime *runtimeApplication) ApplyPanelProvision(ctx context.Context, plan
 	return service.ApplyPanelProvision(ctx, planID)
 }
 
+func (runtime *runtimeApplication) PlanPanelRuntime(ctx context.Context) (install.ChangeSet, error) {
+	service, closeService, err := runtime.controlPanelService(ctx, false)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer closeService()
+	return service.PlanPanelRuntime(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyPanelRuntime(ctx context.Context, planID string) error {
+	service, closeService, err := runtime.controlPanelService(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer closeService()
+	return service.ApplyPanelRuntime(ctx, planID)
+}
+
 func (runtime *runtimeApplication) PlanPanelCutover(ctx context.Context, request app.ControlPlaneCutoverRequest) (install.ChangeSet, error) {
 	service, closeService, err := runtime.controlPanelService(ctx, false)
 	if err != nil {

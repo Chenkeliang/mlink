@@ -13,7 +13,12 @@ import (
 	"mlink/internal/install"
 )
 
-var stepNames = []string{"Welcome", "Detect", "Provider", "Connection", "Identity", "Agents", "Install Preview", "Install Confirm", "Install Verify", "Panel Preview", "Panel Confirm", "Capacity", "Cutover Preview", "Cutover Confirm", "Complete"}
+var stepNames = []string{
+	"Welcome", "Detect", "Provider", "Backend Detect", "Backend Setup", "Connection",
+	"Identity", "Capacity", "Backend Preview", "Backend Confirm", "Core Identity Preview",
+	"Core Identity Confirm", "Agents", "Install Preview", "Install Confirm", "Install Verify",
+	"Memory Hub", "Hub Preview", "Hub Confirm", "Complete",
+}
 
 func (model Model) View() string {
 	width := model.width
@@ -61,16 +66,42 @@ func (model Model) stepView(width int) []string {
 			model.row("TencentDB MemoryCore", "selected"),
 			model.mutedStyle().Render("Provider connector: dev.mlink.tencentdb · 0.1.0"),
 		}
-	case StepConnection:
-		baseURL, _ := model.request.Connection.ProviderConfig["base_url"].(string)
-		serviceID, _ := model.request.Connection.ProviderConfig["service_id"].(string)
-		return []string{
-			model.row("Endpoint", baseURL),
-			model.row("Service", serviceID),
-			model.row("Credential", "macOS Keychain"),
-			"",
-			model.token.View(),
+	case StepBackendDetect:
+		state := string(model.backendStatus.State)
+		if state == "" {
+			state = "checking"
 		}
+		return []string{
+			model.row("MemoryCore", state),
+			model.row("Endpoint", model.backendStatus.Endpoint),
+			model.mutedStyle().Render("Detection is read-only. No container or configuration is changed."),
+		}
+	case StepBackendMode:
+		lines := []string{model.row("MemoryCore", string(model.backendStatus.State))}
+		for index, option := range backendModes() {
+			cursor := "  "
+			if index == model.backendModeCursor {
+				cursor = "> "
+			}
+			lines = append(lines, cursor+option)
+		}
+		return lines
+	case StepConnection:
+		labels := []string{"MemoryCore endpoint", "Gateway token"}
+		fields := []string{model.endpoint.View(), model.token.View()}
+		if model.installBackend {
+			labels = append(labels, "Memory LLM base URL", "Memory LLM model", "Memory LLM API key")
+			fields = append(fields, model.llmBaseURL.View(), model.llmModel.View(), model.llmAPIKey.View())
+		}
+		lines := []string{model.row("Credential storage", "macOS Keychain")}
+		for index := range labels {
+			cursor := "  "
+			if index == model.connectionCursor {
+				cursor = "> "
+			}
+			lines = append(lines, cursor+labels[index], "  "+fields[index])
+		}
+		return lines
 	case StepIdentity:
 		lines := []string{
 			model.row("Owner", model.request.OwnerSlug),
@@ -88,6 +119,21 @@ func (model Model) stepView(width int) []string {
 			lines = append(lines, cursor+fmt.Sprintf("%s %s · %s · …%s", selected, candidate.DisplayName, candidate.Kind, candidate.Suffix))
 		}
 		return lines
+	case StepCapacity:
+		return []string{
+			"Set the maximum number of dynamically created private/group Agents.",
+			model.mutedStyle().Render("This limit is stored with the permanent Core identity."), "", model.capacity.View(),
+		}
+	case StepBackendPreview:
+		lines := model.planLines(model.backendPlan, width)
+		return append(lines, "", model.okStyle().Render("Official MemoryCore is loopback-bound; model settings of every Agent stay unchanged."))
+	case StepBackendApply:
+		return model.confirmationLines(model.backendPlan.PlanID, "Installs or starts the pinned official MemoryCore runtime and retains its data volume.")
+	case StepControlPreview:
+		lines := model.planLines(model.controlPlan, width)
+		return append(lines, "", model.okStyle().Render("MemoryCore creates the permanent Owner, Team, Agent and Asset IDs before the first memory write."))
+	case StepControlApply:
+		return model.confirmationLines(model.controlPlan.PlanID, "Creates permanent Core identity. A later Memory Hub install must reuse these exact IDs.")
 	case StepAgents:
 		var lines []string
 		for index, agent := range orderedAgents() {
@@ -142,6 +188,16 @@ func (model Model) stepView(width int) []string {
 			lines = append(lines, model.row(check.ID, state))
 		}
 		return lines
+	case StepPanelMode:
+		lines := []string{model.okStyle().Render("Core identity is already fixed; installing the Hub cannot replace it.")}
+		for index, option := range panelModes() {
+			cursor := "  "
+			if index == model.panelModeCursor {
+				cursor = "> "
+			}
+			lines = append(lines, cursor+option)
+		}
+		return lines
 	case StepPanelPreview:
 		lines := []string{
 			model.row("Official Memory Hub", "selected"),
@@ -149,28 +205,17 @@ func (model Model) stepView(width int) []string {
 			model.row("Knowledge", "http://127.0.0.1:8424"),
 		}
 		lines = append(lines, model.planLines(model.panelPlan, width)...)
-		return append(lines, "", model.mutedStyle().Render("Knowledge assets are not automatically imported or injected. Active routing is unchanged."))
+		return append(lines, "", model.mutedStyle().Render("The Hub reuses existing Core IDs. Knowledge assets are not automatically imported or injected; routing is unchanged."))
 	case StepPanelApply:
-		return model.confirmationLines(model.panelPlan.PlanID, "Stage A creates Core IDs and starts the official loopback Hub. It does not cut over memory routing.")
-	case StepCapacity:
-		return []string{
-			"Set the maximum number of dynamically created private/group Agents.",
-			model.mutedStyle().Render("TencentDB's official quota response does not expose an Agent limit."), "", model.capacity.View(),
-		}
-	case StepCutoverPreview:
-		lines := model.planLines(model.cutoverPlan, width)
-		lines = append(lines, "", model.okStyle().Render("Legacy memory is retained but inactive; no L0-L3 migration is performed."))
-		return lines
-	case StepCutoverApply:
-		return model.confirmationLines(model.cutoverPlan.PlanID, "Stage B switches routing to Core-generated IDs and restarts Broker/Hermes.")
+		return model.confirmationLines(model.panelPlan.PlanID, "Starts the official loopback Memory Hub over the already-provisioned Core identity.")
 	case StepComplete:
 		return []string{
 			model.row("Control plane", model.panelStatus.ControlPlane.State),
+			model.row("Identity source", "MemoryCore · fixed before first write"),
 			model.row("Hub container", map[bool]string{true: "present", false: "missing"}[model.panelStatus.Panel.ContainerPresent]),
 			model.row("Panel", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.PanelHealthy]),
 			model.row("Knowledge", map[bool]string{true: "healthy", false: "unavailable"}[model.panelStatus.Panel.KnowledgeHealthy]),
 			model.row("Memory instance", map[bool]string{true: "visible", false: "missing"}[model.panelStatus.Panel.InstanceVisible]),
-			model.row("Legacy memory", "retained · inactive · not migrated"),
 		}
 	default:
 		return nil
@@ -180,7 +225,11 @@ func (model Model) stepView(width int) []string {
 func (model Model) footer() string {
 	switch model.step {
 	case StepConnection:
-		return "Enter continue · Ctrl+C quit"
+		return "↑/↓ or Tab move · Enter next · Ctrl+C quit"
+	case StepBackendDetect:
+		return "r detect again · q quit"
+	case StepBackendMode, StepPanelMode:
+		return "↑/↓ move · Enter select · q quit"
 	case StepIdentity:
 		return "↑/↓ move · Space select · Enter continue · q quit"
 	case StepAgents:
@@ -188,10 +237,10 @@ func (model Model) footer() string {
 	case StepApply:
 		return "y confirm · n back · Enter apply · q quit"
 	case StepVerify:
-		return "Enter continue to Panel · r verify again · q quit"
-	case StepPanelPreview, StepCutoverPreview:
+		return "Enter optional Hub choice · r verify again · q quit"
+	case StepBackendPreview, StepControlPreview, StepPanelPreview:
 		return "Enter continue · q quit"
-	case StepPanelApply, StepCutoverApply:
+	case StepBackendApply, StepControlApply, StepPanelApply:
 		return "y confirm · n back · Enter apply · q quit"
 	case StepCapacity:
 		return "Type limit · Enter preview · Ctrl+C quit"
