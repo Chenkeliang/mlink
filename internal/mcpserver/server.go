@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -23,7 +24,11 @@ type SearchInput struct {
 }
 
 type SearchItem struct {
-	ID, Kind, Scope, Text, Source string
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Scope  string `json:"scope"`
+	Text   string `json:"text"`
+	Source string `json:"source"`
 }
 
 type SearchOutput struct {
@@ -35,6 +40,8 @@ type SearchOutput struct {
 type StatusOutput struct {
 	Available bool `json:"available"`
 }
+
+const maxToolTextBytes = 16 * 1024
 
 func New(backend Backend, release string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "MLink Memory", Version: release}, nil)
@@ -85,11 +92,30 @@ func search(ctx context.Context, _ *mcp.CallToolRequest, input SearchInput, back
 		if value == "" {
 			continue
 		}
+		prefix := fmt.Sprintf("- [%s] ", item.Scope)
+		remaining := maxToolTextBytes - text.Len() - len(prefix) - 1
+		if remaining <= 0 {
+			break
+		}
+		value = truncateUTF8(value, remaining)
 		output.Items = append(output.Items, SearchItem{ID: item.ID, Kind: item.Kind, Scope: string(item.Scope), Text: value, Source: item.Source})
-		_, _ = fmt.Fprintf(&text, "- [%s] %s\n", item.Scope, value)
+		text.WriteString(prefix)
+		text.WriteString(value)
+		text.WriteByte('\n')
 	}
 	if len(output.Items) == 0 {
 		text.WriteString("- No matching memory.\n")
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text.String()}}}, output, nil
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }

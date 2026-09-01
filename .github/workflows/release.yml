@@ -55,6 +55,7 @@ jobs:
             dist/mlink
             dist/*.tar.gz
             dist/checksums.txt
+            dist/release.json
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

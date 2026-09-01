@@ -91,3 +91,24 @@ func TestServerPropagatesCanceledContext(t *testing.T) {
 		t.Fatalf("error/server = %v/%v", err, server)
 	}
 }
+
+func TestSearchBoundsTotalMemoryContext(t *testing.T) {
+	large := strings.Repeat("记", 20_000)
+	backendResult := model.ContextBundle{Items: []model.ContextItem{{ID: "l2:large", Scope: model.ScopeAgent, Text: large}}}
+	bounded := &staticBackend{bundle: backendResult}
+	result, output, err := search(context.Background(), nil, SearchInput{Query: "large", Limit: 5}, bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if len(text) > maxToolTextBytes || len(output.Items) != 1 || len(output.Items[0].Text) >= len(large) {
+		t.Fatalf("bounded lengths = text:%d item:%d", len(text), len(output.Items[0].Text))
+	}
+}
+
+type staticBackend struct{ bundle model.ContextBundle }
+
+func (backend *staticBackend) Recall(context.Context, broker.RecallInput) (model.ContextBundle, error) {
+	return backend.bundle, nil
+}
+func (*staticBackend) Status(context.Context) error { return nil }

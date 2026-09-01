@@ -41,6 +41,13 @@ func TestRecallConnectionFailureReturnsEmptyFailOpenBundle(t *testing.T) {
 	}
 }
 
+func TestRecallStrictReportsConnectionFailureForAuthoritativeMCP(t *testing.T) {
+	client := Client{BaseURL: "http://127.0.0.1:1", AdapterID: "cursor", RecallTimeout: 100 * time.Millisecond}
+	if _, err := client.RecallStrict(context.Background(), broker.RecallInput{Query: "hello"}); err == nil {
+		t.Fatal("RecallStrict() hid connection failure")
+	}
+}
+
 func TestClientSendsAdapterAndBearerToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer token" {

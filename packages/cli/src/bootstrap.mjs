@@ -45,11 +45,35 @@ async function download(url) {
   if (declaredLength > MAX_ARCHIVE_BYTES) {
     throw new Error("MLink release archive is too large");
   }
-  const data = Buffer.from(await response.arrayBuffer());
-  if (data.length === 0 || data.length > MAX_ARCHIVE_BYTES) {
+  const data = await readBoundedResponse(response, MAX_ARCHIVE_BYTES);
+  if (data.length === 0) {
     throw new Error("MLink release archive has an invalid size");
   }
   return data;
+}
+
+export async function readBoundedResponse(response, maxBytes = MAX_ARCHIVE_BYTES) {
+  if (!response.body || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("MLink release response is invalid");
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("MLink release archive is too large");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function installNative(release, asset) {

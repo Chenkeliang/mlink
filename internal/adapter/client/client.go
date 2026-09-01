@@ -48,6 +48,21 @@ func (c Client) Recall(ctx context.Context, input broker.RecallInput) (model.Con
 	return bundle, err
 }
 
+func (c Client) RecallStrict(ctx context.Context, input broker.RecallInput) (model.ContextBundle, error) {
+	input.AdapterID = c.AdapterID
+	requestCtx := ctx
+	cancel := func() {}
+	if c.RecallTimeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, c.RecallTimeout)
+	}
+	defer cancel()
+	var bundle model.ContextBundle
+	if err := c.postJSON(requestCtx, "/v1/recall", input, &bundle); err != nil {
+		return model.ContextBundle{}, err
+	}
+	return bundle, nil
+}
+
 func (c Client) Status(ctx context.Context) error {
 	requestCtx := ctx
 	cancel := func() {}

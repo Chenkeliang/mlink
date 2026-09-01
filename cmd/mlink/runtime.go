@@ -43,6 +43,7 @@ import (
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/mcpserver"
+	"mlink/internal/model"
 	"mlink/internal/panel"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
@@ -80,6 +81,14 @@ type httpHermesGrantVerifier struct {
 type localUpgradeLoader struct {
 	RunVersion func(context.Context, string) ([]byte, error)
 }
+
+type strictMCPBackend struct{ client adapterclient.Client }
+
+func (backend strictMCPBackend) Recall(ctx context.Context, input broker.RecallInput) (model.ContextBundle, error) {
+	return backend.client.RecallStrict(ctx, input)
+}
+
+func (backend strictMCPBackend) Status(ctx context.Context) error { return backend.client.Status(ctx) }
 
 func (loader localUpgradeLoader) LoadUpgradeCandidate(ctx context.Context, path string, uid int) (app.UpgradeCandidate, error) {
 	if !filepath.IsAbs(path) {
@@ -232,7 +241,7 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 	}
 	dependencies.ServeBroker = runtime.ServeBroker
 	dependencies.ServeMCP = func(ctx context.Context) error {
-		backend := adapterclient.Client{SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 2 * time.Second, CaptureTimeout: 2 * time.Second}
+		backend := strictMCPBackend{client: adapterclient.Client{SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 2 * time.Second, CaptureTimeout: 2 * time.Second}}
 		return mcpserver.New(backend, version.Current().Version).Run(ctx, &mcp.StdioTransport{})
 	}
 	dependencies.RunTUI = func(context.Context) error {

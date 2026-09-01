@@ -1,5 +1,7 @@
 # MLink Product Completeness Review
 
+> Superseded for release status by `docs/reviews/2026-09-01-mlink-release-readiness.md`. This file preserves the pre-P0 gap analysis.
+
 Date: 2026-09-01
 
 Scope: complete local-user lifecycle for installation, dependencies, guidance, operation, maintenance, security, import/export, recovery, uninstall, extensibility, and distribution.
