@@ -15,16 +15,7 @@ func TestRunAcceptsIsolatedProvider(t *testing.T) {
 }
 
 func TestRunRejectsProviderThatLeaksAcrossUsers(t *testing.T) {
-	ok := testing.RunTests(
-		func(_, _ string) (bool, error) { return true, nil },
-		[]testing.InternalTest{{
-			Name: "leaky provider contract",
-			F: func(inner *testing.T) {
-				Run(inner, func(*testing.T) Provider { return leakyProvider{} })
-			},
-		}},
-	)
-	if ok {
+	if err := checkUserIsolation(leakyProvider{}); err == nil {
 		t.Fatal("contract accepted a provider that returns user A memory to user B")
 	}
 }

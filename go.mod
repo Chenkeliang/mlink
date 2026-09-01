@@ -1,6 +1,6 @@
 module mlink
 
-go 1.22
+go 1.27.0
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0

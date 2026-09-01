@@ -4,6 +4,8 @@ Date: 2026-09-01
 
 Status: approved for implementation
 
+Build baseline: Go 1.27.0 managed by `g`.
+
 ## Purpose
 
 Close the operational gaps discovered during the real Memory Hub rollout before public distribution: unresolved Journal events, credential rotation, binary/config version safety, and actionable Doctor output.
@@ -17,18 +19,18 @@ Add:
 ```text
 mlink maintenance journal list [--json]
 mlink maintenance journal inspect <event-id-or-unique-suffix> [--json]
-mlink maintenance journal discard <event-id-or-unique-suffix> --dry-run --json
-mlink maintenance journal discard <event-id-or-unique-suffix> --apply-plan <id> --yes
-mlink maintenance journal acknowledge <event-id-or-unique-suffix> --provider-ref <ref> --dry-run --json
-mlink maintenance journal acknowledge <event-id-or-unique-suffix> --provider-ref <ref> --apply-plan <id> --yes
+mlink maintenance journal discard <event-id-or-unique-suffix> --reason <text> --dry-run --json
+mlink maintenance journal discard <event-id-or-unique-suffix> --reason <text> --apply-plan <id> --yes
+mlink maintenance journal acknowledge <event-id-or-unique-suffix> --provider-ref <ref> --reason <text> --dry-run --json
+mlink maintenance journal acknowledge <event-id-or-unique-suffix> --provider-ref <ref> --reason <text> --apply-plan <id> --yes
 ```
 
 Rules:
 
 - list/inspect never print message content by default;
 - inspect returns adapter, route suffixes, timestamps, attempt/error, message count, content hashes, and payload byte count;
-- `discard` is allowed only for `ambiguous` or `permanent_failed`, clears payload, records `resolved_discarded`, operator timestamp, and audit reason;
-- `acknowledge` requires an explicit provider reference and records `resolved_delivered`; it never fabricates automatic proof;
+- `discard` is allowed only for unresolved `ambiguous` or `permanent_failed`, clears payload, and records resolution `discarded`, operator timestamp/UID/host, and required audit reason;
+- `acknowledge` requires an explicit provider reference and required reason, records resolution `delivered`, and never fabricates automatic proof;
 - no automatic replay command is provided for non-replay-safe Capture;
 - every mutation uses an exact secret-independent Plan and fresh confirmation.
 
@@ -75,11 +77,11 @@ Checks remain read-only. There is no `doctor --fix` in P0.
 
 ## Persistence
 
-Journal migration v5 adds `resolved_state`, `resolved_reason`, `resolved_at`, and `provider_ref` columns to `journal_events`. Existing rows remain unchanged. Terminal resolved rows retain metadata but have `payload=NULL`.
+Journal migration v5 adds nullable `resolution`, `resolved_reason`, `resolved_at`, `resolved_by`, and `provider_ref` columns to `journal_events`. The original delivery `state` remains unchanged for audit. Queue/Doctor/blocker queries count only rows where `resolution IS NULL`. Terminal resolved rows retain hashes and delivery metadata but have `payload=NULL`.
 
 ## Security
 
-- Resolve event IDs by full ID or unique suffix; ambiguous suffixes fail closed.
+- Resolve event IDs by full ID or unique suffix of at least eight characters; missing or ambiguous suffixes fail closed.
 - Plan/render output contains hashes and suffixes only.
 - Credential rotation uses protected stdin/PTY writers and Orb atomic writes.
 - Never expose model credentials or modify model configuration.
@@ -93,4 +95,3 @@ Journal migration v5 adds `resolved_state`, `resolved_reason`, `resolved_at`, an
 - upgrade rollback restores byte-identical binary;
 - real current ambiguous event resolved only through the new command;
 - full test, shuffle, fixed Go toolchain, vet, and real Doctor acceptance.
-

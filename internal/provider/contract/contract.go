@@ -45,24 +45,8 @@ func Run(t *testing.T, factory Factory) {
 
 	t.Run("user A memory is hidden from user B", func(t *testing.T) {
 		provider := factory(t)
-		turn := model.Turn{
-			Identity: model.IdentityScope{
-				TenantID: "team-contract", UserID: "user-a", AgentID: "agent-contract",
-				SessionID: "session-a", TurnID: "turn-a",
-			},
-			Messages: []model.Message{{Role: "user", Content: "USER_A_CANARY"}},
-		}
-		if _, err := provider.CaptureTurn(context.Background(), turn); err != nil {
-			t.Fatalf("CaptureTurn() error = %v", err)
-		}
-		bundle, err := provider.Recall(context.Background(), recallRequest("user-b", "USER_A_CANARY"))
-		if err != nil {
-			t.Fatalf("Recall() error = %v", err)
-		}
-		for _, item := range bundle.Items {
-			if item.Scope == model.ScopeUser && item.Text == "USER_A_CANARY" {
-				t.Fatalf("user B received user A private item %#v", item)
-			}
+		if err := checkUserIsolation(provider); err != nil {
+			t.Fatal(err)
 		}
 	})
 
@@ -103,6 +87,29 @@ func Run(t *testing.T, factory Factory) {
 			t.Fatalf("Recall() error = %v, want context.Canceled", err)
 		}
 	})
+}
+
+func checkUserIsolation(provider Provider) error {
+	turn := model.Turn{
+		Identity: model.IdentityScope{
+			TenantID: "team-contract", UserID: "user-a", AgentID: "agent-contract",
+			SessionID: "session-a", TurnID: "turn-a",
+		},
+		Messages: []model.Message{{Role: "user", Content: "USER_A_CANARY"}},
+	}
+	if _, err := provider.CaptureTurn(context.Background(), turn); err != nil {
+		return err
+	}
+	bundle, err := provider.Recall(context.Background(), recallRequest("user-b", "USER_A_CANARY"))
+	if err != nil {
+		return err
+	}
+	for _, item := range bundle.Items {
+		if item.Scope == model.ScopeUser && item.Text == "USER_A_CANARY" {
+			return errors.New("user B received user A private item")
+		}
+	}
+	return nil
 }
 
 func recallRequest(userID, query string) model.RecallRequest {
