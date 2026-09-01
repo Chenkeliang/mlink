@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -133,6 +135,33 @@ func (service *Service) restoreResource(ctx context.Context, backup install.Back
 			SemanticDiff: []install.SemanticDiff{{Path: "memory", Before: "MLink managed values", After: "pre-install values; unrelated changes preserved"}},
 		}, true, nil
 	}
+	if isHermesGrantPath(backup.Target) {
+		if !currentExists || service.Secrets == nil {
+			return install.DesiredResource{}, false, fmt.Errorf("%w: %s", ErrOwnedResourceChanged, backup.Target)
+		}
+		var grant hermes.HTTPGrant
+		if err := json.Unmarshal(current, &grant); err != nil || grant.Token == "" {
+			return install.DesiredResource{}, false, fmt.Errorf("%w: %s", ErrOwnedResourceChanged, backup.Target)
+		}
+		keychainGrant, err := service.Secrets.Get(ctx, "adapter/hermes/token")
+		if err != nil {
+			return install.DesiredResource{}, false, err
+		}
+		defer wipe(keychainGrant)
+		if subtle.ConstantTimeCompare([]byte(grant.Token), keychainGrant) != 1 {
+			return install.DesiredResource{}, false, fmt.Errorf("%w: %s", ErrOwnedResourceChanged, backup.Target)
+		}
+		if backup.Existed {
+			return install.DesiredResource{
+				OwnerID: ownerID, Target: backup.Target, Content: append([]byte(nil), backup.Content...), Mode: backup.Mode,
+				SemanticDiff: []install.SemanticDiff{{Path: "adapter:hermes-broker-grant", Before: "current Keychain-matched grant", After: "pre-install backup"}},
+			}, true, nil
+		}
+		return install.DesiredResource{
+			OwnerID: ownerID, Target: backup.Target, Action: install.ActionRemoveOwned,
+			SemanticDiff: []install.SemanticDiff{{Path: "adapter:hermes-broker-grant", Before: "current Keychain-matched grant", After: "removed"}},
+		}, true, nil
+	}
 
 	if currentExists && contentHash(current) != backup.ProposedHash {
 		return install.DesiredResource{}, false, fmt.Errorf("%w: %s", ErrOwnedResourceChanged, backup.Target)
@@ -170,6 +199,10 @@ func isCodexHooksPath(path string) bool {
 
 func isHermesConfigPath(path string) bool {
 	return filepath.Base(path) == "config.yaml" && strings.Contains(filepath.Clean(path), string(filepath.Separator)+".hermes"+string(filepath.Separator))
+}
+
+func isHermesGrantPath(path string) bool {
+	return filepath.Base(path) == "mlink.json" && strings.Contains(filepath.Clean(path), string(filepath.Separator)+".hermes"+string(filepath.Separator))
 }
 
 func contentHash(content []byte) string {

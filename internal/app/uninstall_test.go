@@ -99,6 +99,46 @@ func TestFullUninstallAfterIncrementalCursorEnableRemovesOnlyOwnedCursorEntries(
 	}
 }
 
+func TestFullUninstallAcceptsMLinkRotatedHermesGrantOnlyWhenKeychainMatches(t *testing.T) {
+	service, target, secrets := newInstallFixture(t)
+	request := fixtureInstallRequest()
+	plan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	path := "/home/test/.hermes/mlink.json"
+	rotated := []byte("rotated-hermes-grant")
+	file := target.files[path]
+	file.content = bytes.Replace(file.content, []byte("hermes-grant-secret"), rotated, 1)
+	target.files[path] = file
+	secrets.values["adapter/hermes/token"] = append([]byte(nil), rotated...)
+	uninstallRequest := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes}}
+	uninstallPlan, err := service.PlanUninstall(context.Background(), uninstallRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), uninstallPlan.PlanID, uninstallRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := target.files[path]; exists {
+		t.Fatal("rotated Hermes grant file remains after uninstall")
+	}
+
+	service, target, _ = newInstallFixture(t)
+	request = fixtureInstallRequest()
+	plan, _ = service.PlanInstall(context.Background(), request)
+	_ = service.ApplyInstall(context.Background(), plan.PlanID, request)
+	file = target.files[path]
+	file.content = bytes.Replace(file.content, []byte("hermes-grant-secret"), []byte("external-change"), 1)
+	target.files[path] = file
+	if _, err := service.PlanUninstall(context.Background(), uninstallRequest); err == nil {
+		t.Fatal("external Hermes grant change was accepted")
+	}
+}
+
 func (store blockingEvents) ListStateDeletionBlockers(context.Context) ([]journal.Event, error) {
 	return append([]journal.Event(nil), store.events...), nil
 }
