@@ -1,12 +1,12 @@
-# MLink TencentDB Panel and Core-Generated Identity Design
+# MLink TencentDB Memory Hub and Core-Generated Identity Design
 
 Date: 2026-08-31
 
-Status: proposed for user review
+Status: approved; amended 2026-09-01 for official Memory Hub deployment
 
 ## 1. Purpose
 
-Replace MLink's client-generated TencentDB isolation identifiers with identifiers created by TencentDB MemoryCore's official v3 metadata APIs, then install the official MemoryPanel as a loopback-only management UI.
+Replace MLink's client-generated TencentDB isolation identifiers with identifiers created by TencentDB MemoryCore's official v3 metadata APIs, then install the official prebuilt Memory Hub as a loopback-only management UI and optional Knowledge Service.
 
 The change must preserve the previously approved runtime behavior:
 
@@ -23,22 +23,23 @@ Existing memory under the current `personal / keliang-personal / usr_owner_kelia
 
 - Do not deploy or configure TencentDB MemoryProxy on port 8096.
 - Do not change Codex, Pi, or Hermes model providers, model URLs, subscriptions, or authentication.
-- Do not deploy Knowledge Service, Wiki, or Code Graph in this phase.
+- Do not automatically ingest local documents, local Git repositories, Wiki, or CodeGraph assets in this phase. Knowledge Service runs because it is part of the official Hub image, but no Knowledge asset is bound to an Agent without a separate explicit action.
 - Do not migrate, delete, rewrite, or merge the existing MLink MemoryCore data.
 - Do not import HyMemory records.
-- Do not make MemoryPanel reachable outside `127.0.0.1`.
+- Do not make MemoryPanel or Knowledge Service reachable outside `127.0.0.1`.
 - Do not customize TencentDB MemoryPanel to aggregate arbitrary legacy scopes.
 - Do not promise physical absence of L2/L3 for non-Owner Agents; the official Core does not support disabling those layers per Agent.
 
 ## 3. Official Components and Versions
 
-The implementation uses the official TencentCloud repository checkout at pinned commit `a5dcbe6`:
+The implementation uses official TencentDB artifacts:
 
 - MemoryCore v3 metadata APIs on the existing Gateway at `http://127.0.0.1:8420`.
-- MemoryPanel single-service Docker build from `MemoryPanel/docker/local/Dockerfile.local`.
-- Panel container port `8123`, published as `127.0.0.1:8125` on the host.
+- official multi-architecture image `agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104` for this arm64 host;
+- MemoryPanel on container port `8125`, published as `127.0.0.1:8125`;
+- MemoryKnowledge on container port `8424`, published as `127.0.0.1:8424`.
 
-The image must be built from the pinned source commit rather than an unpinned `latest` tag. The public UI dependencies in the pinned checkout must build successfully before any metadata mutation.
+MLink pulls the digest-pinned official image and never builds or patches `MemoryPanel/docker/local/Dockerfile.local`. Before metadata mutation it verifies the pulled image digest and the absence of conflicting containers or listeners.
 
 ## 4. Control-Plane Identity Model
 
@@ -199,7 +200,7 @@ Preview shows intent, endpoints, resource types, compensation rules, and protect
 - initializes or reuses metadata administration;
 - creates or reuses the normal Owner User;
 - creates or reuses the Owner Team and Owner Agent;
-- builds and starts the Panel-only container;
+- pulls and starts the digest-pinned official Memory Hub container;
 - records every returned ID and owned resource.
 
 Stage A does not alter active MLink routing. If the user stops here, current memory behavior is unchanged.
@@ -229,14 +230,16 @@ mlink panel doctor
 
 `panel open` opens `http://127.0.0.1:8125`. The normal Owner `user_key` is never printed. An explicit TUI action may copy it from Keychain to the clipboard; the UI must warn that clipboard managers can retain secrets.
 
-## 8. Panel Deployment
+## 8. Memory Hub Deployment
 
 Container identity:
 
 ```text
-name:  mlink-memory-panel
-image: mlink-memory-panel:a5dcbe6
-bind:  127.0.0.1:8125 -> 8123/tcp
+name:  tdai-memory-hub
+image: agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104
+bind:  127.0.0.1:8125 -> 8125/tcp
+       127.0.0.1:8424 -> 8424/tcp
+volume: tdai-panel-data -> /data/knowledge
 ```
 
 The Panel instance registry is rendered to:
@@ -253,17 +256,20 @@ with mode `0600` and mounted read-only. It contains:
 
 This file duplicates the Gateway Bearer outside Keychain because the official Panel requires a server-side JSON instance registry. It must never enter Git, logs, image layers, preview output, or backups without encryption.
 
-Panel environment:
+The registry is mounted read-only at `/app/panel/config/metadata-instances.json`. Hub environment:
 
 ```text
-UI_DIST_DIR=./web/dist
-METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json
-KNOWLEDGE_LLM_BINDING_SYNC=false
+KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:8424/v3
+KNOWLEDGE_LLM_PROXY_BASE_URL=http://host.docker.internal:8420
+LLM_MODE=proxy
+KNOWLEDGE_LLM_BINDING_SYNC=true
 LOG_LEVEL=info
 LOG_FORMAT=json
 ```
 
-No 8096 Proxy address or model credential is configured. Knowledge tabs are outside this phase and may show unavailable state; Chat Memory and metadata management must remain functional.
+`LLM_MODE=proxy` is internal to Knowledge Service: it asks the existing MemoryCore Gateway to perform Wiki/CodeGraph model work. It is not MemoryProxy, does not add port 8096, and does not alter any Agent model endpoint. `REMOTE_INSTANCE_PROXY_URL` and `proxy_endpoint` remain unset. Knowledge assets are opt-in and do not participate in MLink recall until separately bound.
+
+The first release does not solve private company GitLab ingestion. Official CodeGraph supports public HTTPS repositories; local paths, SSH, and private-repository credentials remain outside this phase.
 
 ## 9. Configuration Model
 
@@ -312,7 +318,7 @@ Stage A records which metadata entities and container resources it created. Befo
 
 After Stage B or after any memory has been written:
 
-- uninstall stops and removes the Panel container and local registry;
+- uninstall stops and removes the Hub container and local registry; the Knowledge volume is retained by default and requires a separate destructive purge plan;
 - local routing may be restored from its exact backup;
 - generated Core User/Team/Agent/Asset metadata is retained by default;
 - deleting backend metadata requires a separate destructive plan showing affected memory counts;
@@ -338,7 +344,8 @@ Concurrent first messages for the same principal must result in one active mappi
 ### Installation
 
 - Panel UI and `/health` reachable only through `127.0.0.1:8125`.
-- Panel container reaches `host.docker.internal:8420`.
+- Knowledge `/health` reachable only through `127.0.0.1:8424`.
+- Hub reaches `host.docker.internal:8420` and exposes no Agent-facing LLM proxy.
 - No listener on host port 8096 is added.
 - Codex, Pi, and Hermes model/auth hashes remain unchanged.
 - Admin and normal Owner credentials are distinct and stored correctly.
@@ -369,7 +376,7 @@ Concurrent first messages for the same principal must result in one active mappi
 - Stage A cancellation leaves current routing unchanged.
 - Stage B failure restores exact local hashes.
 - orphan remote Agent reconciliation is idempotent.
-- Panel restart preserves metadata visibility.
+- Hub restart preserves metadata visibility and the `tdai-panel-data` Knowledge volume.
 - Broker and Hermes restart preserve dynamic mappings.
 - legacy `personal / keliang-personal` memory is not recalled after cutover.
 
@@ -378,20 +385,21 @@ Concurrent first messages for the same principal must result in one active mappi
 The change is accepted only when:
 
 1. all active User, Team, Agent, and Asset routing IDs originate from Core metadata responses;
-2. the official Panel displays Owner, private-principal, and group Agents as separate assets;
+2. the official Memory Hub Panel displays Owner, private-principal, and group Agents as separate assets;
 3. Owner runtime recall includes L1/L2/L3;
 4. private and group runtime recall includes L1 only;
 5. group topics share Agent memory but not Session context;
 6. no raw Feishu identifier reaches TencentDB metadata;
-7. no LLM Proxy or model configuration change occurs;
+7. no MemoryProxy or Agent model configuration change occurs; Knowledge's internal Gateway LLM binding remains isolated from Agent inference;
 8. no existing memory is migrated or deleted;
 9. provisioning, cutover, rollback, and restore are independently reviewable;
 10. all offline, adversarial, real Keychain, live MemoryCore, Panel, and restart tests pass.
 
 ## 15. Official References
 
-- `MemoryPanel/README.md` at pinned official commit `a5dcbe6`.
-- `MemoryPanel/docker/README.md` at pinned official commit `a5dcbe6`.
+- `INSTALL_CN.md` at official remote HEAD `3efcd31` for standalone Memory Hub deployment.
+- `deploy/panel-knowledge-combined/README.md` for the official combined image.
+- Docker Hub `agentmemory/memory-hub` arm64 manifest digest pinned above.
 - `MemoryPanel/panel-api-doc.md` for Chat Memory L0-L3 management.
 - `MemoryCore/src/metadata/router/v3-meta-schemas.ts` for official metadata creation contracts.
 - `MemoryCore/src/metadata/service/metadata-service.ts` for admin bootstrap and automatic Chat Memory asset registration.
