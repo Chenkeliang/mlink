@@ -26,8 +26,10 @@ func TestRenderRegistryUsesContainerReachableGatewayWithoutLeakingElsewhere(t *t
 	if len(decoded.Instances) != 1 || decoded.Instances[0].GatewayEndpoint != "http://host.docker.internal:8420" || decoded.Instances[0].APIKey != string(token) {
 		t.Fatalf("registry = %#v", decoded)
 	}
-	if bytes.Contains(data, []byte("8096")) {
-		t.Fatal("registry contains MemoryProxy port")
+	for _, forbidden := range [][]byte{[]byte("8096"), []byte("proxy_endpoint")} {
+		if bytes.Contains(data, forbidden) {
+			t.Fatalf("registry contains forbidden value %q", forbidden)
+		}
 	}
 }
 

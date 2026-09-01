@@ -19,7 +19,8 @@ type runnerCall struct {
 }
 
 type fakeRunner struct {
-	calls []runnerCall
+	calls         []runnerCall
+	inspectOutput []byte
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -34,6 +35,9 @@ func (runner *fakeRunner) Run(_ context.Context, args []string, input io.Reader)
 		data, _ = io.ReadAll(input)
 	}
 	runner.calls = append(runner.calls, runnerCall{args: append([]string(nil), args...), input: data})
+	if strings.Join(args, " ") == "docker image inspect --format {{json .RepoDigests}} "+ImageReference {
+		return append([]byte(nil), runner.inspectOutput...), nil
+	}
 	return nil, nil
 }
 
@@ -68,35 +72,36 @@ func (*memoryTarget) Run(context.Context, []string, io.Reader) ([]byte, error) {
 	return nil, errors.New("unused")
 }
 
-func TestPlanUsesPinnedOfficialPanelAndContainsNoSecrets(t *testing.T) {
+func TestPlanUsesDigestPinnedOfficialHubAndContainsNoSecrets(t *testing.T) {
 	desired := fixtureDesired()
 	runtime := Runtime{Runner: &fakeRunner{}, Target: &memoryTarget{files: map[string][]byte{}, modes: map[string]fs.FileMode{}}}
 	plan, err := runtime.Plan(context.Background(), desired)
-	if err != nil || len(plan.Operations) != 3 {
+	if err != nil || len(plan.Operations) != 4 {
 		t.Fatalf("plan = %#v, %v", plan, err)
 	}
 	rendered, _ := install.RenderJSON(plan)
-	for _, forbidden := range []string{"gateway-secret", "8096", "LLM_API_KEY", "LLM_BASE_URL", "KNOWLEDGE_SERVICE_URL"} {
+	for _, forbidden := range []string{"gateway-secret", "8096", "LLM_API_KEY", "LLM_BASE_URL", "REMOTE_INSTANCE_PROXY_URL", "proxy_endpoint", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"} {
 		if bytes.Contains(rendered, []byte(forbidden)) {
 			t.Fatalf("plan contains %q: %s", forbidden, rendered)
 		}
 	}
-	commands := make([]string, 0, 2)
+	commands := make([]string, 0, 3)
 	for _, operation := range plan.Operations {
 		if len(operation.Command) != 0 {
 			commands = append(commands, strings.Join(operation.Command, " "))
 		}
 	}
-	wantBuild := "docker build --build-arg PANEL_UI=web -t mlink-memory-panel:a5dcbe6 -f /src/MemoryPanel/docker/local/Dockerfile.local /src/MemoryPanel"
-	wantRun := "docker run -d --name mlink-memory-panel --restart unless-stopped --label dev.mlink.component=memory-panel --add-host host.docker.internal:host-gateway -p 127.0.0.1:8125:8123 -e UI_DIST_DIR=./web/dist -e METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json -e KNOWLEDGE_LLM_BINDING_SYNC=false -e LOG_LEVEL=info -e LOG_FORMAT=json -v /Users/test/.mlink/panel/metadata-instances.json:/app/config/metadata-instances.json:ro mlink-memory-panel:a5dcbe6"
-	if len(commands) != 2 || commands[0] != wantBuild || commands[1] != wantRun {
+	wantPull := "docker pull " + ImageReference
+	wantVolume := "docker volume create --label dev.mlink.component=memory-hub " + VolumeName
+	wantRun := "docker run -d --name tdai-memory-hub --restart unless-stopped --label dev.mlink.component=memory-hub --add-host host.docker.internal:host-gateway -p 127.0.0.1:8125:8125 -p 127.0.0.1:8424:8424 -e KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:8424/v3 -e KNOWLEDGE_LLM_PROXY_BASE_URL=http://host.docker.internal:8420 -e LLM_MODE=proxy -e KNOWLEDGE_LLM_BINDING_SYNC=true -e LOG_LEVEL=info -e LOG_FORMAT=json -v tdai-panel-data:/data/knowledge -v /Users/test/.mlink/panel/metadata-instances.json:/app/panel/config/metadata-instances.json:ro " + ImageReference
+	if len(commands) != 3 || commands[0] != wantPull || commands[1] != wantVolume || commands[2] != wantRun {
 		t.Fatalf("commands = %#v", commands)
 	}
 }
 
 func TestApplyWritesPrivateRegistryAndRunsExactPlan(t *testing.T) {
 	desired := fixtureDesired()
-	runner := &fakeRunner{}
+	runner := &fakeRunner{inspectOutput: []byte(`["agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104"]`)}
 	target := &memoryTarget{files: map[string][]byte{}, modes: map[string]fs.FileMode{}}
 	runtime := Runtime{Runner: runner, Target: target}
 	plan, err := runtime.Plan(context.Background(), desired)
@@ -110,17 +115,34 @@ func TestApplyWritesPrivateRegistryAndRunsExactPlan(t *testing.T) {
 	if !bytes.Contains(data, []byte("gateway-secret")) || target.modes[desired.RegistryPath].Perm() != 0o600 {
 		t.Fatalf("registry mode/content = %o/%q", target.modes[desired.RegistryPath], data)
 	}
-	if len(runner.calls) != 2 {
+	if len(runner.calls) != 4 {
 		t.Fatalf("runner calls = %#v", runner.calls)
 	}
 }
 
-func TestStatusRequiresHealthAndPublicInstanceListing(t *testing.T) {
+func TestApplyRejectsUnexpectedOfficialImageDigestBeforeVolumeOrContainer(t *testing.T) {
+	desired := fixtureDesired()
+	runner := &fakeRunner{inspectOutput: []byte(`["agentmemory/memory-hub@sha256:unexpected"]`)}
+	target := &memoryTarget{files: map[string][]byte{}, modes: map[string]fs.FileMode{}}
+	runtime := Runtime{Runner: runner, Target: target}
+	plan, err := runtime.Plan(context.Background(), desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Apply(context.Background(), plan.PlanID, desired, []byte("gateway-secret")); err == nil {
+		t.Fatal("Apply() digest error = nil")
+	}
+	if _, exists := target.files[desired.RegistryPath]; exists || len(runner.calls) != 2 {
+		t.Fatalf("registry/calls = %t/%#v", exists, runner.calls)
+	}
+}
+
+func TestStatusRequiresPanelKnowledgeAndPublicInstanceListing(t *testing.T) {
 	desired := fixtureDesired()
 	runner := &fakeRunner{}
 	paths := []string{}
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		paths = append(paths, request.URL.Path)
+		paths = append(paths, request.URL.Port()+request.URL.Path)
 		body := `{"status":"ok"}`
 		if request.URL.Path == "/api/v1/meta/instances" {
 			body = `{"instances":[{"instance_id":"default","name":"MLink Local","gateway_endpoint":"http://host.docker.internal:8420"}]}`
@@ -133,10 +155,10 @@ func TestStatusRequiresHealthAndPublicInstanceListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.ContainerPresent || !status.Healthy {
+	if !status.ContainerPresent || !status.PanelHealthy || !status.KnowledgeHealthy || !status.InstanceVisible {
 		t.Fatalf("status = %#v", status)
 	}
-	if strings.Join(paths, ",") != "/health,/api/v1/meta/instances" {
+	if strings.Join(paths, ",") != "8125/health,8125/api/v1/meta/instances,8424/health" {
 		t.Fatalf("paths = %#v", paths)
 	}
 }
@@ -156,15 +178,16 @@ func TestStatusRejectsListingWithoutDesiredInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Healthy {
+	if status.InstanceVisible {
 		t.Fatalf("status = %#v", status)
 	}
 }
 
 func fixtureDesired() Desired {
 	return Desired{
-		SourceRoot: "/src/MemoryPanel", RegistryPath: "/Users/test/.mlink/panel/metadata-instances.json",
-		HostAddress: "127.0.0.1", HostPort: 8125, ContainerPort: 8123,
+		RegistryPath: "/Users/test/.mlink/panel/metadata-instances.json",
+		HostAddress:  "127.0.0.1", PanelHostPort: 8125, KnowledgeHostPort: 8424,
 		InstanceID: "default", InstanceName: "MLink Local", GatewayEndpoint: "http://host.docker.internal:8420",
+		KnowledgePublicBaseURL: "http://host.docker.internal:8424/v3", KnowledgeLLMProxyBaseURL: "http://host.docker.internal:8420",
 	}
 }

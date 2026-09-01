@@ -15,19 +15,21 @@ import (
 )
 
 const (
-	ContainerName = "mlink-memory-panel"
-	ImageName     = "mlink-memory-panel:a5dcbe6"
+	ContainerName  = "tdai-memory-hub"
+	ImageReference = "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104"
+	VolumeName     = "tdai-panel-data"
 )
 
 type Desired struct {
-	SourceRoot      string
-	RegistryPath    string
-	HostAddress     string
-	HostPort        int
-	ContainerPort   int
-	InstanceID      string
-	InstanceName    string
-	GatewayEndpoint string
+	RegistryPath             string
+	HostAddress              string
+	PanelHostPort            int
+	KnowledgeHostPort        int
+	InstanceID               string
+	InstanceName             string
+	GatewayEndpoint          string
+	KnowledgePublicBaseURL   string
+	KnowledgeLLMProxyBaseURL string
 }
 
 type Runtime struct {
@@ -37,8 +39,10 @@ type Runtime struct {
 }
 
 type Status struct {
-	ContainerPresent bool
-	Healthy          bool
+	ContainerPresent bool `json:"container_present"`
+	PanelHealthy     bool `json:"panel_healthy"`
+	KnowledgeHealthy bool `json:"knowledge_healthy"`
+	InstanceVisible  bool `json:"instance_visible"`
 }
 
 func (runtime Runtime) Plan(ctx context.Context, desired Desired) (install.ChangeSet, error) {
@@ -46,21 +50,21 @@ func (runtime Runtime) Plan(ctx context.Context, desired Desired) (install.Chang
 		return install.ChangeSet{}, err
 	}
 	if runtime.Target == nil || runtime.Runner == nil {
-		return install.ChangeSet{}, errors.New("Panel target and command runner are required")
+		return install.ChangeSet{}, errors.New("Memory Hub target and command runner are required")
 	}
-	build := []string{
-		"docker", "build", "--build-arg", "PANEL_UI=web", "-t", ImageName,
-		"-f", filepath.Join(desired.SourceRoot, "docker", "local", "Dockerfile.local"), desired.SourceRoot,
-	}
+	pull := []string{"docker", "pull", ImageReference}
+	volume := []string{"docker", "volume", "create", "--label", "dev.mlink.component=memory-hub", VolumeName}
 	run := []string{
 		"docker", "run", "-d", "--name", ContainerName, "--restart", "unless-stopped",
-		"--label", "dev.mlink.component=memory-panel", "--add-host", "host.docker.internal:host-gateway",
-		"-p", desired.HostAddress + ":" + strconv.Itoa(desired.HostPort) + ":" + strconv.Itoa(desired.ContainerPort),
-		"-e", "UI_DIST_DIR=./web/dist",
-		"-e", "METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json",
-		"-e", "KNOWLEDGE_LLM_BINDING_SYNC=false",
+		"--label", "dev.mlink.component=memory-hub", "--add-host", "host.docker.internal:host-gateway",
+		"-p", desired.HostAddress + ":" + strconv.Itoa(desired.PanelHostPort) + ":8125",
+		"-p", desired.HostAddress + ":" + strconv.Itoa(desired.KnowledgeHostPort) + ":8424",
+		"-e", "KNOWLEDGE_PUBLIC_BASE_URL=" + desired.KnowledgePublicBaseURL,
+		"-e", "KNOWLEDGE_LLM_PROXY_BASE_URL=" + desired.KnowledgeLLMProxyBaseURL,
+		"-e", "LLM_MODE=proxy", "-e", "KNOWLEDGE_LLM_BINDING_SYNC=true",
 		"-e", "LOG_LEVEL=info", "-e", "LOG_FORMAT=json",
-		"-v", desired.RegistryPath + ":/app/config/metadata-instances.json:ro", ImageName,
+		"-v", VolumeName + ":/data/knowledge",
+		"-v", desired.RegistryPath + ":/app/panel/config/metadata-instances.json:ro", ImageReference,
 	}
 	return install.BuildChangeSet(runtime.Target, []install.DesiredResource{
 		{
@@ -69,14 +73,22 @@ func (runtime Runtime) Plan(ctx context.Context, desired Desired) (install.Chang
 			SemanticDiff: []install.SemanticDiff{{Path: "panel:instance-registry", Before: "absent or owned", After: "0600 read-only mount; Gateway Bearer redacted"}},
 		},
 		{
-			OwnerID: "dev.mlink.panel.image", Target: "service:docker-build:" + ImageName,
-			Action: install.ActionService, Command: build,
-			SemanticDiff: []install.SemanticDiff{{Path: "panel:image", Before: "absent or pinned", After: ImageName}},
+			OwnerID: "dev.mlink.hub.image", Target: "service:docker-pull:" + ImageReference,
+			Action: install.ActionService, Command: pull,
+			SemanticDiff: []install.SemanticDiff{{Path: "hub:image", Before: "absent or pinned", After: ImageReference}},
 		},
 		{
-			OwnerID: "dev.mlink.panel.container", Target: "service:docker-run:" + ContainerName,
+			OwnerID: "dev.mlink.hub.volume", Target: "service:docker-volume:" + VolumeName,
+			Action: install.ActionService, Command: volume,
+			SemanticDiff: []install.SemanticDiff{{Path: "hub:knowledge-volume", Before: "absent or owned", After: "persistent; retained on ordinary uninstall"}},
+		},
+		{
+			OwnerID: "dev.mlink.hub.container", Target: "service:docker-run:" + ContainerName,
 			Action: install.ActionService, Command: run,
-			SemanticDiff: []install.SemanticDiff{{Path: "panel:listen", Before: "absent or owned", After: "http://127.0.0.1:8125"}},
+			SemanticDiff: []install.SemanticDiff{
+				{Path: "hub:panel", Before: "absent or owned", After: "http://127.0.0.1:8125"},
+				{Path: "hub:knowledge", Before: "absent or owned", After: "http://127.0.0.1:8424; no assets bound"},
+			},
 		},
 	})
 }
@@ -87,7 +99,7 @@ func (runtime Runtime) Apply(ctx context.Context, planID string, desired Desired
 		return err
 	}
 	if plan.PlanID != planID {
-		return fmt.Errorf("%w: Panel plan changed", install.ErrPlanStale)
+		return fmt.Errorf("%w: Memory Hub plan changed", install.ErrPlanStale)
 	}
 	registry, err := RenderRegistry(RegistryInput{
 		InstanceID: desired.InstanceID, InstanceName: desired.InstanceName,
@@ -104,7 +116,7 @@ func (runtime Runtime) Apply(ctx context.Context, planID string, desired Desired
 	}
 	defer wipe(before)
 	if err := runtime.Target.WriteAtomic(ctx, desired.RegistryPath, registry, 0o600); err != nil {
-		return fmt.Errorf("write protected Panel registry: %w", err)
+		return fmt.Errorf("write protected Hub registry: %w", err)
 	}
 	restore := func() {
 		if existed {
@@ -119,7 +131,14 @@ func (runtime Runtime) Apply(ctx context.Context, planID string, desired Desired
 		}
 		if _, err := runtime.Runner.Run(ctx, operation.Command, nil); err != nil {
 			restore()
-			return fmt.Errorf("apply Panel operation %q: %w", operation.Target, err)
+			return fmt.Errorf("apply Memory Hub operation %q: %w", operation.Target, err)
+		}
+		if operation.Target == "service:docker-pull:"+ImageReference {
+			output, inspectErr := runtime.Runner.Run(ctx, []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ImageReference}, nil)
+			if inspectErr != nil || !containsExactRepoDigest(output) {
+				restore()
+				return errors.New("pulled Memory Hub image digest does not match the approved official digest")
+			}
 		}
 	}
 	return nil
@@ -130,7 +149,7 @@ func (runtime Runtime) Status(ctx context.Context, desired Desired) (Status, err
 		return Status{}, err
 	}
 	if runtime.Runner == nil {
-		return Status{}, errors.New("Panel command runner is required")
+		return Status{}, errors.New("Memory Hub command runner is required")
 	}
 	if _, err := runtime.Runner.Run(ctx, []string{"docker", "inspect", ContainerName}, nil); err != nil {
 		return Status{}, nil
@@ -139,23 +158,20 @@ func (runtime Runtime) Status(ctx context.Context, desired Desired) (Status, err
 	if client == nil {
 		client = &http.Client{}
 	}
-	if !getOK(ctx, client, runtime.OpenURL(desired)+"/health", nil) {
-		return Status{ContainerPresent: true}, nil
-	}
+	status := Status{ContainerPresent: true}
+	status.PanelHealthy = getOK(ctx, client, runtime.OpenURL(desired)+"/health", nil)
 	instances := struct {
 		Instances []struct {
 			InstanceID string `json:"instance_id"`
 		} `json:"instances"`
 	}{}
-	if !getOK(ctx, client, runtime.OpenURL(desired)+"/api/v1/meta/instances", &instances) {
-		return Status{ContainerPresent: true}, nil
-	}
-	for _, instance := range instances.Instances {
-		if instance.InstanceID == desired.InstanceID {
-			return Status{ContainerPresent: true, Healthy: true}, nil
+	if status.PanelHealthy && getOK(ctx, client, runtime.OpenURL(desired)+"/api/v1/meta/instances", &instances) {
+		for _, instance := range instances.Instances {
+			status.InstanceVisible = status.InstanceVisible || instance.InstanceID == desired.InstanceID
 		}
 	}
-	return Status{ContainerPresent: true}, nil
+	status.KnowledgeHealthy = getOK(ctx, client, "http://"+desired.HostAddress+":"+strconv.Itoa(desired.KnowledgeHostPort)+"/health", nil)
+	return status, nil
 }
 
 func getOK(ctx context.Context, client *http.Client, endpoint string, destination any) bool {
@@ -178,19 +194,33 @@ func getOK(ctx context.Context, client *http.Client, endpoint string, destinatio
 }
 
 func (Runtime) OpenURL(desired Desired) string {
-	return "http://" + desired.HostAddress + ":" + strconv.Itoa(desired.HostPort)
+	return "http://" + desired.HostAddress + ":" + strconv.Itoa(desired.PanelHostPort)
 }
 
 func validateDesired(desired Desired) error {
-	root := filepath.Clean(desired.SourceRoot)
 	registry := filepath.Clean(desired.RegistryPath)
-	if !filepath.IsAbs(root) || filepath.Base(root) != "MemoryPanel" || !filepath.IsAbs(registry) || filepath.Base(registry) != "metadata-instances.json" ||
-		desired.HostAddress != "127.0.0.1" || desired.HostPort != 8125 || desired.ContainerPort != 8123 ||
+	if !filepath.IsAbs(registry) || filepath.Base(registry) != "metadata-instances.json" ||
+		desired.HostAddress != "127.0.0.1" || desired.PanelHostPort != 8125 || desired.KnowledgeHostPort != 8424 ||
 		!registryIDPattern.MatchString(desired.InstanceID) || strings.TrimSpace(desired.InstanceName) == "" ||
-		desired.GatewayEndpoint != "http://host.docker.internal:8420" {
-		return errors.New("safe pinned Panel configuration is required")
+		desired.GatewayEndpoint != "http://host.docker.internal:8420" ||
+		desired.KnowledgePublicBaseURL != "http://host.docker.internal:8424/v3" ||
+		desired.KnowledgeLLMProxyBaseURL != "http://host.docker.internal:8420" {
+		return errors.New("safe pinned Memory Hub configuration is required")
 	}
 	return nil
+}
+
+func containsExactRepoDigest(output []byte) bool {
+	var values []string
+	if json.Unmarshal(output, &values) != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == ImageReference {
+			return true
+		}
+	}
+	return false
 }
 
 func wipe(value []byte) {
