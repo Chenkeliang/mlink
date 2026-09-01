@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"mlink/internal/app"
+	"mlink/internal/broker"
 	"mlink/internal/cli"
 	"mlink/internal/config"
 	"mlink/internal/connection"
@@ -273,6 +274,26 @@ func TestRuntimeAuthorizerV3UsesGeneratedOwnerControlPlane(t *testing.T) {
 	}, "", "")
 	if err != nil || owner.Identity.UserID != fixed.Identity.UserID || owner.Identity.AgentID != fixed.Identity.AgentID || !owner.IncludeAgentShared {
 		t.Fatalf("Owner Hermes authorization = %#v, %v", owner, err)
+	}
+}
+
+func TestRuntimeRouterGrantsCursorFixedOwnerIdentity(t *testing.T) {
+	configuration := fixtureRuntimeConfigV3()
+	configuration.Adapters["cursor"] = config.Adapter{ID: "cursor", Enabled: true, SpaceID: "owner"}
+	_, grants, _, err := runtimeRouter(context.Background(), configuration, runtimeSecretStore{
+		"identity/hmac-key":                     bytes.Repeat([]byte{0x2a}, 32),
+		"identity/binding/owner-feishu-union-1": []byte("on_owner"),
+		"adapter/hermes/token":                  []byte("hermes-token"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, grant := range grants {
+		found = found || grant.AdapterID == "cursor" && grant.Mode == broker.IdentityFixed && grant.FixedSpaceID == "owner"
+	}
+	if !found {
+		t.Fatalf("Cursor grant missing: %#v", grants)
 	}
 }
 

@@ -343,7 +343,7 @@ func runtimeRouter(ctx context.Context, configuration config.Config, secrets sec
 		Bindings: bindings, Hermes: hermesRouting,
 	}
 	var grants []broker.Grant
-	for _, adapterID := range []string{"codex", "pi"} {
+	for _, adapterID := range []string{"codex", "pi", "cursor"} {
 		adapter, enabled := configuration.Adapters[adapterID]
 		if !enabled || !adapter.Enabled {
 			continue
