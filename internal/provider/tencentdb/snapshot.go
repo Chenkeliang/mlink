@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"mlink/internal/install"
 	"mlink/internal/panel"
@@ -29,6 +31,7 @@ type SnapshotDriver struct {
 	Target          install.Target
 	Environment     install.EnvironmentRunner
 	WaitHealthy     func(context.Context, string) error
+	Capacity        func(string) (int64, error)
 	Metadata        MetadataClient
 	InstanceID      string
 	CoreContainer   string
@@ -175,7 +178,7 @@ func (driver SnapshotDriver) PlanRestore(ctx context.Context, request lifecycle.
 	if _, err := ValidateDeploymentEndpoint(request.Endpoint); err != nil {
 		return install.ChangeSet{}, err
 	}
-	if err := driver.verifyRestoreCapacity(ctx, provider.Volumes); err != nil {
+	if err := driver.verifyRestoreCapacity(request.CoreConfigPath, provider.Volumes); err != nil {
 		return install.ChangeSet{}, err
 	}
 	for _, object := range []struct{ kind, name string }{{"volume", request.CoreVolume}, {"volume", request.KnowledgeVolume}, {"network", request.CoreNetwork}} {
@@ -386,7 +389,7 @@ func (driver SnapshotDriver) volumeContentDigest(ctx context.Context, volume str
 	return value, nil
 }
 
-func (driver SnapshotDriver) verifyRestoreCapacity(ctx context.Context, volumes []workspacebackup.VolumeManifest) error {
+func (driver SnapshotDriver) verifyRestoreCapacity(path string, volumes []workspacebackup.VolumeManifest) error {
 	var logicalBytes int64
 	for _, volume := range volumes {
 		if volume.LogicalBytes < 0 || logicalBytes > (1<<62)-volume.LogicalBytes {
@@ -400,15 +403,42 @@ func (driver SnapshotDriver) verifyRestoreCapacity(ctx context.Context, volumes 
 	if logicalBytes > (1<<62)-1 {
 		return errors.New("restore volume size exceeds safe headroom calculation")
 	}
-	output, err := driver.Runner.Run(ctx, []string{
-		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		SnapshotHelperImage, "sh", "-c", `df -Pk / | awk 'NR==2 {printf "%.0f", $4*1024}'`,
-	}, nil)
-	available, parseErr := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
-	if err != nil || parseErr != nil || available < logicalBytes*2 {
+	capacity := driver.Capacity
+	if capacity == nil {
+		capacity = availableFilesystemBytes
+	}
+	available, err := capacity(path)
+	if err != nil || available < logicalBytes*2 {
 		return errors.New("restore target lacks required capacity and rollback headroom")
 	}
 	return nil
+}
+
+func availableFilesystemBytes(path string) (int64, error) {
+	if !filepath.IsAbs(path) {
+		return 0, errors.New("absolute restore capacity path is required")
+	}
+	current := filepath.Clean(path)
+	for {
+		if _, err := os.Stat(current); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return 0, errors.New("restore capacity filesystem is unavailable")
+		}
+		current = parent
+	}
+	var stats syscall.Statfs_t
+	if err := syscall.Statfs(current, &stats); err != nil {
+		return 0, err
+	}
+	if stats.Bavail > uint64((1<<63)-1)/uint64(stats.Bsize) {
+		return 0, errors.New("restore capacity exceeds safe integer range")
+	}
+	return int64(stats.Bavail) * int64(stats.Bsize), nil
 }
 
 func (driver SnapshotDriver) startRestoredCore(ctx context.Context, request lifecycle.RestoreRequest) error {
