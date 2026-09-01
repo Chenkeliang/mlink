@@ -1,13 +1,8 @@
 <div align="center">
 
-```text
-█▀▄▀█  █      █  █▄ █  █▄▀
-█ ▀ █  █▄▄█  █  █ ▀█  █ █
-```
+<img src="assets/mlink-logo.svg" alt="MLink — One memory plane. Your models stay yours." width="900">
 
-# MLink
-
-### One memory plane. Your models stay yours.
+[English](README.md) · [简体中文 Wiki](https://github.com/Chenkeliang/mlink/wiki)
 
 Connect Codex, Cursor, Pi, and Hermes Agent to one local memory service—without replacing their model provider, subscription, API key, or authentication flow.
 

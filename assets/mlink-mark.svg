@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="136" height="136" viewBox="0 0 136 136" shape-rendering="crispEdges" role="img" aria-label="MLink pixel chain mark">
+  <path fill="#0A1119" d="M8 0h120v8h8v120h-8v8H8v-8H0V8h8z"/>
+  <path fill="#2A3B4D" d="M8 0h120v4H8zM0 8h4v120H0zM132 8h4v120h-4zM8 132h120v4H8z"/>
+  <g fill="#FFD60A">
+    <rect x="24" y="28" width="48" height="12"/><rect x="16" y="36" width="12" height="40"/>
+    <rect x="24" y="72" width="40" height="12"/><rect x="60" y="60" width="12" height="24"/>
+    <rect x="16" y="16" width="8" height="8"/><rect x="28" y="16" width="8" height="8"/>
+  </g>
+  <g fill="#58D7FF">
+    <rect x="72" y="52" width="40" height="12"/><rect x="108" y="56" width="12" height="44"/>
+    <rect x="64" y="96" width="48" height="12"/><rect x="64" y="76" width="12" height="32"/>
+    <rect x="100" y="112" width="8" height="8"/><rect x="112" y="112" width="8" height="8"/>
+  </g>
+  <g fill="#EDF4FF"><rect x="52" y="52" width="12" height="12"/><rect x="64" y="64" width="12" height="12"/><rect x="76" y="76" width="12" height="12"/></g>
+</svg>
