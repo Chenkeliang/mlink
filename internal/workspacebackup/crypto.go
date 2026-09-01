@@ -58,21 +58,35 @@ func Decrypt(destination io.Writer, passphrase []byte, source io.Reader) error {
 	if err := validatePassphrase(passphrase); err != nil {
 		return err
 	}
-	if _, err := consumeHeader(source); err != nil {
+	clear, err := decryptReader(passphrase, source)
+	if err != nil {
 		return err
-	}
-	identity, err := age.NewScryptIdentity(string(passphrase))
-	if err != nil {
-		return ErrAuthentication
-	}
-	clear, err := age.Decrypt(source, identity)
-	if err != nil {
-		return ErrAuthentication
 	}
 	if _, err := io.Copy(destination, clear); err != nil {
 		return ErrAuthentication
 	}
 	return nil
+}
+
+func decryptReader(passphrase []byte, source io.Reader) (io.Reader, error) {
+	if source == nil {
+		return nil, errors.New("workspace backup source is required")
+	}
+	if err := validatePassphrase(passphrase); err != nil {
+		return nil, err
+	}
+	if _, err := consumeHeader(source); err != nil {
+		return nil, err
+	}
+	identity, err := age.NewScryptIdentity(string(passphrase))
+	if err != nil {
+		return nil, ErrAuthentication
+	}
+	clear, err := age.Decrypt(source, identity)
+	if err != nil {
+		return nil, ErrAuthentication
+	}
+	return clear, nil
 }
 
 func InspectHeader(source io.Reader) (Header, error) {
