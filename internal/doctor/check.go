@@ -66,11 +66,21 @@ func IdentityChecks(configuration config.Config, identityKey []byte, bindingErr 
 		ownerCheck.State, ownerCheck.Code = StateFailed, "binding_missing"
 	}
 	checks = append(checks, ownerCheck)
-	for _, item := range []struct{ id, checkID string }{
+	items := []struct{ id, checkID string }{
 		{"personal-owner", "spaces.personal"}, {"hermes-private", "spaces.hermes_private"}, {"hermes-groups", "spaces.hermes_groups"},
-	} {
+	}
+	if configuration.SchemaVersion == 3 {
+		items = []struct{ id, checkID string }{
+			{"owner", "routing.owner"}, {"hermes-private", "routing.hermes_private"}, {"hermes-groups", "routing.hermes_groups"},
+		}
+	}
+	for _, item := range items {
 		check := Check{ID: item.checkID, State: StatePassed, Code: "active"}
-		if _, exists := configuration.Spaces[item.id]; !exists {
+		_, exists := configuration.Spaces[item.id]
+		if configuration.SchemaVersion == 3 {
+			_, exists = configuration.RoutingPolicies[item.id]
+		}
+		if !exists {
 			check.State, check.Code = StateFailed, "invalid"
 		}
 		checks = append(checks, check)

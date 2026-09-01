@@ -53,3 +53,26 @@ func TestIdentityChecksDistinguishBindingFailureFromSpaceState(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentityChecksUseRoutingPoliciesForSchemaV3(t *testing.T) {
+	cfg := config.Config{
+		SchemaVersion: 3,
+		Principals:    map[string]config.Principal{"owner": {ID: "owner", CanonicalUserID: "usr-generated", Kind: config.PrincipalPerson}},
+		Bindings:      map[string]config.BindingRef{"owner-feishu-union-1": {ID: "owner-feishu-union-1", PrincipalID: "owner", Status: config.BindingActive}},
+		RoutingPolicies: map[string]config.RoutingPolicy{
+			"owner":          {ID: "owner", Layers: []config.MemoryLayer{config.LayerL1, config.LayerL2, config.LayerL3}, AgentPolicy: config.AgentFixed},
+			"hermes-private": {ID: "hermes-private", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicPrincipal},
+			"hermes-groups":  {ID: "hermes-groups", Layers: []config.MemoryLayer{config.LayerL1}, AgentPolicy: config.AgentDynamicGroup, SessionPolicy: config.SessionPerTopic},
+		},
+	}
+	checks := IdentityChecks(cfg, bytes.Repeat([]byte{0x2a}, 32), nil)
+	want := []string{"routing.owner", "routing.hermes_private", "routing.hermes_groups"}
+	if len(checks) != 5 {
+		t.Fatalf("checks = %#v", checks)
+	}
+	for index, id := range want {
+		if checks[index+2].ID != id || checks[index+2].State != StatePassed {
+			t.Fatalf("routing check = %#v", checks[index+2])
+		}
+	}
+}
