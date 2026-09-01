@@ -17,24 +17,35 @@ import (
 )
 
 type fakeApplication struct {
-	plan             install.ChangeSet
-	applyCalls       int
-	planCalls        int
-	candidates       []identity.Candidate
-	planRequest      app.InstallRequest
-	applyErr         error
-	panelPlan        install.ChangeSet
-	panelApplies     int
-	providerStatus   lifecycle.BackendStatus
-	providerPlan     install.ChangeSet
-	providerRequest  lifecycle.BackendInstallRequest
-	providerApplies  int
-	providerApplyErr error
-	controlPlan      install.ChangeSet
-	controlApplies   int
-	controlLimit     int
-	bootstrapRequest app.ControlPlaneBootstrapRequest
-	panelStatus      app.PanelControlStatus
+	plan                    install.ChangeSet
+	applyCalls              int
+	planCalls               int
+	candidates              []identity.Candidate
+	planRequest             app.InstallRequest
+	applyErr                error
+	panelPlan               install.ChangeSet
+	panelApplies            int
+	providerStatus          lifecycle.BackendStatus
+	providerPlan            install.ChangeSet
+	providerRequest         lifecycle.BackendInstallRequest
+	providerApplies         int
+	providerApplyErr        error
+	controlPlan             install.ChangeSet
+	controlApplies          int
+	controlLimit            int
+	bootstrapRequest        app.ControlPlaneBootstrapRequest
+	panelStatus             app.PanelControlStatus
+	workspaceRestorePlan    install.ChangeSet
+	workspaceRestorePlans   int
+	workspaceRestoreApplies int
+	workspaceRestoreRequest app.WorkspaceRestoreRequest
+	workspaceBackupPlan     install.ChangeSet
+	workspaceBackupPlans    int
+	workspaceBackupApplies  int
+	credentialStatuses      []app.CredentialStatus
+	credentialCopies        int
+	workspaceRestorePlanErr error
+	workspaceBackupPlanErr  error
 }
 
 func (application *fakeApplication) PlanInstall(_ context.Context, request app.InstallRequest) (install.ChangeSet, error) {
@@ -108,6 +119,136 @@ func (application *fakeApplication) ApplyPanelRuntime(context.Context, string) e
 }
 func (application *fakeApplication) PanelControlStatus(context.Context) (app.PanelControlStatus, error) {
 	return application.panelStatus, nil
+}
+func (application *fakeApplication) PlanWorkspaceRestore(_ context.Context, request app.WorkspaceRestoreRequest) (install.ChangeSet, error) {
+	application.workspaceRestorePlans++
+	application.workspaceRestoreRequest = request
+	application.workspaceRestoreRequest.Passphrase = append([]byte(nil), request.Passphrase...)
+	return application.workspaceRestorePlan, application.workspaceRestorePlanErr
+}
+func (application *fakeApplication) ApplyWorkspaceRestore(_ context.Context, _ string, request app.WorkspaceRestoreRequest) error {
+	application.workspaceRestoreApplies++
+	application.workspaceRestoreRequest = request
+	application.workspaceRestoreRequest.Passphrase = append([]byte(nil), request.Passphrase...)
+	return application.applyErr
+}
+func (application *fakeApplication) PlanWorkspaceBackup(_ context.Context, request app.WorkspaceBackupRequest) (install.ChangeSet, error) {
+	application.workspaceBackupPlans++
+	return application.workspaceBackupPlan, application.workspaceBackupPlanErr
+}
+func (application *fakeApplication) ApplyWorkspaceBackup(context.Context, string, app.WorkspaceBackupRequest) error {
+	application.workspaceBackupApplies++
+	return application.applyErr
+}
+func (application *fakeApplication) CredentialStatuses(context.Context) ([]app.CredentialStatus, error) {
+	return append([]app.CredentialStatus(nil), application.credentialStatuses...), nil
+}
+func (application *fakeApplication) CopyCredential(context.Context, app.CredentialRole) error {
+	application.credentialCopies++
+	return nil
+}
+
+func TestWelcomeOffersRestoreAndExistingCorePaths(t *testing.T) {
+	model := New(&fakeApplication{}, fixtureRequest())
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = advance(t, model, enterKey())
+	if model.step != StepRestoreBundle {
+		t.Fatalf("restore welcome step = %d", model.step)
+	}
+	model = New(&fakeApplication{}, fixtureRequest())
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = advance(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = advance(t, model, enterKey())
+	if model.step != StepConnection || model.installBackend {
+		t.Fatalf("existing Core step/install = %d/%t", model.step, model.installBackend)
+	}
+}
+
+func TestRestoreFlowMasksPassphraseUsesExactPlanAndWipesAfterApply(t *testing.T) {
+	application := &fakeApplication{workspaceRestorePlan: install.ChangeSet{PlanID: "plan_restore"}}
+	model := New(application, fixtureRequest())
+	model.welcomeCursor = 1
+	model = advance(t, model, enterKey())
+	model.restoreBundle.SetValue("/tmp/full.mlink-backup")
+	model = advance(t, model, enterKey())
+	model.restorePassphrase.SetValue("correct-passphrase")
+	model = advance(t, model, enterKey())
+	if model.step != StepRestorePreview || application.workspaceRestorePlans != 1 || string(application.workspaceRestoreRequest.Passphrase) != "correct-passphrase" {
+		t.Fatalf("preview = step:%d plans:%d request:%#v", model.step, application.workspaceRestorePlans, application.workspaceRestoreRequest)
+	}
+	model = advance(t, model, enterKey())
+	model = advance(t, model, runeKey('y'))
+	model = advance(t, model, enterKey())
+	if model.step != StepRestoreVerify || application.workspaceRestoreApplies != 1 || model.restorePassphrase.Value() != "" {
+		t.Fatalf("apply = step:%d applies:%d passphrase:%q", model.step, application.workspaceRestoreApplies, model.restorePassphrase.Value())
+	}
+}
+
+func TestWelcomeBackupFlowRequiresMatchingPassphrasesAndExactConfirmation(t *testing.T) {
+	application := &fakeApplication{workspaceBackupPlan: install.ChangeSet{PlanID: "plan_backup"}}
+	model := New(application, fixtureRequest())
+	model = advance(t, model, runeKey('b'))
+	if model.step != StepBackupInput {
+		t.Fatalf("backup entry step = %d", model.step)
+	}
+	model.backupOutput.SetValue("/tmp/full.mlink-backup")
+	model.backupPassphrase.SetValue("correct-passphrase")
+	model.backupConfirmation.SetValue("different-passphrase")
+	model.backupCursor = 2
+	model = advance(t, model, enterKey())
+	if model.err == nil || application.workspaceBackupPlans != 0 {
+		t.Fatalf("mismatch error/plans = %v/%d", model.err, application.workspaceBackupPlans)
+	}
+	model.backupConfirmation.SetValue("correct-passphrase")
+	model = advance(t, model, enterKey())
+	if model.step != StepBackupPreview || application.workspaceBackupPlans != 1 {
+		t.Fatalf("backup preview = %d/%d", model.step, application.workspaceBackupPlans)
+	}
+	model = advance(t, model, enterKey())
+	model = advance(t, model, runeKey('y'))
+	model = advance(t, model, enterKey())
+	if model.step != StepBackupComplete || application.workspaceBackupApplies != 1 || model.backupPassphrase.Value() != "" || model.backupConfirmation.Value() != "" {
+		t.Fatalf("backup apply/wipe = %d/%d/%q/%q", model.step, application.workspaceBackupApplies, model.backupPassphrase.Value(), model.backupConfirmation.Value())
+	}
+}
+
+func TestWelcomeCredentialsFlowCopiesOnlyAfterConfirmation(t *testing.T) {
+	application := &fakeApplication{credentialStatuses: []app.CredentialStatus{{Role: app.CredentialPanelOwner, Present: true, Fingerprint: "0123456789ab", CopyAllowed: true}}}
+	model := New(application, fixtureRequest())
+	model = advance(t, model, runeKey('c'))
+	if model.step != StepCredentials || len(model.credentialStatuses) != 1 {
+		t.Fatalf("credential entry = %d/%#v", model.step, model.credentialStatuses)
+	}
+	model = advance(t, model, enterKey())
+	if model.step != StepCredentialConfirm || application.credentialCopies != 0 {
+		t.Fatalf("credential confirmation = %d/%d", model.step, application.credentialCopies)
+	}
+	model = advance(t, model, runeKey('y'))
+	model = advance(t, model, enterKey())
+	if model.step != StepCredentials || application.credentialCopies != 1 {
+		t.Fatalf("credential copy = %d/%d", model.step, application.credentialCopies)
+	}
+}
+
+func TestBackupAndRestorePlanningFailuresWipePassphrases(t *testing.T) {
+	application := &fakeApplication{workspaceRestorePlanErr: errors.New("restore plan failed"), workspaceBackupPlanErr: errors.New("backup plan failed")}
+	restore := New(application, fixtureRequest())
+	restore.step, restore.restoreCursor = StepRestoreBundle, 1
+	restore.restoreBundle.SetValue("/tmp/full.mlink-backup")
+	restore.restorePassphrase.SetValue("correct-passphrase")
+	restore = advance(t, restore, enterKey())
+	if restore.restorePassphrase.Value() != "" {
+		t.Fatal("restore planning failure retained passphrase")
+	}
+	backup := New(application, fixtureRequest())
+	backup.step, backup.backupCursor = StepBackupInput, 2
+	backup.backupOutput.SetValue("/tmp/full.mlink-backup")
+	backup.backupPassphrase.SetValue("correct-passphrase")
+	backup.backupConfirmation.SetValue("correct-passphrase")
+	backup = advance(t, backup, enterKey())
+	if backup.backupPassphrase.Value() != "" || backup.backupConfirmation.Value() != "" {
+		t.Fatal("backup planning failure retained passphrases")
+	}
 }
 
 func TestWizardDetectsMissingBackendBeforeCredentials(t *testing.T) {

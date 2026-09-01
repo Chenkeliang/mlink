@@ -83,3 +83,20 @@ func TestEveryWizardStepFitsSupportedTerminalWidths(t *testing.T) {
 		}
 	}
 }
+
+func TestWelcomeAndRestoreViewsExposeOnlyActionableInformation(t *testing.T) {
+	model := New(&fakeApplication{}, fixtureRequest())
+	view := model.View()
+	for _, label := range []string{"New installation", "Restore encrypted backup", "Connect existing MemoryCore"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("welcome missing %q:\n%s", label, view)
+		}
+	}
+	model.step = StepRestoreBundle
+	model.restoreBundle.SetValue("/Users/private/full.mlink-backup")
+	model.restorePassphrase.SetValue("secret-passphrase")
+	view = model.View()
+	if strings.Contains(view, "secret-passphrase") || !strings.Contains(view, "Encrypted backup") {
+		t.Fatalf("restore input view is unsafe:\n%s", view)
+	}
+}

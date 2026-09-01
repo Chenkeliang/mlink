@@ -17,7 +17,9 @@ var stepNames = []string{
 	"Welcome", "Detect", "Provider", "Backend Detect", "Backend Setup", "Connection",
 	"Identity", "Capacity", "Backend Preview", "Backend Confirm", "Core Identity Preview",
 	"Core Identity Confirm", "Agents", "Install Preview", "Install Confirm", "Install Verify",
-	"Memory Hub", "Hub Preview", "Hub Confirm", "Complete",
+	"Memory Hub", "Hub Preview", "Hub Confirm", "Restore Backup", "Restore Preview",
+	"Restore Confirm", "Restore Verify", "Backup", "Backup Preview", "Backup Confirm",
+	"Backup Complete", "Credentials", "Credential Confirm", "Complete",
 }
 
 func (model Model) View() string {
@@ -47,10 +49,16 @@ func (model Model) View() string {
 func (model Model) stepView(width int) []string {
 	switch model.step {
 	case StepWelcome:
-		return []string{
-			"Connect one memory service to Codex, Pi and Hermes.",
-			model.mutedStyle().Render("MLink never changes model URLs, subscriptions or Agent login."),
+		lines := []string{"Choose how to configure this computer."}
+		for index, option := range welcomeModes() {
+			cursor := "  "
+			if index == model.welcomeCursor {
+				cursor = "> "
+			}
+			lines = append(lines, cursor+option)
 		}
+		lines = append(lines, model.mutedStyle().Render("MLink changes memory wiring only. Model URLs, subscriptions and Agent login stay untouched."))
+		return append(lines, model.mutedStyle().Render("b  Create encrypted backup   ·   c  Manage Panel credentials"))
 	case StepDetect:
 		state := "ready"
 		if model.status.Installed {
@@ -209,6 +217,74 @@ func (model Model) stepView(width int) []string {
 		return append(lines, "", model.mutedStyle().Render("The Hub reuses existing Core IDs. Knowledge assets are not automatically imported or injected; routing is unchanged."))
 	case StepPanelApply:
 		return model.confirmationLines(model.panelPlan.PlanID, "Starts the official loopback Memory Hub over the already-provisioned Core identity.")
+	case StepRestoreBundle:
+		pathCursor, passphraseCursor := "  ", "  "
+		if model.restoreCursor == 0 {
+			pathCursor = "> "
+		} else {
+			passphraseCursor = "> "
+		}
+		return []string{
+			model.row("Mode", "Preserve all Core-generated IDs"),
+			pathCursor + "Encrypted backup", "  " + model.restoreBundle.View(),
+			passphraseCursor + "Passphrase", "  " + model.restorePassphrase.View(),
+			model.mutedStyle().Render("The manifest is inspected before any container, volume, file or Keychain mutation."),
+		}
+	case StepRestorePreview:
+		lines := model.planLines(model.restorePlan, width)
+		return append(lines, "", model.okStyle().Render("Core IDs are restored and verified; replacement IDs are never generated."))
+	case StepRestoreApply:
+		return model.confirmationLines(model.restorePlan.PlanID, "Creates only empty formal resources, restores encrypted sections, then verifies fixed and dynamic IDs.")
+	case StepRestoreVerify:
+		if len(model.report.Checks) == 0 {
+			return []string{"No restore verification result yet."}
+		}
+		lines := []string{model.okStyle().Render("Restore applied. Review the verification result below.")}
+		for _, check := range model.report.Checks {
+			state := check.Code
+			if check.State == doctor.StatePassed {
+				state = model.okStyle().Render(check.Code)
+			}
+			lines = append(lines, model.row(check.ID, state))
+		}
+		return lines
+	case StepBackupInput:
+		cursors := []string{"  ", "  ", "  "}
+		if model.backupCursor >= 0 && model.backupCursor < len(cursors) {
+			cursors[model.backupCursor] = "> "
+		}
+		return []string{
+			model.row("Scope", "Core · Knowledge · MLink · identity · Agent integrations"),
+			cursors[0] + "Encrypted backup output", "  " + model.backupOutput.View(),
+			cursors[1] + "New passphrase", "  " + model.backupPassphrase.View(),
+			cursors[2] + "Repeat passphrase", "  " + model.backupConfirmation.View(),
+			model.mutedStyle().Render("Only ciphertext section files may enter the private staging directory."),
+		}
+	case StepBackupPreview:
+		return append(model.planLines(model.backupPlan, width), "", model.okStyle().Render("The source services are resumed after success or failure."))
+	case StepBackupApply:
+		return model.confirmationLines(model.backupPlan.PlanID, "Pauses the local memory stack briefly and writes one authenticated encrypted bundle.")
+	case StepBackupComplete:
+		return []string{model.okStyle().Render("Encrypted workspace backup created."), model.mutedStyle().Render("Store the bundle and passphrase separately. Enter returns to Welcome.")}
+	case StepCredentials:
+		if len(model.credentialStatuses) == 0 {
+			return []string{"No credential status is available."}
+		}
+		lines := []string{model.mutedStyle().Render("Only Panel Owner/Admin keys can be copied. Other secrets stay non-exportable.")}
+		for index, status := range model.credentialStatuses {
+			cursor := "  "
+			if index == model.credentialCursor {
+				cursor = "> "
+			}
+			state := "missing"
+			if status.Present {
+				state = "present · " + status.Fingerprint
+			}
+			lines = append(lines, cursor+model.row(string(status.Role), state))
+		}
+		return lines
+	case StepCredentialConfirm:
+		return model.confirmationLines(string(model.credentialRole), "Copies this Panel login key to the macOS clipboard until another value replaces it.")
 	case StepComplete:
 		return []string{
 			model.row("Control plane", model.panelStatus.ControlPlane.State),
@@ -225,6 +301,8 @@ func (model Model) stepView(width int) []string {
 
 func (model Model) footer() string {
 	switch model.step {
+	case StepWelcome:
+		return "↑/↓ move · Enter select · b backup · c credentials · q quit"
 	case StepConnection:
 		return "↑/↓ or Tab move · Enter next · Ctrl+C quit"
 	case StepBackendDetect:
@@ -239,10 +317,24 @@ func (model Model) footer() string {
 		return "y confirm · n back · Enter apply · q quit"
 	case StepVerify:
 		return "Enter optional Hub choice · r verify again · q quit"
-	case StepBackendPreview, StepControlPreview, StepPanelPreview:
+	case StepBackendPreview, StepControlPreview, StepPanelPreview, StepRestorePreview:
 		return "Enter continue · q quit"
-	case StepBackendApply, StepControlApply, StepPanelApply:
+	case StepBackendApply, StepControlApply, StepPanelApply, StepRestoreApply:
 		return "y confirm · n back · Enter apply · q quit"
+	case StepRestoreBundle:
+		return "↑/↓ or Tab move · Enter continue · Ctrl+C quit"
+	case StepRestoreVerify:
+		return "r verify again · q quit"
+	case StepBackupInput:
+		return "↑/↓ or Tab move · Enter continue · Ctrl+C quit"
+	case StepBackupPreview:
+		return "Enter continue · q quit"
+	case StepBackupApply, StepCredentialConfirm:
+		return "y confirm · n back · Enter apply · q quit"
+	case StepBackupComplete:
+		return "Enter welcome · q quit"
+	case StepCredentials:
+		return "↑/↓ move · Enter copy eligible key · r refresh · q quit"
 	case StepCapacity:
 		return "Type limit · Enter preview · Ctrl+C quit"
 	case StepComplete:

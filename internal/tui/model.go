@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -40,6 +41,16 @@ const (
 	StepPanelMode
 	StepPanelPreview
 	StepPanelApply
+	StepRestoreBundle
+	StepRestorePreview
+	StepRestoreApply
+	StepRestoreVerify
+	StepBackupInput
+	StepBackupPreview
+	StepBackupApply
+	StepBackupComplete
+	StepCredentials
+	StepCredentialConfirm
 	StepComplete
 )
 
@@ -59,41 +70,60 @@ type Application interface {
 	ApplyControlPlaneBootstrap(context.Context, string, app.ControlPlaneBootstrapRequest) error
 	PlanPanelRuntime(context.Context) (install.ChangeSet, error)
 	ApplyPanelRuntime(context.Context, string) error
+	PlanWorkspaceRestore(context.Context, app.WorkspaceRestoreRequest) (install.ChangeSet, error)
+	ApplyWorkspaceRestore(context.Context, string, app.WorkspaceRestoreRequest) error
+	PlanWorkspaceBackup(context.Context, app.WorkspaceBackupRequest) (install.ChangeSet, error)
+	ApplyWorkspaceBackup(context.Context, string, app.WorkspaceBackupRequest) error
+	CredentialStatuses(context.Context) ([]app.CredentialStatus, error)
+	CopyCredential(context.Context, app.CredentialRole) error
 }
 
 type Model struct {
-	application       Application
-	request           app.InstallRequest
-	step              Step
-	width             int
-	height            int
-	cursor            int
-	selected          map[app.Agent]bool
-	endpoint          textinput.Model
-	token             textinput.Model
-	llmBaseURL        textinput.Model
-	llmModel          textinput.Model
-	llmAPIKey         textinput.Model
-	capacity          textinput.Model
-	status            app.Status
-	plan              install.ChangeSet
-	panelPlan         install.ChangeSet
-	panelStatus       app.PanelControlStatus
-	backendStatus     lifecycle.BackendStatus
-	backendPlan       install.ChangeSet
-	controlPlan       install.ChangeSet
-	installBackend    bool
-	backendModeCursor int
-	connectionCursor  int
-	panelModeCursor   int
-	dynamicAgentLimit int
-	report            doctor.Report
-	candidates        []identity.Candidate
-	identityCursor    int
-	identitySelected  int
-	confirmed         bool
-	busy              bool
-	err               error
+	application        Application
+	request            app.InstallRequest
+	step               Step
+	width              int
+	height             int
+	cursor             int
+	selected           map[app.Agent]bool
+	endpoint           textinput.Model
+	token              textinput.Model
+	llmBaseURL         textinput.Model
+	llmModel           textinput.Model
+	llmAPIKey          textinput.Model
+	capacity           textinput.Model
+	status             app.Status
+	plan               install.ChangeSet
+	panelPlan          install.ChangeSet
+	panelStatus        app.PanelControlStatus
+	backendStatus      lifecycle.BackendStatus
+	backendPlan        install.ChangeSet
+	controlPlan        install.ChangeSet
+	installBackend     bool
+	backendModeCursor  int
+	connectionCursor   int
+	panelModeCursor    int
+	welcomeCursor      int
+	restoreCursor      int
+	restoreBundle      textinput.Model
+	restorePassphrase  textinput.Model
+	restorePlan        install.ChangeSet
+	backupCursor       int
+	backupOutput       textinput.Model
+	backupPassphrase   textinput.Model
+	backupConfirmation textinput.Model
+	backupPlan         install.ChangeSet
+	credentialStatuses []app.CredentialStatus
+	credentialCursor   int
+	credentialRole     app.CredentialRole
+	dynamicAgentLimit  int
+	report             doctor.Report
+	candidates         []identity.Candidate
+	identityCursor     int
+	identitySelected   int
+	confirmed          bool
+	busy               bool
+	err                error
 }
 
 type statusMsg struct {
@@ -136,6 +166,21 @@ type panelStatusMsg struct {
 	status app.PanelControlStatus
 	err    error
 }
+type restorePlanMsg struct {
+	plan install.ChangeSet
+	err  error
+}
+type restoreApplyMsg struct{ err error }
+type backupPlanMsg struct {
+	plan install.ChangeSet
+	err  error
+}
+type backupApplyMsg struct{ err error }
+type credentialStatusMsg struct {
+	values []app.CredentialStatus
+	err    error
+}
+type credentialCopyMsg struct{ err error }
 
 func New(application Application, request app.InstallRequest) Model {
 	endpoint := textinput.New()
@@ -164,11 +209,24 @@ func New(application Application, request app.InstallRequest) Model {
 	if request.DynamicAgentLimit > 0 {
 		capacity.SetValue(strconv.Itoa(request.DynamicAgentLimit))
 	}
+	restoreBundle := textinput.New()
+	restoreBundle.Placeholder = "/absolute/path/workspace.mlink-backup"
+	restoreBundle.Prompt = "> "
+	restoreBundle.CharLimit = 4096
+	restorePassphrase := passwordInput("Backup passphrase")
+	backupOutput := textinput.New()
+	backupOutput.Placeholder = "/absolute/path/workspace.mlink-backup"
+	backupOutput.Prompt = "> "
+	backupOutput.CharLimit = 4096
+	backupPassphrase := passwordInput("New backup passphrase")
+	backupConfirmation := passwordInput("Repeat backup passphrase")
 	return Model{
 		application: application, request: cloneRequest(request), width: 100, height: 30,
 		selected: map[app.Agent]bool{app.Codex: true, app.Pi: true, app.Hermes: true, app.Cursor: true},
 		endpoint: endpoint, token: token, llmBaseURL: llmBaseURL, llmModel: llmModel,
 		llmAPIKey: llmAPIKey, capacity: capacity, identitySelected: -1,
+		restoreBundle: restoreBundle, restorePassphrase: restorePassphrase,
+		backupOutput: backupOutput, backupPassphrase: backupPassphrase, backupConfirmation: backupConfirmation,
 	}
 }
 
@@ -287,6 +345,50 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.busy = false
 		model.panelStatus, model.err = value.status, value.err
 		return model, nil
+	case restorePlanMsg:
+		model.busy = false
+		model.restorePlan, model.err = value.plan, value.err
+		if value.err != nil {
+			model.wipeRestorePassphrase()
+		}
+		return model, nil
+	case restoreApplyMsg:
+		model.busy = false
+		model.err = value.err
+		model.confirmed = false
+		model.wipeRestorePassphrase()
+		if value.err == nil {
+			model.step, model.busy = StepRestoreVerify, true
+			return model, model.doctorCommand()
+		}
+		return model, nil
+	case backupPlanMsg:
+		model.busy = false
+		model.backupPlan, model.err = value.plan, value.err
+		if value.err != nil {
+			model.wipeBackupPassphrases()
+		}
+		return model, nil
+	case backupApplyMsg:
+		model.busy = false
+		model.err = value.err
+		model.confirmed = false
+		model.wipeBackupPassphrases()
+		if value.err == nil {
+			model.step = StepBackupComplete
+		}
+		return model, nil
+	case credentialStatusMsg:
+		model.busy = false
+		model.credentialStatuses, model.err = value.values, value.err
+		model.credentialCursor = 0
+		return model, nil
+	case credentialCopyMsg:
+		model.busy = false
+		model.err = value.err
+		model.confirmed = false
+		model.step = StepCredentials
+		return model, nil
 	case tea.KeyMsg:
 		if value.String() == "ctrl+c" || value.String() == "q" && model.step != StepConnection {
 			model.wipeSecrets()
@@ -304,9 +406,36 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	model.err = nil
 	switch model.step {
 	case StepWelcome:
-		if key.Type == tea.KeyEnter {
-			model.step, model.busy = StepDetect, true
-			return model, model.statusCommand()
+		switch key.String() {
+		case "b":
+			model.step, model.backupCursor = StepBackupInput, 0
+			model.backupOutput.Focus()
+			return model, textinput.Blink
+		case "c":
+			model.step, model.busy = StepCredentials, true
+			return model, model.credentialStatusCommand()
+		case "up", "k":
+			if model.welcomeCursor > 0 {
+				model.welcomeCursor--
+			}
+		case "down", "j":
+			if model.welcomeCursor+1 < len(welcomeModes()) {
+				model.welcomeCursor++
+			}
+		case "enter":
+			switch model.welcomeCursor {
+			case 0:
+				model.step, model.busy = StepDetect, true
+				return model, model.statusCommand()
+			case 1:
+				model.step, model.restoreCursor = StepRestoreBundle, 0
+				model.restoreBundle.Focus()
+				return model, textinput.Blink
+			case 2:
+				model.installBackend = false
+				model.step, model.connectionCursor = StepConnection, 0
+				return model, model.focusConnectionField()
+			}
 		}
 	case StepDetect:
 		if key.Type == tea.KeyEnter {
@@ -465,6 +594,67 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case StepPanelApply:
 		return model.confirmationKey(key, StepPanelPreview, model.panelApplyCommand)
+	case StepRestoreBundle:
+		return model.updateRestoreInput(key)
+	case StepRestorePreview:
+		if key.Type == tea.KeyEnter && model.err == nil && model.restorePlan.PlanID != "" {
+			model.step, model.confirmed = StepRestoreApply, false
+		}
+	case StepRestoreApply:
+		return model.confirmationKey(key, StepRestorePreview, model.restoreApplyCommand)
+	case StepRestoreVerify:
+		if key.String() == "r" {
+			model.busy = true
+			return model, model.doctorCommand()
+		}
+	case StepBackupInput:
+		return model.updateBackupInput(key)
+	case StepBackupPreview:
+		if key.Type == tea.KeyEnter && model.err == nil && model.backupPlan.PlanID != "" {
+			model.step, model.confirmed = StepBackupApply, false
+		}
+	case StepBackupApply:
+		return model.confirmationKey(key, StepBackupPreview, model.backupApplyCommand)
+	case StepBackupComplete:
+		if key.Type == tea.KeyEnter {
+			model.step = StepWelcome
+		}
+	case StepCredentials:
+		switch key.String() {
+		case "up", "k":
+			if model.credentialCursor > 0 {
+				model.credentialCursor--
+			}
+		case "down", "j":
+			if model.credentialCursor+1 < len(model.credentialStatuses) {
+				model.credentialCursor++
+			}
+		case "r":
+			model.busy = true
+			return model, model.credentialStatusCommand()
+		case "enter":
+			if model.credentialCursor >= len(model.credentialStatuses) {
+				return model, nil
+			}
+			status := model.credentialStatuses[model.credentialCursor]
+			if !status.Present || !status.CopyAllowed {
+				model.err = errors.New("selected credential cannot be copied")
+				return model, nil
+			}
+			model.credentialRole, model.confirmed, model.step = status.Role, false, StepCredentialConfirm
+		}
+	case StepCredentialConfirm:
+		switch key.String() {
+		case "y", "Y":
+			model.confirmed = true
+		case "n", "N", "esc":
+			model.confirmed, model.step = false, StepCredentials
+		case "enter":
+			if model.confirmed {
+				model.busy = true
+				return model, model.credentialCopyCommand()
+			}
+		}
 	case StepComplete:
 		if key.String() == "r" {
 			model.busy = true
@@ -472,6 +662,108 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return model, nil
+}
+
+func (model Model) updateBackupInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "up" || key.String() == "shift+tab" {
+		if model.backupCursor > 0 {
+			model.backupCursor--
+		}
+		return model, model.focusBackupField()
+	}
+	if key.String() == "down" || key.String() == "tab" {
+		if model.backupCursor < 2 {
+			model.backupCursor++
+		}
+		return model, model.focusBackupField()
+	}
+	if key.Type == tea.KeyEnter {
+		if model.backupCursor < 2 {
+			model.backupCursor++
+			return model, model.focusBackupField()
+		}
+		if !filepath.IsAbs(strings.TrimSpace(model.backupOutput.Value())) || len(model.backupPassphrase.Value()) < 12 || model.backupPassphrase.Value() != model.backupConfirmation.Value() {
+			model.err = errors.New("enter an absolute output path and two matching passphrases of at least 12 bytes")
+			return model, nil
+		}
+		model.backupOutput.Blur()
+		model.backupPassphrase.Blur()
+		model.backupConfirmation.Blur()
+		model.step, model.busy = StepBackupPreview, true
+		return model, model.backupPlanCommand()
+	}
+	var command tea.Cmd
+	switch model.backupCursor {
+	case 0:
+		model.backupOutput, command = model.backupOutput.Update(key)
+	case 1:
+		model.backupPassphrase, command = model.backupPassphrase.Update(key)
+	case 2:
+		model.backupConfirmation, command = model.backupConfirmation.Update(key)
+	}
+	return model, command
+}
+
+func (model *Model) focusBackupField() tea.Cmd {
+	model.backupOutput.Blur()
+	model.backupPassphrase.Blur()
+	model.backupConfirmation.Blur()
+	switch model.backupCursor {
+	case 0:
+		model.backupOutput.Focus()
+	case 1:
+		model.backupPassphrase.Focus()
+	case 2:
+		model.backupConfirmation.Focus()
+	}
+	return textinput.Blink
+}
+
+func (model Model) updateRestoreInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "up" || key.String() == "shift+tab" {
+		if model.restoreCursor > 0 {
+			model.restoreCursor--
+		}
+		return model, model.focusRestoreField()
+	}
+	if key.String() == "down" || key.String() == "tab" {
+		if model.restoreCursor < 1 {
+			model.restoreCursor++
+		}
+		return model, model.focusRestoreField()
+	}
+	if key.Type == tea.KeyEnter {
+		if model.restoreCursor == 0 {
+			model.restoreCursor = 1
+			return model, model.focusRestoreField()
+		}
+		if !filepath.IsAbs(strings.TrimSpace(model.restoreBundle.Value())) || len(model.restorePassphrase.Value()) < 12 {
+			model.err = errors.New("enter an absolute backup path and a passphrase of at least 12 bytes")
+			return model, nil
+		}
+		model.restoreBundle.Blur()
+		model.restorePassphrase.Blur()
+		model.step, model.busy = StepRestorePreview, true
+		return model, model.restorePlanCommand()
+	}
+	var command tea.Cmd
+	if model.restoreCursor == 0 {
+		model.restoreBundle, command = model.restoreBundle.Update(key)
+	} else {
+		model.restorePassphrase, command = model.restorePassphrase.Update(key)
+	}
+	return model, command
+}
+
+func (model *Model) focusRestoreField() tea.Cmd {
+	model.restoreBundle.Blur()
+	model.restorePassphrase.Blur()
+	if model.restoreCursor == 0 {
+		model.restoreBundle.Focus()
+	} else {
+		model.restorePassphrase.Focus()
+	}
+	return textinput.Blink
 }
 
 func (model Model) updateConnection(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -682,6 +974,64 @@ func (model Model) panelStatusCommand() tea.Cmd {
 	}
 }
 
+func (model Model) workspaceRestoreRequest() app.WorkspaceRestoreRequest {
+	return app.WorkspaceRestoreRequest{
+		BundlePath: strings.TrimSpace(model.restoreBundle.Value()), Passphrase: []byte(model.restorePassphrase.Value()), SelectedAgents: model.selectedAgents(),
+	}
+}
+
+func (model Model) restorePlanCommand() tea.Cmd {
+	request := model.workspaceRestoreRequest()
+	return func() tea.Msg {
+		defer request.Wipe()
+		plan, err := model.application.PlanWorkspaceRestore(context.Background(), request)
+		return restorePlanMsg{plan: plan, err: err}
+	}
+}
+
+func (model Model) restoreApplyCommand() tea.Cmd {
+	request, planID := model.workspaceRestoreRequest(), model.restorePlan.PlanID
+	return func() tea.Msg {
+		defer request.Wipe()
+		return restoreApplyMsg{err: model.application.ApplyWorkspaceRestore(context.Background(), planID, request)}
+	}
+}
+
+func (model Model) workspaceBackupRequest() app.WorkspaceBackupRequest {
+	return app.WorkspaceBackupRequest{OutputPath: strings.TrimSpace(model.backupOutput.Value()), Passphrase: []byte(model.backupPassphrase.Value())}
+}
+
+func (model Model) backupPlanCommand() tea.Cmd {
+	request := model.workspaceBackupRequest()
+	return func() tea.Msg {
+		defer request.Wipe()
+		plan, err := model.application.PlanWorkspaceBackup(context.Background(), request)
+		return backupPlanMsg{plan: plan, err: err}
+	}
+}
+
+func (model Model) backupApplyCommand() tea.Cmd {
+	request, planID := model.workspaceBackupRequest(), model.backupPlan.PlanID
+	return func() tea.Msg {
+		defer request.Wipe()
+		return backupApplyMsg{err: model.application.ApplyWorkspaceBackup(context.Background(), planID, request)}
+	}
+}
+
+func (model Model) credentialStatusCommand() tea.Cmd {
+	return func() tea.Msg {
+		values, err := model.application.CredentialStatuses(context.Background())
+		return credentialStatusMsg{values: values, err: err}
+	}
+}
+
+func (model Model) credentialCopyCommand() tea.Cmd {
+	role := model.credentialRole
+	return func() tea.Msg {
+		return credentialCopyMsg{err: model.application.CopyCredential(context.Background(), role)}
+	}
+}
+
 func (model Model) backendInstallRequest() lifecycle.BackendInstallRequest {
 	return lifecycle.BackendInstallRequest{
 		ProviderID: "dev.mlink.tencentdb", Endpoint: strings.TrimSpace(model.endpoint.Value()), GatewayToken: []byte(strings.TrimSpace(model.token.Value())),
@@ -720,6 +1070,8 @@ func (model *Model) wipeConnectionSecrets() {
 }
 func (model *Model) wipeSecrets() {
 	model.wipeConnectionSecrets()
+	model.wipeRestorePassphrase()
+	model.wipeBackupPassphrases()
 	if model.request.SecretInputs != nil {
 		wipe(model.request.SecretInputs[app.MemoryCoreTokenSecret])
 		delete(model.request.SecretInputs, app.MemoryCoreTokenSecret)
@@ -730,6 +1082,20 @@ func (model *Model) wipeSecrets() {
 		model.candidates[index].Wipe()
 	}
 	model.candidates = nil
+}
+
+func (model *Model) wipeBackupPassphrases() {
+	for _, input := range []*textinput.Model{&model.backupPassphrase, &model.backupConfirmation} {
+		value := []byte(input.Value())
+		wipe(value)
+		input.SetValue("")
+	}
+}
+
+func (model *Model) wipeRestorePassphrase() {
+	value := []byte(model.restorePassphrase.Value())
+	wipe(value)
+	model.restorePassphrase.SetValue("")
 }
 
 func (model *Model) selectOwnerBinding() error {
@@ -761,7 +1127,10 @@ func (model Model) selectedAgents() []app.Agent {
 func backendModes() []string {
 	return []string{"Install official local MemoryCore", "Connect an existing MemoryCore"}
 }
-func panelModes() []string       { return []string{"Install optional Memory Hub", "Skip for now"} }
+func panelModes() []string { return []string{"Install optional Memory Hub", "Skip for now"} }
+func welcomeModes() []string {
+	return []string{"New installation", "Restore encrypted backup", "Connect existing MemoryCore"}
+}
 func orderedAgents() []app.Agent { return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} }
 
 func cloneRequest(input app.InstallRequest) app.InstallRequest {
