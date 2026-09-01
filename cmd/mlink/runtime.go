@@ -472,6 +472,10 @@ func (runtime *runtimeApplication) PlanPanelCutover(ctx context.Context, request
 		return install.ChangeSet{}, err
 	}
 	defer closeService()
+	service.Target, err = runtime.controlPlaneCutoverTarget(ctx)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
 	return service.PlanControlPlaneCutover(ctx, request)
 }
 
@@ -481,7 +485,32 @@ func (runtime *runtimeApplication) ApplyPanelCutover(ctx context.Context, planID
 		return err
 	}
 	defer closeService()
+	service.Target, err = runtime.controlPlaneCutoverTarget(ctx)
+	if err != nil {
+		return err
+	}
 	return service.ApplyControlPlaneCutover(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) controlPlaneCutoverTarget(ctx context.Context) (install.Target, error) {
+	configuration, err := (config.Store{Path: runtime.paths.Config}).Load()
+	if err != nil {
+		return nil, err
+	}
+	hermesAdapter, enabled := configuration.Adapters[string(app.Hermes)]
+	if !enabled || !hermesAdapter.Enabled {
+		return install.LocalTarget{}, nil
+	}
+	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
+	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
+	if err != nil {
+		return nil, err
+	}
+	orbTarget, err := hermes.NewOrbTarget(machine, detection.HermesHome, nil)
+	if err != nil {
+		return nil, err
+	}
+	return app.NewRoutingTarget(install.LocalTarget{}, orbTarget, detection.HermesHome)
 }
 
 func (runtime *runtimeApplication) PanelControlStatus(ctx context.Context) (app.PanelControlStatus, error) {
