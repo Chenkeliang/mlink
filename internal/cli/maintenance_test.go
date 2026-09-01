@@ -14,11 +14,13 @@ import (
 
 type maintenanceApplication struct {
 	*fakeApplication
-	events      []app.JournalEventDescriptor
-	plan        install.ChangeSet
-	applyCalls  int
-	appliedPlan string
-	request     app.JournalResolutionRequest
+	events             []app.JournalEventDescriptor
+	plan               install.ChangeSet
+	applyCalls         int
+	appliedPlan        string
+	request            app.JournalResolutionRequest
+	rotationPlan       install.ChangeSet
+	rotationApplyCalls int
 }
 
 func (application *maintenanceApplication) ListUnresolvedJournalEvents(context.Context) ([]app.JournalEventDescriptor, error) {
@@ -34,6 +36,16 @@ func (application *maintenanceApplication) ApplyJournalResolution(_ context.Cont
 	application.applyCalls++
 	application.appliedPlan = planID
 	application.request = request
+	return nil
+}
+
+func (application *maintenanceApplication) PlanHermesGrantRotation(context.Context) (install.ChangeSet, error) {
+	return application.rotationPlan, nil
+}
+
+func (application *maintenanceApplication) ApplyHermesGrantRotation(_ context.Context, planID string) error {
+	application.rotationApplyCalls++
+	application.appliedPlan = planID
 	return nil
 }
 
@@ -62,5 +74,17 @@ func TestMaintenanceJournalAcknowledgeRequiresProviderReference(t *testing.T) {
 	code := Run(context.Background(), []string{"maintenance", "journal", "acknowledge", "23456789", "--reason", "verified"}, Dependencies{App: application, Stdin: strings.NewReader("n\n"), Stdout: io.Discard, Stderr: io.Discard})
 	if code != 2 || application.applyCalls != 0 {
 		t.Fatalf("code/calls = %d/%d", code, application.applyCalls)
+	}
+}
+
+func TestMaintenanceHermesGrantRotationRequiresExactPlan(t *testing.T) {
+	application := &maintenanceApplication{fakeApplication: &fakeApplication{}, rotationPlan: install.ChangeSet{
+		PlanID: "plan_rotate", MLinkVersion: "dev", Operations: []install.Operation{{Target: "credential:adapter/hermes/token", Action: install.ActionService}},
+	}}
+	stdout := &bytes.Buffer{}
+	args := []string{"maintenance", "credentials", "rotate", "hermes-grant", "--apply-plan", "plan_rotate", "--yes"}
+	code := Run(context.Background(), args, Dependencies{App: application, Stdin: strings.NewReader(""), Stdout: stdout, Stderr: io.Discard})
+	if code != 0 || application.rotationApplyCalls != 1 || application.appliedPlan != "plan_rotate" || strings.Contains(strings.ToLower(stdout.String()), "secret") {
+		t.Fatalf("code/application/output = %d/%#v/%s", code, application, stdout)
 	}
 }

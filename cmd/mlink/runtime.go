@@ -48,6 +48,58 @@ type runtimeApplication struct {
 
 type previewLedger struct{}
 
+type maintenanceRestarter struct {
+	target install.Target
+	uid    int
+}
+
+func (restarter maintenanceRestarter) RestartBroker(ctx context.Context) error {
+	_, err := restarter.target.Run(ctx, []string{"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/dev.mlink.broker", restarter.uid)}, nil)
+	return err
+}
+
+func (restarter maintenanceRestarter) RestartHermes(ctx context.Context) error {
+	_, err := restarter.target.Run(ctx, []string{"hermes", "gateway", "restart"}, nil)
+	return err
+}
+
+type httpHermesGrantVerifier struct {
+	Client *http.Client
+}
+
+func (verifier httpHermesGrantVerifier) VerifyHermesGrant(ctx context.Context, endpoint string, newGrant, oldGrant []byte) error {
+	client := verifier.Client
+	if client == nil {
+		client = &http.Client{Timeout: 2 * time.Second}
+	}
+	check := func(grant []byte) (int, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/v1/health?adapter_id=hermes", nil)
+		if err != nil {
+			return 0, err
+		}
+		request.Header.Set("Authorization", "Bearer "+string(grant))
+		response, err := client.Do(request)
+		if err != nil {
+			return 0, err
+		}
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return response.StatusCode, nil
+	}
+	newStatus, err := check(newGrant)
+	if err != nil {
+		return err
+	}
+	oldStatus, err := check(oldGrant)
+	if err != nil {
+		return err
+	}
+	if newStatus != http.StatusOK || oldStatus != http.StatusUnauthorized {
+		return fmt.Errorf("Hermes grant verification status new=%d old=%d", newStatus, oldStatus)
+	}
+	return nil
+}
+
 func (previewLedger) SaveBackup(context.Context, install.Backup) error {
 	return errors.New("preview ledger cannot save backups")
 }
@@ -696,6 +748,53 @@ func (runtime *runtimeApplication) journalMaintenanceService(store *journal.Stor
 	}
 	service.OperatorID = fmt.Sprintf("uid:%d@%s", runtime.uid, sanitizeStableID(hostname))
 	return &service
+}
+
+func (runtime *runtimeApplication) PlanHermesGrantRotation(ctx context.Context) (install.ChangeSet, error) {
+	service, err := runtime.hermesCredentialService(ctx)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	return service.PlanHermesGrantRotation(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyHermesGrantRotation(ctx context.Context, planID string) error {
+	service, err := runtime.hermesCredentialService(ctx)
+	if err != nil {
+		return err
+	}
+	return service.ApplyHermesGrantRotation(ctx, planID)
+}
+
+func (runtime *runtimeApplication) hermesCredentialService(ctx context.Context) (*app.Service, error) {
+	configuration, err := (config.Store{Path: runtime.paths.Config}).Load()
+	if err != nil {
+		return nil, err
+	}
+	adapter, enabled := configuration.Adapters[string(app.Hermes)]
+	if !enabled || !adapter.Enabled {
+		return nil, errors.New("Hermes adapter is not active")
+	}
+	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
+	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
+	if err != nil {
+		return nil, err
+	}
+	orbTarget, err := hermes.NewOrbTarget(machine, detection.HermesHome, nil)
+	if err != nil {
+		return nil, err
+	}
+	routingTarget, err := app.NewRoutingTarget(install.LocalTarget{}, orbTarget, detection.HermesHome)
+	if err != nil {
+		return nil, err
+	}
+	service := runtime.baseService
+	service.Target = routingTarget
+	service.Secrets = secret.Keychain{}
+	service.HermesConfigPath = filepath.Join(detection.HermesHome, "mlink.json")
+	service.Restarter = maintenanceRestarter{target: routingTarget, uid: runtime.uid}
+	service.HermesGrantVerifier = httpHermesGrantVerifier{}
+	return &service, nil
 }
 
 func (runtime *runtimeApplication) DetectIdentityCandidates(ctx context.Context) ([]identity.Candidate, error) {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
@@ -65,6 +67,27 @@ func TestRuntimeJournalMaintenanceUsesReadOnlyPreviewAndWritableApply(t *testing
 	remaining, err := store.ListUnresolvedEvents(ctx)
 	if err != nil || len(remaining) != 0 {
 		t.Fatalf("remaining/error = %#v/%v", remaining, err)
+	}
+}
+
+func TestHTTPHermesGrantVerifierRequiresNewAcceptedAndOldRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Header.Get("Authorization") {
+		case "Bearer new-grant":
+			writer.WriteHeader(http.StatusOK)
+		case "Bearer old-grant":
+			writer.WriteHeader(http.StatusUnauthorized)
+		default:
+			writer.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	verifier := httpHermesGrantVerifier{Client: server.Client()}
+	if err := verifier.VerifyHermesGrant(context.Background(), server.URL, []byte("new-grant"), []byte("old-grant")); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.VerifyHermesGrant(context.Background(), server.URL, []byte("old-grant"), []byte("new-grant")); err == nil {
+		t.Fatal("accepted inverted grants")
 	}
 }
 

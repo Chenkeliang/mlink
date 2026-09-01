@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"io"
 
 	"mlink/internal/config"
 	"mlink/internal/controlplane"
@@ -74,6 +75,15 @@ type JournalMaintenanceStore interface {
 	ResolveUnresolvedEvent(context.Context, string, journal.ResolutionRequest) (journal.Event, error)
 }
 
+type MaintenanceRestarter interface {
+	RestartBroker(context.Context) error
+	RestartHermes(context.Context) error
+}
+
+type HermesGrantVerifier interface {
+	VerifyHermesGrant(context.Context, string, []byte, []byte) error
+}
+
 type Service struct {
 	Paths                layout.Paths
 	UID                  int
@@ -94,4 +104,8 @@ type Service struct {
 	PrincipalAgentStates PrincipalAgentStateStore
 	JournalMaintenance   JournalMaintenanceStore
 	OperatorID           string
+	HermesConfigPath     string
+	Restarter            MaintenanceRestarter
+	HermesGrantVerifier  HermesGrantVerifier
+	RandomSource         io.Reader
 }

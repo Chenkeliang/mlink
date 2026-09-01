@@ -17,7 +17,15 @@ type journalMaintenanceApplication interface {
 	ApplyJournalResolution(context.Context, string, app.JournalResolutionRequest) error
 }
 
+type credentialMaintenanceApplication interface {
+	PlanHermesGrantRotation(context.Context) (install.ChangeSet, error)
+	ApplyHermesGrantRotation(context.Context, string) error
+}
+
 func runMaintenance(ctx context.Context, args []string, deps Dependencies, _ *bufio.Reader) int {
+	if len(args) >= 3 && args[0] == "credentials" && args[1] == "rotate" && args[2] == "hermes-grant" {
+		return runHermesGrantRotation(ctx, args[3:], deps)
+	}
 	if len(args) < 2 || args[0] != "journal" {
 		writeLine(deps.Stderr, "invalid mlink maintenance command")
 		return 2
@@ -37,6 +45,56 @@ func runMaintenance(ctx context.Context, args []string, deps Dependencies, _ *bu
 	default:
 		return 2
 	}
+}
+
+func runHermesGrantRotation(ctx context.Context, args []string, deps Dependencies) int {
+	application, ok := deps.App.(credentialMaintenanceApplication)
+	if !ok {
+		writeLine(deps.Stderr, "mlink credential maintenance is unavailable")
+		return 1
+	}
+	var applyPlan string
+	var yes, jsonOutput, dryRun bool
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--apply-plan":
+			index++
+			if index >= len(args) || strings.HasPrefix(args[index], "--") {
+				return 2
+			}
+			applyPlan = args[index]
+		case "--yes":
+			yes = true
+		case "--json":
+			jsonOutput = true
+		case "--dry-run":
+			dryRun = true
+		default:
+			return 2
+		}
+	}
+	if dryRun && applyPlan != "" || yes && applyPlan == "" {
+		return 2
+	}
+	plan, err := application.PlanHermesGrantRotation(ctx)
+	if err != nil {
+		writeLine(deps.Stderr, "mlink Hermes grant rotation planning failed")
+		return exitCodeFor(err)
+	}
+	if err := renderPlan(deps.Stdout, plan, jsonOutput); err != nil {
+		return 1
+	}
+	if applyPlan == "" {
+		return 0
+	}
+	if !yes || applyPlan != plan.PlanID {
+		return 3
+	}
+	if err := application.ApplyHermesGrantRotation(ctx, plan.PlanID); err != nil {
+		writeLine(deps.Stderr, "mlink Hermes grant rotation failed")
+		return exitCodeFor(err)
+	}
+	return 0
 }
 
 func runJournalList(ctx context.Context, args []string, deps Dependencies, application journalMaintenanceApplication) int {
