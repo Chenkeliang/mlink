@@ -95,6 +95,9 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if len(args) > 0 && args[0] == "panel" {
 		return runPanel(ctx, args[1:], deps, input)
 	}
+	if len(args) > 0 && args[0] == "adapter" {
+		return runAdapter(ctx, args[1:], deps)
+	}
 	if len(args) > 0 && args[0] == "version" {
 		return runVersion(args[1:], deps)
 	}

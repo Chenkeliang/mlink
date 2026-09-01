@@ -246,7 +246,8 @@ func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {
 }
 
 func isCursorHooksPath(path string) bool {
-	return filepath.Base(path) == "hooks.json" && filepath.Base(filepath.Dir(path)) == ".cursor"
+	base := filepath.Base(path)
+	return (base == "hooks.json" || base == "mcp.json") && filepath.Base(filepath.Dir(path)) == ".cursor"
 }
 
 func (service *Service) activeConfiguration(ctx context.Context) (config.Config, error) {

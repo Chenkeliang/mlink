@@ -888,6 +888,27 @@ func (runtime *runtimeApplication) PlanUpgrade(ctx context.Context, request app.
 	return service.PlanUpgrade(ctx, request)
 }
 
+func (runtime *runtimeApplication) PlanCursorEnable(ctx context.Context) (install.ChangeSet, error) {
+	return runtime.cursorLifecycleService(previewLedger{}).PlanCursorEnable(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyCursorEnable(ctx context.Context, planID string) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.cursorLifecycleService(ledger).ApplyCursorEnable(ctx, planID)
+}
+
+func (runtime *runtimeApplication) cursorLifecycleService(ledger install.Ledger) *app.Service {
+	service := runtime.baseService
+	service.Paths = runtime.paths
+	service.Target = install.LocalTarget{}
+	service.Ledger = ledger
+	return &service
+}
+
 func (runtime *runtimeApplication) ApplyUpgrade(ctx context.Context, planID string, request app.UpgradeRequest) error {
 	store, ledger, err := runtime.openLedger(ctx)
 	if err != nil {

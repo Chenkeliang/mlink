@@ -153,7 +153,8 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 			providerCheck, bridgeCheck, sessionCheck := runtime.checkHermes(ctx, configuration)
 			report.Checks = append(report.Checks, providerCheck, bridgeCheck, sessionCheck, runtime.checkHermesGrantFingerprint(ctx))
 		case app.Cursor:
-			report.Checks = append(report.Checks, runtime.checkCursor(ctx, activity))
+			hooksCheck, mcpCheck := runtime.checkCursor(ctx, activity)
+			report.Checks = append(report.Checks, hooksCheck, mcpCheck)
 		}
 	}
 	if status.Installed && configuration.ControlPlane != nil {
@@ -379,23 +380,30 @@ func (runtime *runtimeApplication) checkPi(ctx context.Context, activity map[str
 	return doctor.Check{ID: "pi.extension", State: doctor.StatePassed, Code: "active"}
 }
 
-func (runtime *runtimeApplication) checkCursor(_ context.Context, activity map[string]bool) doctor.Check {
+func (runtime *runtimeApplication) checkCursor(_ context.Context, activity map[string]bool) (doctor.Check, doctor.Check) {
 	path := filepath.Join(filepath.Dir(runtime.paths.Home), ".cursor", "hooks.json")
 	content, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "missing"}
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "missing"}, doctor.Check{ID: "cursor.mcp", State: doctor.StateFailed, Code: "missing"}
 	}
 	if err != nil {
-		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}, doctor.Check{ID: "cursor.mcp", State: doctor.StateFailed, Code: "unavailable"}
 	}
 	desired, err := cursoradapter.PlanHooks(content, runtime.paths.Binary)
 	if err != nil || !bytes.Equal(content, desired) {
-		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}, doctor.Check{ID: "cursor.mcp", State: doctor.StateFailed, Code: "unavailable"}
+	}
+	mcpPath := filepath.Join(filepath.Dir(runtime.paths.Home), ".cursor", "mcp.json")
+	mcpContent, mcpErr := os.ReadFile(mcpPath)
+	mcpDesired, planErr := cursoradapter.PlanMCPConfig(mcpContent, runtime.paths.Binary)
+	mcpCheck := doctor.Check{ID: "cursor.mcp", State: doctor.StatePassed, Code: "configured"}
+	if mcpErr != nil || planErr != nil || !bytes.Equal(mcpContent, mcpDesired) {
+		mcpCheck.State, mcpCheck.Code = doctor.StateFailed, "config_conflict"
 	}
 	if !activity["cursor"] {
-		return doctor.Check{ID: "cursor.hooks", State: doctor.StatePendingAction, Code: "awaiting_first_turn"}
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StatePendingAction, Code: "awaiting_first_turn"}, mcpCheck
 	}
-	return doctor.Check{ID: "cursor.hooks", State: doctor.StatePassed, Code: "active"}
+	return doctor.Check{ID: "cursor.hooks", State: doctor.StatePassed, Code: "active"}, mcpCheck
 }
 
 func (runtime *runtimeApplication) checkHermes(ctx context.Context, configuration config.Config) (doctor.Check, doctor.Check, doctor.Check) {

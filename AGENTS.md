@@ -6,7 +6,9 @@ These constraints apply to all work inside this repository. They supplement the 
 
 - MLink is a memory connection layer for Agents. It must not proxy Agent LLM traffic or change model providers, base URLs, API keys, subscription sessions, or authentication flows.
 - Agent adapters depend only on MLink's canonical memory model. Provider-specific types and behavior stay behind the Provider boundary.
-- The MVP supports Codex, Pi, Hermes Agent, and TencentDB MemoryCore only unless an approved design explicitly expands that scope.
+- The first release supports Codex, Pi, Hermes Agent, local Cursor Desktop/CLI, and TencentDB MemoryCore. Cursor Cloud Agent and Tab memory are outside the local adapter boundary.
+- Cursor lifecycle capture uses user-level Hooks and must fail open. Query-specific recall uses the local `mlink-memory` stdio MCP server and is authoritative; `sessionStart` context is best-effort only.
+- Cursor integration must never read or modify model selection, provider, subscription, API-key, authentication, or general editor settings. Owned changes are limited to semantic entries in `~/.cursor/hooks.json` and `~/.cursor/mcp.json`.
 
 ## Implementation Stack
 
@@ -24,6 +26,7 @@ These constraints apply to all work inside this repository. They supplement the 
 - A wrapper must never fetch an unpinned `latest` binary at runtime, contain Broker or configuration business logic, or silently change Agent configuration during package installation.
 - Agent configuration changes happen only after the user explicitly runs `mlink setup` and accepts the normal preview. They remain backed up, verifiable, and removable by MLink.
 - Keep direct binary installation fully supported; npm, Bun, and Python are optional installation conveniences, not runtime requirements.
+- Release builds use Go 1.27.x and inject version, commit, build date, and supported config-schema range. Never publish a wrapper before the referenced GitHub Release asset and checksum exist.
 
 ## Provider Packaging
 

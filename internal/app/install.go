@@ -127,12 +127,22 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 			}
 			resources = append(resources, resource)
 		case Cursor:
-			target := filepath.Join(home, ".cursor", "hooks.json")
-			existing, err := readOptional(ctx, service.Target, target)
+			hooksTarget := filepath.Join(home, ".cursor", "hooks.json")
+			existing, err := readOptional(ctx, service.Target, hooksTarget)
 			if err != nil {
 				return install.ChangeSet{}, err
 			}
-			resource, err := cursoradapter.DesiredHooksResource(existing, target, service.Paths.Binary)
+			resource, err := cursoradapter.DesiredHooksResource(existing, hooksTarget, service.Paths.Binary)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resources = append(resources, resource)
+			mcpTarget := filepath.Join(home, ".cursor", "mcp.json")
+			existing, err = readOptional(ctx, service.Target, mcpTarget)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resource, err = cursoradapter.DesiredMCPResource(existing, mcpTarget, service.Paths.Binary)
 			if err != nil {
 				return install.ChangeSet{}, err
 			}

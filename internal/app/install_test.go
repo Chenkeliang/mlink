@@ -216,11 +216,13 @@ func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var hooks, configuration []byte
+	var hooks, mcpConfig, configuration []byte
 	for _, operation := range plan.Operations {
 		switch operation.Target {
 		case "/Users/test/.cursor/hooks.json":
 			hooks = operation.Content
+		case "/Users/test/.cursor/mcp.json":
+			mcpConfig = operation.Content
 		case service.Paths.Config:
 			configuration = operation.Content
 		}
@@ -228,8 +230,8 @@ func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testin
 			t.Fatalf("Cursor model settings targeted: %s", operation.Target)
 		}
 	}
-	if !bytes.Contains(hooks, []byte("hook cursor beforeSubmitPrompt")) || !bytes.Contains(configuration, []byte("cursor:")) || !bytes.Contains(configuration, []byte("space_id: personal-owner")) {
-		t.Fatalf("hooks/config = %s\n%s", hooks, configuration)
+	if !bytes.Contains(hooks, []byte("hook cursor beforeSubmitPrompt")) || !bytes.Contains(mcpConfig, []byte(`"mlink-memory"`)) || !bytes.Contains(mcpConfig, []byte(`"mcp"`)) || !bytes.Contains(configuration, []byte("cursor:")) || !bytes.Contains(configuration, []byte("space_id: personal-owner")) {
+		t.Fatalf("hooks/mcp/config = %s\n%s\n%s", hooks, mcpConfig, configuration)
 	}
 	if target.writes != 0 {
 		t.Fatalf("preview writes = %d", target.writes)

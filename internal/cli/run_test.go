@@ -28,6 +28,16 @@ type fakeApplication struct {
 	panelStatus  app.PanelControlStatus
 }
 
+func (application *fakeApplication) PlanCursorEnable(context.Context) (install.ChangeSet, error) {
+	return application.plan, nil
+}
+
+func (application *fakeApplication) ApplyCursorEnable(_ context.Context, planID string) error {
+	application.applyCalls++
+	application.appliedPlan = planID
+	return nil
+}
+
 func (application *fakeApplication) PlanInstall(context.Context, app.InstallRequest) (install.ChangeSet, error) {
 	application.installCalls++
 	return application.plan, nil
@@ -227,6 +237,14 @@ func TestRunStartsMCPService(t *testing.T) {
 	})
 	if code != 0 || calls != 1 {
 		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}
+
+func TestAdapterEnableCursorRequiresExactPlan(t *testing.T) {
+	application := &fakeApplication{plan: install.ChangeSet{PlanID: "plan_cursor", MLinkVersion: "dev", Operations: []install.Operation{{Target: "/Users/test/.cursor/hooks.json", Action: install.ActionSemanticMerge}}}}
+	code := Run(context.Background(), []string{"adapter", "enable", "cursor", "--apply-plan", "plan_cursor", "--yes"}, Dependencies{App: application, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard})
+	if code != 0 || application.applyCalls != 1 || application.appliedPlan != "plan_cursor" {
+		t.Fatalf("code/application = %d/%#v", code, application)
 	}
 }
 
