@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 
@@ -38,6 +39,27 @@ type InstallRequest struct {
 	HermesMachine     string
 	HermesHome        string
 	DynamicAgentLimit int
+}
+
+type ControlPlaneBootstrapRequest struct {
+	Connection        config.Connection
+	OwnerSlug         string
+	GatewayToken      []byte
+	DynamicAgentLimit int
+}
+
+func (request ControlPlaneBootstrapRequest) String() string {
+	return fmt.Sprintf("ControlPlaneBootstrapRequest{ConnectionID:%q ProviderID:%q OwnerSlug:%q GatewayToken:<redacted> DynamicAgentLimit:%d}",
+		request.Connection.ID, request.Connection.ProviderID, request.OwnerSlug, request.DynamicAgentLimit)
+}
+
+func (request ControlPlaneBootstrapRequest) GoString() string { return request.String() }
+
+func (request *ControlPlaneBootstrapRequest) Wipe() {
+	for index := range request.GatewayToken {
+		request.GatewayToken[index] = 0
+	}
+	request.GatewayToken = nil
 }
 
 type UninstallRequest struct {

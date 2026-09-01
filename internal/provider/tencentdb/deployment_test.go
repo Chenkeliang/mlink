@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -141,6 +142,38 @@ func (runner *installRunner) Run(_ context.Context, args []string, _ io.Reader) 
 type installHealthTransport struct{ runner *installRunner }
 
 func (transport installHealthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if !transport.runner.started {
+		return nil, errors.New("offline")
+	}
+	body := io.NopCloser(strings.NewReader(`{"status":"ok","version":"0.1.0","services":{"pipelineWorker":{"status":"ok"}}}`))
+	return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header), Request: request}, nil
+}
+
+type stoppedCoreRunner struct {
+	started  bool
+	commands [][]string
+}
+
+func (runner *stoppedCoreRunner) Run(_ context.Context, args []string, _ io.Reader) ([]byte, error) {
+	runner.commands = append(runner.commands, append([]string(nil), args...))
+	joined := strings.Join(args, " ")
+	switch joined {
+	case "docker inspect " + MemoryCoreContainerName:
+		return ownedCoreInspect("exited", MemoryCoreImageReference), nil
+	case "docker start " + MemoryCoreContainerName:
+		runner.started = true
+		return []byte(MemoryCoreContainerName), nil
+	case "docker stop " + MemoryCoreContainerName:
+		runner.started = false
+		return []byte(MemoryCoreContainerName), nil
+	default:
+		return nil, fmt.Errorf("unexpected command %q", joined)
+	}
+}
+
+type stoppedHealthTransport struct{ runner *stoppedCoreRunner }
+
+func (transport stoppedHealthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if !transport.runner.started {
 		return nil, errors.New("offline")
 	}
@@ -294,6 +327,34 @@ func TestDeploymentApplyInstallsAndDeletesTemporarySecretFile(t *testing.T) {
 	}
 }
 
+func TestDeploymentRestartsStoppedOwnedCoreWithoutReplacingRuntimeSecrets(t *testing.T) {
+	runner := &stoppedCoreRunner{}
+	secretStore := &deploymentSecrets{values: map[string][]byte{
+		"connection/local/token":         []byte("existing-gateway"),
+		"provider/tencentdb/llm-api-key": []byte("existing-llm"),
+	}}
+	root := t.TempDir()
+	deployment := Deployment{
+		Runner: runner, Target: install.LocalTarget{Runner: runner}, Ledger: &deploymentLedger{}, Secrets: secretStore,
+		ConfigPath: root + "/gateway.yaml", EnvPath: root + "/core.env",
+		HTTPClient: &http.Client{Transport: stoppedHealthTransport{runner: runner}}, HealthTimeout: time.Second, PollInterval: time.Millisecond,
+	}
+	request := lifecycle.BackendInstallRequest{ProviderID: providerID, Endpoint: "http://127.0.0.1:8420"}
+	plan, err := deployment.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 1 || strings.Join(plan.Operations[0].Command, " ") != "docker start "+MemoryCoreContainerName {
+		t.Fatalf("restart Plan = %#v", plan.Operations)
+	}
+	if err := deployment.ApplyInstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.started || string(secretStore.values["connection/local/token"]) != "existing-gateway" || string(secretStore.values["provider/tencentdb/llm-api-key"]) != "existing-llm" {
+		t.Fatalf("restart mutated runtime state: started=%t secrets=%#v", runner.started, secretStore.values)
+	}
+}
+
 func TestDeploymentApplyFailureRestoresSecretsAndConfiguration(t *testing.T) {
 	runner := &installRunner{failRun: true}
 	deployment := deploymentFixture(t, runner)
@@ -361,5 +422,16 @@ func TestDeploymentUninstallRefusesUnownedOrDriftedContainer(t *testing.T) {
 				t.Fatalf("PlanUninstall() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestDeploymentUninstallFailsClosedWhenContainerOwnershipCannotBeInspected(t *testing.T) {
+	root := t.TempDir()
+	deployment := Deployment{
+		Runner: &deploymentRunner{err: errors.New("docker daemon unavailable")}, Target: install.LocalTarget{},
+		ConfigPath: root + "/gateway.yaml",
+	}
+	if _, err := deployment.PlanUninstall(context.Background()); err == nil || !strings.Contains(err.Error(), "verify MemoryCore container ownership") {
+		t.Fatalf("PlanUninstall() error = %v", err)
 	}
 }

@@ -191,9 +191,15 @@ func TestApplyProvisionCreatesDistinctAdminAndOwner(t *testing.T) {
 
 func TestApplyProvisionReusesExistingStateWithoutWrites(t *testing.T) {
 	request := fixtureProvisionRequest()
-	states := &fakeStateStore{value: fixtureControlPlaneState()}
-	metadata := &fakeMetadata{}
-	secrets := &fakeSecrets{values: map[string][]byte{}}
+	state := fixtureControlPlaneState()
+	states := &fakeStateStore{value: state}
+	metadata := &fakeMetadata{
+		owner: tencentdb.User{UserID: state.OwnerUserID, UserType: "normal", Username: "keliang"},
+		team:  tencentdb.Team{TeamID: state.OwnerTeamID, OwnerUserID: state.OwnerUserID},
+		agent: tencentdb.Agent{AgentID: state.OwnerAgentID, TeamID: state.OwnerTeamID, OwnerUserID: state.OwnerUserID},
+		asset: tencentdb.Asset{AssetID: state.OwnerAssetID, TeamID: state.OwnerTeamID, OwnerUserID: state.OwnerUserID, AssetType: "chat_memory"},
+	}
+	secrets := &fakeSecrets{values: map[string][]byte{OwnerUserKeyAccount: []byte("owner-key")}}
 	service := Service{Metadata: metadata, Secrets: secrets, States: states}
 	plan, _ := service.PlanProvision(context.Background(), request)
 	result, err := service.ApplyProvision(context.Background(), plan.PlanID, request)
@@ -202,6 +208,32 @@ func TestApplyProvisionReusesExistingStateWithoutWrites(t *testing.T) {
 	}
 	if metadata.initCalls+metadata.userCalls+metadata.teamCalls+metadata.agentCalls != 0 || secrets.puts != 0 || states.saves != 0 {
 		t.Fatalf("reuse wrote metadata=%#v secrets=%d states=%d", metadata, secrets.puts, states.saves)
+	}
+}
+
+func TestApplyProvisionRejectsExistingIdentityFromDifferentBackend(t *testing.T) {
+	request := fixtureProvisionRequest()
+	state := fixtureControlPlaneState()
+	states := &fakeStateStore{value: state}
+	metadata := &fakeMetadata{owner: tencentdb.User{UserID: "usr-other", UserType: "normal", Username: "keliang"}}
+	secrets := &fakeSecrets{values: map[string][]byte{OwnerUserKeyAccount: []byte("owner-key")}}
+	service := Service{Metadata: metadata, Secrets: secrets, States: states}
+	plan, err := service.PlanProvision(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ApplyProvision(context.Background(), plan.PlanID, request); err == nil || !strings.Contains(err.Error(), "existing Core identity") {
+		t.Fatalf("ApplyProvision() error = %v", err)
+	}
+}
+
+func TestPlanProvisionRejectsCapacityChangeForExistingCoreIdentity(t *testing.T) {
+	states := &fakeStateStore{value: fixtureControlPlaneState()}
+	service := Service{Metadata: &fakeMetadata{}, Secrets: &fakeSecrets{values: map[string][]byte{}}, States: states}
+	request := fixtureProvisionRequest()
+	request.DynamicAgentLimit = states.value.DynamicAgentLimit + 1
+	if _, err := service.PlanProvision(context.Background(), request); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("PlanProvision() error = %v", err)
 	}
 }
 
@@ -246,7 +278,7 @@ func fixtureProvisionRequest() ProvisionRequest {
 
 func fixtureControlPlaneState() journal.ControlPlaneState {
 	return journal.ControlPlaneState{
-		InstallationID: "installation-1", InstanceID: "default", OwnerUserID: "usr-owner",
+		InstallationID: "installation-1", InstanceID: "default", DynamicAgentLimit: 500, OwnerUserID: "usr-owner",
 		OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner", OwnerAssetID: "chat_memory-team-owner-agt-owner",
 		PanelContainer: "tdai-memory-hub", PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}

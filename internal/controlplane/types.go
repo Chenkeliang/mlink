@@ -15,6 +15,8 @@ const (
 type ProvisionRequest struct {
 	InstallationID    string
 	InstanceID        string
+	ConnectionID      string
+	ProviderEndpoint  string
 	AdminUsername     string
 	OwnerUsername     string
 	TeamName          string

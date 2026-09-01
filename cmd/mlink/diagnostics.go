@@ -198,9 +198,12 @@ func providerDiagnosticChecks(status lifecycle.BackendStatus, statusErr error) [
 	case lifecycle.BackendRemoteUnreachable:
 		backend.Message = "verify the remote HTTPS endpoint before enabling Agent capture"
 	}
-	if status.Installed {
+	if status.Installed && (status.State == lifecycle.BackendReachable || status.State == lifecycle.BackendStopped) {
 		image.State, image.Code, image.Message = doctor.StatePassed, "pinned", "official digest and MLink ownership verified"
 		volume.State, volume.Code, volume.Message = doctor.StatePassed, "persistent", "tdai-memory-core-data retained on ordinary uninstall"
+	} else if status.Installed {
+		image.Code, image.Message = "layout_drift", "installed container image, label, port, or mount differs from the owned layout"
+		volume.Code, volume.Message = "ownership_unverified", "MLink will not claim or remove the container data volume"
 	} else if status.State == lifecycle.BackendReachable {
 		image.State, image.Code, image.Message = doctor.StatePassed, "external_compatible", "compatible backend is not managed by MLink"
 		volume.State, volume.Code, volume.Message = doctor.StatePassed, "external", "persistence is managed by the backend operator"

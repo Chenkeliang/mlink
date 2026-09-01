@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"sort"
@@ -21,6 +22,15 @@ import (
 type memoryFile struct {
 	content []byte
 	mode    fs.FileMode
+}
+
+func TestControlPlaneBootstrapRequestFormattingRedactsGatewayToken(t *testing.T) {
+	request := ControlPlaneBootstrapRequest{GatewayToken: []byte("gateway-secret")}
+	for _, rendered := range []string{fmt.Sprint(request), fmt.Sprintf("%#v", request)} {
+		if strings.Contains(rendered, "gateway-secret") || !strings.Contains(rendered, "<redacted>") {
+			t.Fatalf("bootstrap request rendered unsafely: %s", rendered)
+		}
+	}
 }
 
 type memoryTarget struct {

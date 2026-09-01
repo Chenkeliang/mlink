@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,8 +24,10 @@ import (
 	"mlink/internal/cli"
 	"mlink/internal/config"
 	"mlink/internal/connection"
+	"mlink/internal/controlplane"
 	"mlink/internal/doctor"
 	"mlink/internal/identity"
+	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/model"
@@ -53,9 +57,11 @@ func TestProviderDiagnosticChecksReportManagedBackendLifecycle(t *testing.T) {
 
 	incompatible := providerDiagnosticChecks(lifecycle.BackendStatus{
 		ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendIncompatible,
-		Endpoint: "http://127.0.0.1:8420", Local: true,
+		Endpoint: "http://127.0.0.1:8420", Local: true, Installed: true,
 	}, nil)
-	if incompatible[0].State != doctor.StateFailed || incompatible[0].Code != "incompatible" || !strings.Contains(incompatible[0].Message, "refuses") {
+	if incompatible[0].State != doctor.StateFailed || incompatible[0].Code != "incompatible" || !strings.Contains(incompatible[0].Message, "refuses") ||
+		incompatible[1].State != doctor.StateFailed || incompatible[1].Code != "layout_drift" ||
+		incompatible[2].State != doctor.StateFailed || incompatible[2].Code != "ownership_unverified" {
 		t.Fatalf("incompatible checks = %#v", incompatible)
 	}
 }
@@ -124,6 +130,170 @@ func TestRuntimeJournalMaintenanceUsesReadOnlyPreviewAndWritableApply(t *testing
 	remaining, err := store.ListUnresolvedEvents(ctx)
 	if err != nil || len(remaining) != 0 {
 		t.Fatalf("remaining/error = %#v/%v", remaining, err)
+	}
+}
+
+func TestHeadlessControlPlanOnFreshHomeDoesNotCreateJournal(t *testing.T) {
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, filepath.Join(home, "candidate-mlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &runtimeApplication{paths: paths, uid: os.Getuid()}
+	plan, err := runtime.PlanControlPlaneProvision(context.Background(), 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 4 {
+		t.Fatalf("control Plan = %#v", plan.Operations)
+	}
+	if _, err := os.Stat(paths.Journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview created Journal: %v", err)
+	}
+}
+
+func TestControlBootstrapPlanBindsExistingBackendEndpointWithoutWritingSecret(t *testing.T) {
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, filepath.Join(home, "candidate-mlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &runtimeApplication{paths: paths, uid: os.Getuid()}
+	request := app.ControlPlaneBootstrapRequest{
+		Connection: config.Connection{
+			ID: "remote", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "remote-1",
+			ProviderConfig: map[string]any{"base_url": "https://memory.example.test", "service_id": "team-a", "timeout_ms": 5000},
+			TenantID:       "installation-a",
+		},
+		OwnerSlug: "owner", GatewayToken: []byte("protected-gateway-token"), DynamicAgentLimit: 500,
+	}
+	first, err := runtime.PlanControlPlaneBootstrap(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Connection.ProviderConfig["base_url"] = "https://other.example.test"
+	second, err := runtime.PlanControlPlaneBootstrap(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PlanID == second.PlanID {
+		t.Fatalf("control Plan is not endpoint-bound: %s", first.PlanID)
+	}
+	if _, err := os.Stat(paths.Journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bootstrap preview created Journal: %v", err)
+	}
+	for _, plan := range []install.ChangeSet{first, second} {
+		rendered, _ := install.RenderJSON(plan)
+		if bytes.Contains(rendered, request.GatewayToken) {
+			t.Fatalf("control Plan leaked gateway token: %s", rendered)
+		}
+	}
+	request.Connection.ProviderConfig["base_url"] = "http://memory.example.test"
+	if _, err := runtime.PlanControlPlaneBootstrap(context.Background(), request); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("unsafe remote bootstrap error = %v", err)
+	}
+}
+
+func TestControlBootstrapApplyStoresExistingBackendTokenAndCoreIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		userKey := request.Header.Get("x-tdai-user-key")
+		data := "{}"
+		switch request.URL.Path {
+		case "/v3/internal/meta/user/init-admin":
+			data = `{"user_id":"usr-admin","user_key":"admin-key"}`
+		case "/v3/meta/auth/verify":
+			if userKey == "admin-key" {
+				data = `{"valid":true,"user":{"user_id":"usr-admin","user_type":"system_admin","username":"mlink-admin","created_at":"2026-09-01T00:00:00Z"}}`
+			} else {
+				data = `{"valid":true,"user":{"user_id":"usr-owner","user_type":"normal","username":"owner","created_at":"2026-09-01T00:00:00Z"}}`
+			}
+		case "/v3/meta/user/create":
+			data = `{"user_id":"usr-owner","user_type":"normal","created_at":"2026-09-01T00:00:00Z","default_user_key":"owner-key"}`
+		case "/v3/meta/team/list", "/v3/meta/agent/list":
+			data = `{"items":[],"total":0,"limit":100,"offset":0}`
+		case "/v3/meta/team/create":
+			data = fmt.Sprintf(`{"team_id":"team-owner","name":"MLink","description":"MLink managed memory Team","owner_user_id":"usr-owner","status":"active","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z","metadata_json":%q}`, body["metadata_json"])
+		case "/v3/meta/agent/create":
+			data = fmt.Sprintf(`{"agent_id":"agt-owner","team_id":"team-owner","owner_user_id":"usr-owner","name":"MLink Owner","description":"MLink Owner memory","prompt":"","visibility":"private","status":"active","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z","metadata_json":%q}`, body["metadata_json"])
+		case "/v3/meta/asset/get":
+			data = `{"asset_id":"chat_memory-team-owner-agt-owner","team_id":"team-owner","asset_type":"chat_memory","name":"MLink Owner","owner_user_id":"usr-owner","source_type":"agent","description":"","source_ref":"agt-owner","visibility":"private","status":"approved","confidence":1,"expires_at":null,"last_used_at":null,"usage_count":0,"content_ref":"","metadata_json":"{}","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z","version":1}`
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"code":0,"message":"ok","request_id":"req","data":` + data + `}`))
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, filepath.Join(home, "candidate-mlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := runtimeSecretStore{}
+	runtime := &runtimeApplication{paths: paths, uid: os.Getuid(), baseService: app.Service{Secrets: secrets}}
+	request := app.ControlPlaneBootstrapRequest{
+		Connection: config.Connection{
+			ID: "existing", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "existing-1",
+			ProviderConfig: map[string]any{"base_url": server.URL, "service_id": "existing-service", "timeout_ms": 5000},
+			TenantID:       "existing-installation",
+		},
+		OwnerSlug: "owner", GatewayToken: []byte("existing-gateway-token"), DynamicAgentLimit: 500,
+	}
+	plan, err := runtime.PlanControlPlaneBootstrap(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplyControlPlaneBootstrap(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if string(secrets["connection/existing/token"]) != "existing-gateway-token" || string(secrets[controlplane.OwnerUserKeyAccount]) != "owner-key" {
+		t.Fatalf("stored bootstrap secrets = %#v", secrets)
+	}
+	store, err := journal.OpenReadOnly(context.Background(), paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	state, err := store.LoadControlPlane(context.Background())
+	if err != nil || state.OwnerAgentID != "agt-owner" || state.State != "provisioned" {
+		t.Fatalf("bootstrap state/error = %#v/%v", state, err)
+	}
+}
+
+func TestPanelCompatibilityProvisionUsesExistingControlPlaneCapacity(t *testing.T) {
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, filepath.Join(home, "candidate-mlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := fixtureRuntimeConfigV3()
+	configuration.ControlPlane.DynamicAgentLimit = 777
+	if err := (config.Store{Path: paths.Config}).SaveAtomic(configuration); err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.Open(context.Background(), paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := fixtureRuntimeControlPlaneState()
+	state.DynamicAgentLimit = 777
+	if err := store.SaveControlPlane(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &runtimeApplication{paths: paths, uid: os.Getuid()}
+	service, closeService, err := runtime.controlPanelService(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeService()
+	if service.ControlRequest.DynamicAgentLimit != 777 {
+		t.Fatalf("Panel control capacity = %d", service.ControlRequest.DynamicAgentLimit)
 	}
 }
 
@@ -241,12 +411,18 @@ func TestCompareHermesGrantUsesFingerprintWithoutReturningSecret(t *testing.T) {
 
 type runtimeSecretStore map[string][]byte
 
-func (store runtimeSecretStore) Put(context.Context, string, []byte) error { return nil }
-func (store runtimeSecretStore) Delete(context.Context, string) error      { return nil }
+func (store runtimeSecretStore) Put(_ context.Context, account string, value []byte) error {
+	store[account] = append([]byte(nil), value...)
+	return nil
+}
+func (store runtimeSecretStore) Delete(_ context.Context, account string) error {
+	delete(store, account)
+	return nil
+}
 func (store runtimeSecretStore) Get(_ context.Context, account string) ([]byte, error) {
 	value, exists := store[account]
 	if !exists {
-		return nil, errors.New("missing")
+		return nil, fs.ErrNotExist
 	}
 	return append([]byte(nil), value...), nil
 }
@@ -502,6 +678,39 @@ func TestDefaultInstallPreviewRequiresProvisionedCoreWithoutCreatingState(t *tes
 	}
 	if len(entries) != 0 {
 		t.Fatalf("preview created user state: %#v", entries)
+	}
+}
+
+func TestRuntimeInstallPreviewConsumesProvisionedCoreState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dependencies, err := defaultDependencies(&bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := dependencies.App.(*runtimeApplication)
+	store, err := journal.Open(context.Background(), runtime.paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := fixtureRuntimeControlPlaneState()
+	state.InstallationID = "personal"
+	state.State = "provisioned"
+	if err := store.SaveControlPlane(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := dependencies.InstallRequest
+	request.Agents = []app.Agent{app.Codex}
+	request.SecretInputs = map[string][]byte{app.MemoryCoreTokenSecret: []byte("test-token")}
+	plan, err := dependencies.App.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlanID == "" {
+		t.Fatal("runtime install preview returned an empty Plan")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"mlink/internal/app"
 	"mlink/internal/install"
 	"mlink/internal/provider/lifecycle"
 )
@@ -19,6 +20,7 @@ type providerCLIApplication struct {
 	applyCalls        int
 	controlLimit      int
 	controlApplyCalls int
+	bootstrapRequest  app.ControlPlaneBootstrapRequest
 }
 
 func (application *providerCLIApplication) ProviderStatus(context.Context) (lifecycle.BackendStatus, error) {
@@ -45,6 +47,17 @@ func (application *providerCLIApplication) PlanControlPlaneProvision(_ context.C
 }
 func (application *providerCLIApplication) ApplyControlPlaneProvision(_ context.Context, _ string, limit int) error {
 	application.controlLimit = limit
+	application.controlApplyCalls++
+	return nil
+}
+func (application *providerCLIApplication) PlanControlPlaneBootstrap(_ context.Context, request app.ControlPlaneBootstrapRequest) (install.ChangeSet, error) {
+	application.bootstrapRequest = request
+	application.bootstrapRequest.GatewayToken = append([]byte(nil), request.GatewayToken...)
+	return application.plan, nil
+}
+func (application *providerCLIApplication) ApplyControlPlaneBootstrap(_ context.Context, _ string, request app.ControlPlaneBootstrapRequest) error {
+	application.bootstrapRequest = request
+	application.bootstrapRequest.GatewayToken = append([]byte(nil), request.GatewayToken...)
 	application.controlApplyCalls++
 	return nil
 }
@@ -77,5 +90,22 @@ func TestControlPlaneProvisionRequiresExplicitCapacityAndPlan(t *testing.T) {
 	code := Run(context.Background(), args, Dependencies{App: application, Stdout: io.Discard, Stderr: io.Discard})
 	if code != 0 || application.controlApplyCalls != 1 || application.controlLimit != 500 {
 		t.Fatalf("code/application = %d/%#v", code, application)
+	}
+}
+
+func TestControlPlaneProvisionCanBootstrapExistingBackendWithProtectedToken(t *testing.T) {
+	application := &providerCLIApplication{fakeApplication: &fakeApplication{}, plan: install.ChangeSet{PlanID: "plan_control"}}
+	args := []string{
+		"control-plane", "provision", "--dynamic-agent-limit", "500",
+		"--endpoint", "https://memory.example.test", "--service-id", "team-a", "--installation-id", "installation-a", "--owner", "keliang",
+		"--secrets-stdin", "--apply-plan", "plan_control", "--yes",
+	}
+	code := Run(context.Background(), args, Dependencies{
+		App: application, Stdin: strings.NewReader(`{"gateway_token":"existing-gateway"}` + "\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if code != 0 || application.controlApplyCalls != 1 || application.bootstrapRequest.Connection.ProviderConfig["base_url"] != "https://memory.example.test" ||
+		application.bootstrapRequest.Connection.ProviderConfig["service_id"] != "team-a" || application.bootstrapRequest.Connection.TenantID != "installation-a" ||
+		application.bootstrapRequest.OwnerSlug != "keliang" || string(application.bootstrapRequest.GatewayToken) != "existing-gateway" {
+		t.Fatalf("code/bootstrap = %d/%#v", code, application.bootstrapRequest)
 	}
 }

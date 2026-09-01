@@ -55,6 +55,8 @@ type Application interface {
 	ApplyProviderInstall(context.Context, string, lifecycle.BackendInstallRequest) error
 	PlanControlPlaneProvision(context.Context, int) (install.ChangeSet, error)
 	ApplyControlPlaneProvision(context.Context, string, int) error
+	PlanControlPlaneBootstrap(context.Context, app.ControlPlaneBootstrapRequest) (install.ChangeSet, error)
+	ApplyControlPlaneBootstrap(context.Context, string, app.ControlPlaneBootstrapRequest) error
 	PlanPanelRuntime(context.Context) (install.ChangeSet, error)
 	ApplyPanelRuntime(context.Context, string) error
 }
@@ -220,6 +222,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.confirmed = false
 		if value.err == nil {
 			model.wipeLLMKey()
+			model.installBackend = false
 			model.step = StepControlPreview
 			model.busy = true
 			return model, model.controlPlanCommand()
@@ -350,6 +353,14 @@ func (model Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(model.candidates) != 0 {
 				model.identitySelected = model.identityCursor
 			}
+		case "s":
+			model.selected[app.Hermes] = false
+			wipe(model.request.SecretInputs[app.OwnerBindingSecret])
+			delete(model.request.SecretInputs, app.OwnerBindingSecret)
+			model.request.OwnerBindingSlot = config.BindingRef{}
+			model.step = StepCapacity
+			model.capacity.Focus()
+			return model, textinput.Blink
 		case "enter":
 			if model.identitySelected < 0 || model.identitySelected >= len(model.candidates) {
 				model.err = errors.New("select the Feishu identity that belongs to the local owner")
@@ -497,10 +508,14 @@ func (model Model) updateConnection(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (model Model) connectionFields() []textinput.Model {
 	fields := []textinput.Model{model.endpoint, model.token}
-	if model.installBackend {
+	if model.needsLLMCredentials() {
 		fields = append(fields, model.llmBaseURL, model.llmModel, model.llmAPIKey)
 	}
 	return fields
+}
+
+func (model Model) needsLLMCredentials() bool {
+	return model.installBackend && model.backendStatus.State != lifecycle.BackendStopped
 }
 
 func (model *Model) setConnectionField(index int, value textinput.Model) {
@@ -547,7 +562,7 @@ func (model *Model) validateConnectionInputs() error {
 	}
 	model.endpoint.SetValue(endpoint)
 	model.token.SetValue(token)
-	if model.installBackend {
+	if model.needsLLMCredentials() {
 		baseURL, llmModel, apiKey := strings.TrimSpace(model.llmBaseURL.Value()), strings.TrimSpace(model.llmModel.Value()), strings.TrimSpace(model.llmAPIKey.Value())
 		if baseURL == "" || llmModel == "" || apiKey == "" {
 			return errors.New("local MemoryCore install requires the memory LLM base URL, model, and API key")
@@ -606,16 +621,18 @@ func (model Model) backendApplyCommand() tea.Cmd {
 	}
 }
 func (model Model) controlPlanCommand() tea.Cmd {
-	limit := model.dynamicAgentLimit
+	request := model.controlPlaneBootstrapRequest()
 	return func() tea.Msg {
-		plan, err := model.application.PlanControlPlaneProvision(context.Background(), limit)
+		defer request.Wipe()
+		plan, err := model.application.PlanControlPlaneBootstrap(context.Background(), request)
 		return controlPlanMsg{plan, err}
 	}
 }
 func (model Model) controlApplyCommand() tea.Cmd {
-	planID, limit := model.controlPlan.PlanID, model.dynamicAgentLimit
+	planID, request := model.controlPlan.PlanID, model.controlPlaneBootstrapRequest()
 	return func() tea.Msg {
-		return controlApplyMsg{model.application.ApplyControlPlaneProvision(context.Background(), planID, limit)}
+		defer request.Wipe()
+		return controlApplyMsg{model.application.ApplyControlPlaneBootstrap(context.Background(), planID, request)}
 	}
 }
 func (model Model) planCommand() tea.Cmd {
@@ -669,6 +686,14 @@ func (model Model) backendInstallRequest() lifecycle.BackendInstallRequest {
 	return lifecycle.BackendInstallRequest{
 		ProviderID: "dev.mlink.tencentdb", Endpoint: strings.TrimSpace(model.endpoint.Value()), GatewayToken: []byte(strings.TrimSpace(model.token.Value())),
 		LLMBaseURL: strings.TrimSpace(model.llmBaseURL.Value()), LLMModel: strings.TrimSpace(model.llmModel.Value()), LLMAPIKey: []byte(strings.TrimSpace(model.llmAPIKey.Value())),
+	}
+}
+
+func (model Model) controlPlaneBootstrapRequest() app.ControlPlaneBootstrapRequest {
+	connection := cloneRequest(model.request).Connection
+	return app.ControlPlaneBootstrapRequest{
+		Connection: connection, OwnerSlug: model.request.OwnerSlug,
+		GatewayToken: []byte(strings.TrimSpace(model.token.Value())), DynamicAgentLimit: model.dynamicAgentLimit,
 	}
 }
 

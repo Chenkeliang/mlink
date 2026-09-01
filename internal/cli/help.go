@@ -30,6 +30,8 @@ Memory-only connection layer for Codex, Cursor, Pi and Hermes.
 
 Commands:
   install              Preview or apply the guided Agent installation
+  provider             Detect or install a memory backend
+  control-plane        Create permanent Core identity before Agent capture
   adapter              Enable an Agent adapter on an existing installation
   status               Show installed adapters and active connection
   doctor               Run read-only dependency and runtime checks
@@ -67,10 +69,22 @@ All maintenance mutations require an exact Plan ID and --yes.
 Doctor is read-only. It checks identity, runtime, dependencies, Provider,
 Agent adapters, Memory Hub and Journal state.
 `,
+		"provider": `Usage: mlink provider status [--json]
+       mlink provider install tencentdb [options]
+
+Provider install accepts endpoint and memory-LLM settings, reads protected
+gateway/LLM keys with --secrets-stdin, and requires an exact Plan to apply.
+`,
+		"control-plane": `Usage: mlink control-plane provision --dynamic-agent-limit <n> [options]
+
+For an existing backend, also pass --endpoint, --service-id,
+--installation-id, --owner and --secrets-stdin. The protected JSON input is:
+  {"gateway_token":"..."}
+`,
 	}
 	text, exists := sections[strings.TrimSpace(topic)]
 	if !exists {
-		_, _ = fmt.Fprintf(writer, "Usage: mlink help [install|maintenance|doctor]\n")
+		_, _ = fmt.Fprintf(writer, "Usage: mlink help [install|provider|control-plane|maintenance|doctor]\n")
 		return 2
 	}
 	if topic != "" {

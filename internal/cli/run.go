@@ -78,7 +78,7 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 		return runProvider(ctx, args[1:], deps, input)
 	}
 	if len(args) > 0 && args[0] == "control-plane" {
-		return runControlPlane(ctx, args[1:], deps)
+		return runControlPlane(ctx, args[1:], deps, input)
 	}
 	if len(args) > 0 && args[0] == "install" {
 		return runInstall(ctx, args[1:], deps, input)

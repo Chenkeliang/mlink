@@ -89,7 +89,7 @@ func (model Model) stepView(width int) []string {
 	case StepConnection:
 		labels := []string{"MemoryCore endpoint", "Gateway token"}
 		fields := []string{model.endpoint.View(), model.token.View()}
-		if model.installBackend {
+		if model.needsLLMCredentials() {
 			labels = append(labels, "Memory LLM base URL", "Memory LLM model", "Memory LLM API key")
 			fields = append(fields, model.llmBaseURL.View(), model.llmModel.View(), model.llmAPIKey.View())
 		}
@@ -118,6 +118,7 @@ func (model Model) stepView(width int) []string {
 			}
 			lines = append(lines, cursor+fmt.Sprintf("%s %s · %s · …%s", selected, candidate.DisplayName, candidate.Kind, candidate.Suffix))
 		}
+		lines = append(lines, model.mutedStyle().Render("s  Continue without Feishu (Hermes will be disabled)"))
 		return lines
 	case StepCapacity:
 		return []string{
@@ -231,7 +232,7 @@ func (model Model) footer() string {
 	case StepBackendMode, StepPanelMode:
 		return "↑/↓ move · Enter select · q quit"
 	case StepIdentity:
-		return "↑/↓ move · Space select · Enter continue · q quit"
+		return "↑/↓ move · Space select · Enter continue · s skip Hermes · q quit"
 	case StepAgents:
 		return "↑/↓ move · Space toggle · Enter preview · q quit"
 	case StepApply:

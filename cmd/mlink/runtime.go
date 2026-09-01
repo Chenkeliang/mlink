@@ -60,6 +60,18 @@ type runtimeApplication struct {
 
 type previewLedger struct{}
 
+type missingControlPlaneStore struct{}
+
+func (missingControlPlaneStore) SaveControlPlane(context.Context, journal.ControlPlaneState) error {
+	return errors.New("preview control-plane state is read-only")
+}
+func (missingControlPlaneStore) LoadControlPlane(context.Context) (journal.ControlPlaneState, error) {
+	return journal.ControlPlaneState{}, fs.ErrNotExist
+}
+func (missingControlPlaneStore) MarkControlPlaneState(context.Context, string) error {
+	return errors.New("preview control-plane state is read-only")
+}
+
 type maintenanceRestarter struct {
 	target install.Target
 	uid    int
@@ -271,7 +283,7 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 		return err
 	}
 	defer journalStore.Close()
-	keychain := secret.Keychain{}
+	keychain := runtime.secretStore()
 	router, grants, hermesEnabled, err := runtimeRouter(ctx, configuration, keychain)
 	if err != nil {
 		return err
@@ -568,7 +580,14 @@ func (runtime *runtimeApplication) providerConnection() config.Connection {
 }
 
 func (runtime *runtimeApplication) PlanControlPlaneProvision(ctx context.Context, limit int) (install.ChangeSet, error) {
-	service, closeService, err := runtime.headlessControlService(ctx, false, limit)
+	request := defaultInstallRequest()
+	return runtime.PlanControlPlaneBootstrap(ctx, app.ControlPlaneBootstrapRequest{
+		Connection: request.Connection, OwnerSlug: request.OwnerSlug, DynamicAgentLimit: limit,
+	})
+}
+
+func (runtime *runtimeApplication) PlanControlPlaneBootstrap(ctx context.Context, request app.ControlPlaneBootstrapRequest) (install.ChangeSet, error) {
+	service, closeService, err := runtime.headlessControlService(ctx, false, request)
 	if err != nil {
 		return install.ChangeSet{}, err
 	}
@@ -577,47 +596,120 @@ func (runtime *runtimeApplication) PlanControlPlaneProvision(ctx context.Context
 }
 
 func (runtime *runtimeApplication) ApplyControlPlaneProvision(ctx context.Context, planID string, limit int) error {
-	service, closeService, err := runtime.headlessControlService(ctx, true, limit)
+	request := defaultInstallRequest()
+	account := "connection/" + request.Connection.ID + "/token"
+	token, err := runtime.secretStore().Get(ctx, account)
 	if err != nil {
 		return err
 	}
-	defer closeService()
-	return service.ApplyControlPlaneProvision(ctx, planID)
+	defer wipeRuntimeSecret(token)
+	return runtime.ApplyControlPlaneBootstrap(ctx, planID, app.ControlPlaneBootstrapRequest{
+		Connection: request.Connection, OwnerSlug: request.OwnerSlug, GatewayToken: token, DynamicAgentLimit: limit,
+	})
 }
 
-func (runtime *runtimeApplication) headlessControlService(ctx context.Context, writable bool, limit int) (*app.Service, func(), error) {
-	var store *journal.Store
-	var err error
-	if writable {
-		store, _, err = runtime.openLedger(ctx)
-	} else {
-		store, err = journal.OpenReadOnly(ctx, runtime.paths.Journal)
+func (runtime *runtimeApplication) ApplyControlPlaneBootstrap(ctx context.Context, planID string, request app.ControlPlaneBootstrapRequest) error {
+	if len(request.GatewayToken) == 0 || len(request.GatewayToken) > 16<<10 || bytes.ContainsAny(request.GatewayToken, "\r\n\x00") {
+		return errors.New("protected MemoryCore gateway token is required")
 	}
+	preview, err := runtime.PlanControlPlaneBootstrap(ctx, request)
 	if err != nil {
+		return err
+	}
+	if preview.PlanID != planID {
+		return fmt.Errorf("%w: control-plane bootstrap changed after preview", install.ErrPlanStale)
+	}
+	keychain := runtime.secretStore()
+	account := "connection/" + request.Connection.ID + "/token"
+	previous, previousErr := keychain.Get(ctx, account)
+	if previousErr != nil && !errors.Is(previousErr, fs.ErrNotExist) {
+		return previousErr
+	}
+	defer wipeRuntimeSecret(previous)
+	if err := keychain.Put(ctx, account, request.GatewayToken); err != nil {
+		return err
+	}
+	restore := func() error {
+		if previousErr == nil {
+			return keychain.Put(context.Background(), account, previous)
+		}
+		return keychain.Delete(context.Background(), account)
+	}
+	service, closeService, err := runtime.headlessControlService(ctx, true, request)
+	if err != nil {
+		return errors.Join(err, restore())
+	}
+	defer closeService()
+	if err := service.ApplyControlPlaneProvision(ctx, planID); err != nil {
+		return errors.Join(err, restore())
+	}
+	return nil
+}
+
+func (runtime *runtimeApplication) headlessControlService(ctx context.Context, writable bool, bootstrap app.ControlPlaneBootstrapRequest) (*app.Service, func(), error) {
+	var provisionStates controlplane.StateStore
+	var controlStates app.ControlPlaneStateStore
+	closeService := func() {}
+	if writable {
+		store, _, err := runtime.openLedger(ctx)
+		if err != nil {
+			return nil, closeService, err
+		}
+		provisionStates, controlStates = store, store
+		closeService = func() { _ = store.Close() }
+	} else {
+		store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+		if errors.Is(err, fs.ErrNotExist) {
+			missing := missingControlPlaneStore{}
+			provisionStates, controlStates = missing, missing
+		} else if err != nil {
+			return nil, closeService, err
+		} else {
+			provisionStates, controlStates = store, store
+			closeService = func() { _ = store.Close() }
+		}
+	}
+	connection := bootstrap.Connection
+	baseURL, baseOK := connection.ProviderConfig["base_url"].(string)
+	instanceID, instanceOK := connection.ProviderConfig["service_id"].(string)
+	if connection.ID == "" || connection.ProviderID != "dev.mlink.tencentdb" || !baseOK || strings.TrimSpace(baseURL) == "" || !instanceOK || strings.TrimSpace(instanceID) == "" || bootstrap.DynamicAgentLimit <= 0 || bootstrap.DynamicAgentLimit > 10_000 {
+		closeService()
+		return nil, func() {}, errors.New("complete MemoryCore control-plane bootstrap request is required")
+	}
+	if _, err := tencentdb.ValidateDeploymentEndpoint(baseURL); err != nil {
+		closeService()
 		return nil, func() {}, err
 	}
-	closeService := func() { _ = store.Close() }
-	request := defaultInstallRequest()
-	connection := request.Connection
 	connection.SecretRefs = map[string]string{"token": "keychain://dev.mlink/connection/" + connection.ID + "/token"}
 	configuration := config.Config{ActiveConnectionID: connection.ID, Connections: map[string]config.Connection{connection.ID: connection}}
 	var metadata tencentdb.MetadataClient
 	if writable {
-		client, clientErr := runtimeTencentClient(ctx, configuration, secret.Keychain{})
+		client, clientErr := runtimeTencentClient(ctx, configuration, runtime.secretStore())
 		if clientErr != nil {
 			closeService()
 			return nil, func() {}, clientErr
 		}
 		metadata = tencentdb.NewMetadataClient(client)
 	}
-	controlService := &controlplane.Service{Metadata: metadata, Secrets: secret.Keychain{}, States: store}
+	controlService := &controlplane.Service{Metadata: metadata, Secrets: runtime.secretStore(), States: provisionStates}
+	installationID := strings.TrimSpace(connection.TenantID)
+	if installationID == "" {
+		installationID = "personal"
+	}
 	return &app.Service{
-		ControlProvisioner: controlService, ControlPlaneStates: store, Secrets: secret.Keychain{},
+		ControlProvisioner: controlService, ControlPlaneStates: controlStates, Secrets: runtime.secretStore(),
 		ControlRequest: controlplane.ProvisionRequest{
-			InstallationID: request.Connection.TenantID, InstanceID: "default", AdminUsername: "mlink-admin",
-			OwnerUsername: sanitizeStableID(request.OwnerSlug), TeamName: "MLink", OwnerAgentName: "MLink Owner", DynamicAgentLimit: limit,
+			InstallationID: installationID, InstanceID: instanceID, ConnectionID: connection.ID, ProviderEndpoint: baseURL, AdminUsername: "mlink-admin",
+			OwnerUsername: sanitizeStableID(bootstrap.OwnerSlug), TeamName: "MLink", OwnerAgentName: "MLink Owner", DynamicAgentLimit: bootstrap.DynamicAgentLimit,
 		},
 	}, closeService, nil
+}
+
+func (runtime *runtimeApplication) secretStore() secret.Store {
+	if runtime.baseService.Secrets != nil {
+		return runtime.baseService.Secrets
+	}
+	return secret.Keychain{}
 }
 
 func (runtime *runtimeApplication) PlanInstall(ctx context.Context, request app.InstallRequest) (install.ChangeSet, error) {
@@ -625,6 +717,15 @@ func (runtime *runtimeApplication) PlanInstall(ctx context.Context, request app.
 	if err != nil {
 		return install.ChangeSet{}, err
 	}
+	states, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if errors.Is(err, fs.ErrNotExist) {
+		return install.ChangeSet{}, errors.New("fresh install requires provisioned Core identity")
+	}
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer states.Close()
+	service.ControlPlaneStates = states
 	return service.PlanInstall(ctx, request)
 }
 
@@ -633,7 +734,16 @@ func (runtime *runtimeApplication) ApplyInstall(ctx context.Context, planID stri
 	if err != nil {
 		return err
 	}
+	previewStates, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if errors.Is(err, fs.ErrNotExist) {
+		return errors.New("fresh install requires provisioned Core identity")
+	}
+	if err != nil {
+		return err
+	}
+	previewService.ControlPlaneStates = previewStates
 	preview, err := previewService.PlanInstall(ctx, preparedRequest)
+	_ = previewStates.Close()
 	if err != nil {
 		return err
 	}
@@ -650,6 +760,7 @@ func (runtime *runtimeApplication) ApplyInstall(ctx context.Context, planID stri
 		return err
 	}
 	service.BlockingEvents = store
+	service.ControlPlaneStates = store
 	return service.ApplyInstall(ctx, planID, request)
 }
 
@@ -871,9 +982,14 @@ func (runtime *runtimeApplication) controlPanelService(ctx context.Context, writ
 			desired.InstanceID = instanceID
 		}
 	}
+	dynamicAgentLimit := 500
+	if configuration.ControlPlane != nil && configuration.ControlPlane.DynamicAgentLimit > 0 {
+		dynamicAgentLimit = configuration.ControlPlane.DynamicAgentLimit
+	}
 	provisionRequest := controlplane.ProvisionRequest{
 		InstallationID: configuration.NamespaceID, InstanceID: desired.InstanceID,
 		AdminUsername: "mlink-admin", OwnerUsername: sanitizeStableID(ownerName), TeamName: "MLink", OwnerAgentName: "MLink Owner",
+		DynamicAgentLimit: dynamicAgentLimit,
 	}
 	controlService := &controlplane.Service{Metadata: metadata, Secrets: keychain, States: store}
 	panelRuntime := &panel.Runtime{Runner: localTarget, Target: localTarget}
@@ -889,7 +1005,7 @@ func runtimeTencentClient(ctx context.Context, configuration config.Config, secr
 	connectionConfig := configuration.Connections[configuration.ActiveConnectionID]
 	baseURL, baseOK := connectionConfig.ProviderConfig["base_url"].(string)
 	serviceID, serviceOK := connectionConfig.ProviderConfig["service_id"].(string)
-	if !baseOK || !serviceOK || baseURL != "http://127.0.0.1:8420" {
+	if !baseOK || !serviceOK || strings.TrimSpace(baseURL) == "" || strings.TrimSpace(serviceID) == "" {
 		return nil, errors.New("TencentDB connection configuration is invalid")
 	}
 	const prefix = "keychain://dev.mlink/"

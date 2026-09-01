@@ -40,6 +40,9 @@ func (service Service) PlanProvision(ctx context.Context, request ProvisionReque
 		if state.InstallationID != request.InstallationID || state.InstanceID != request.InstanceID {
 			return install.ChangeSet{}, errors.New("existing control plane belongs to another installation")
 		}
+		if state.DynamicAgentLimit != request.DynamicAgentLimit {
+			return install.ChangeSet{}, errors.New("requested dynamic Agent capacity differs from the existing Core identity")
+		}
 		mode = "reuse"
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return install.ChangeSet{}, err
@@ -71,6 +74,9 @@ func (service Service) ApplyProvision(ctx context.Context, planID string, reques
 		return ProvisionResult{}, fmt.Errorf("%w: control-plane plan changed", install.ErrPlanStale)
 	}
 	if state, err := service.States.LoadControlPlane(ctx); err == nil {
+		if err := service.verifyExistingControlPlane(ctx, state); err != nil {
+			return ProvisionResult{}, err
+		}
 		return resultFromState(planID, state), nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return ProvisionResult{}, err
@@ -119,6 +125,45 @@ func (service Service) ApplyProvision(ctx context.Context, planID string, reques
 		return ProvisionResult{}, fmt.Errorf("save provisioned control plane: %w", err)
 	}
 	return resultFromState(planID, state), nil
+}
+
+func (service Service) verifyExistingControlPlane(ctx context.Context, state journal.ControlPlaneState) error {
+	ownerKey, err := service.Secrets.Get(ctx, OwnerUserKeyAccount)
+	if err != nil {
+		return errors.New("load existing Core Owner credential")
+	}
+	defer wipe(ownerKey)
+	owner, err := service.Metadata.VerifyUser(ctx, ownerKey)
+	if err != nil || owner.UserID != state.OwnerUserID || owner.UserType != "normal" {
+		return errors.New("existing Core identity does not belong to this backend")
+	}
+	teams, err := service.Metadata.ListTeams(ctx, ownerKey, tencentdb.ListTeamsRequest{UserID: state.OwnerUserID, Limit: 100})
+	if err != nil {
+		return errors.New("verify existing Core Team")
+	}
+	teamFound := false
+	for _, team := range teams {
+		teamFound = teamFound || team.TeamID == state.OwnerTeamID && team.OwnerUserID == state.OwnerUserID
+	}
+	if !teamFound {
+		return errors.New("existing Core identity Team is missing from this backend")
+	}
+	agents, err := service.Metadata.ListAgents(ctx, ownerKey, tencentdb.ListAgentsRequest{TeamID: state.OwnerTeamID, OwnerUserID: state.OwnerUserID, Limit: 100})
+	if err != nil {
+		return errors.New("verify existing Core Agent")
+	}
+	agentFound := false
+	for _, agent := range agents {
+		agentFound = agentFound || agent.AgentID == state.OwnerAgentID && agent.TeamID == state.OwnerTeamID && agent.OwnerUserID == state.OwnerUserID
+	}
+	if !agentFound {
+		return errors.New("existing Core identity Agent is missing from this backend")
+	}
+	asset, err := service.Metadata.GetAsset(ctx, ownerKey, state.OwnerAssetID)
+	if err != nil || asset.AssetID != state.OwnerAssetID || asset.TeamID != state.OwnerTeamID || asset.OwnerUserID != state.OwnerUserID || asset.AssetType != "chat_memory" {
+		return errors.New("existing Core identity Asset is missing from this backend")
+	}
+	return nil
 }
 
 func (service Service) ensureAdmin(ctx context.Context, request ProvisionRequest) (tencentdb.User, []byte, error) {
@@ -238,12 +283,14 @@ func provisionIntent(request ProvisionRequest, mode, suffix, before, after strin
 	intent, _ := json.Marshal(struct {
 		InstallationID    string `json:"installation_id"`
 		InstanceID        string `json:"instance_id"`
+		ConnectionID      string `json:"connection_id"`
+		ProviderEndpoint  string `json:"provider_endpoint"`
 		AdminUsername     string `json:"admin_username"`
 		OwnerUsername     string `json:"owner_username"`
 		TeamName          string `json:"team_name"`
 		OwnerAgentName    string `json:"owner_agent_name"`
 		DynamicAgentLimit int    `json:"dynamic_agent_limit"`
-	}{request.InstallationID, request.InstanceID, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName, request.DynamicAgentLimit})
+	}{request.InstallationID, request.InstanceID, request.ConnectionID, request.ProviderEndpoint, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName, request.DynamicAgentLimit})
 	return install.DesiredResource{
 		OwnerID: "dev.mlink.control-plane", Target: "remote:tencentdb:" + request.InstanceID + ":" + mode + ":" + suffix,
 		Action: install.ActionService, Command: []string{"mlink-internal", "provision-control-plane", suffix},
@@ -253,6 +300,12 @@ func provisionIntent(request ProvisionRequest, mode, suffix, before, after strin
 }
 
 func normalizeProvisionRequest(request ProvisionRequest) ProvisionRequest {
+	if request.ConnectionID == "" {
+		request.ConnectionID = "local"
+	}
+	if request.ProviderEndpoint == "" {
+		request.ProviderEndpoint = "http://127.0.0.1:8420"
+	}
 	if request.DynamicAgentLimit == 0 {
 		request.DynamicAgentLimit = 500
 	}
@@ -267,7 +320,7 @@ func validateProvisionRequest(request ProvisionRequest) error {
 	if request.DynamicAgentLimit <= 0 || request.DynamicAgentLimit > 10_000 {
 		return errors.New("dynamic Agent limit must be between 1 and 10000")
 	}
-	for _, value := range []string{request.InstallationID, request.InstanceID, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName} {
+	for _, value := range []string{request.InstallationID, request.InstanceID, request.ConnectionID, request.ProviderEndpoint, request.AdminUsername, request.OwnerUsername, request.TeamName, request.OwnerAgentName} {
 		if strings.TrimSpace(value) == "" || len(value) > 128 {
 			return errors.New("complete bounded control-plane provisioning request is required")
 		}

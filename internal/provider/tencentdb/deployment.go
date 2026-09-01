@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -147,6 +148,11 @@ func deploymentEndpoint(raw string) (*url.URL, bool, error) {
 	return parsed, local, nil
 }
 
+func ValidateDeploymentEndpoint(raw string) (bool, error) {
+	_, local, err := deploymentEndpoint(raw)
+	return local, err
+}
+
 func (deployment Deployment) health(ctx context.Context, endpoint string) (string, bool, error) {
 	client := deployment.HTTPClient
 	if client == nil {
@@ -232,11 +238,27 @@ func (value coreInspect) compatible(layout DeploymentLayout) bool {
 }
 
 func (deployment Deployment) PlanInstall(ctx context.Context, request lifecycle.BackendInstallRequest) (install.ChangeSet, error) {
-	if err := deployment.validateInstallRequest(request); err != nil {
+	if err := deployment.validateRuntimeRequest(request); err != nil {
 		return install.ChangeSet{}, err
 	}
-	if _, err := deployment.inspect(ctx); err == nil {
-		return install.ChangeSet{}, errors.New("MemoryCore container already exists")
+	layout := deployment.resolvedLayout()
+	if inspected, err := deployment.inspect(ctx); err == nil {
+		if !inspected.compatible(layout) {
+			return install.ChangeSet{}, errors.New("MLink refuses to replace an unowned or drifted MemoryCore container")
+		}
+		switch inspected.State.Status {
+		case "exited", "created", "paused":
+			return install.BuildChangeSet(deployment.Target, []install.DesiredResource{{
+				OwnerID: "dev.mlink.memorycore.container", Target: "service:start:" + layout.ContainerName, Action: install.ActionService,
+				Command: []string{"docker", "start", layout.ContainerName}, RollbackCommand: []string{"docker", "stop", layout.ContainerName},
+				SemanticDiff: []install.SemanticDiff{{Path: "memorycore.container", Before: inspected.State.Status, After: "running; existing runtime credentials preserved"}},
+			}})
+		default:
+			return install.ChangeSet{}, errors.New("MemoryCore container already exists")
+		}
+	}
+	if err := deployment.validateInstallRequest(request); err != nil {
+		return install.ChangeSet{}, err
 	}
 	configData, err := renderGatewayConfig(request)
 	if err != nil {
@@ -251,7 +273,6 @@ func (deployment Deployment) PlanInstall(ctx context.Context, request lifecycle.
 		Command:      []string{"docker", "pull", MemoryCoreImageReference},
 		SemanticDiff: []install.SemanticDiff{{Path: "memorycore.image", Before: "absent or cached", After: MemoryCoreImageReference}},
 	})
-	layout := deployment.resolvedLayout()
 	if !deployment.dockerObjectExists(ctx, "network", layout.NetworkName) {
 		resources = append(resources, install.DesiredResource{
 			OwnerID: "dev.mlink.memorycore.network", Target: "service:docker-network:" + layout.NetworkName, Action: install.ActionService,
@@ -300,6 +321,17 @@ func (deployment Deployment) ApplyInstall(ctx context.Context, planID string, re
 	if plan.PlanID != planID {
 		return fmt.Errorf("%w: MemoryCore install changed after preview", install.ErrPlanStale)
 	}
+	if deployment.isRestartPlan(plan) {
+		transaction := install.NewTransaction(deployment.Target, deployment.Ledger)
+		applied, err := transaction.ApplyDeferredOwnership(ctx, plan)
+		if err != nil {
+			return err
+		}
+		if err := deployment.waitHealthy(ctx, request.Endpoint); err != nil {
+			return errors.Join(err, transaction.Rollback(ctx, plan))
+		}
+		return transaction.RecordOwnership(ctx, applied)
+	}
 	previous, err := deployment.putInstallSecrets(ctx, request)
 	if err != nil {
 		return err
@@ -331,6 +363,11 @@ func (deployment Deployment) ApplyInstall(ctx context.Context, planID string, re
 	return nil
 }
 
+func (deployment Deployment) isRestartPlan(plan install.ChangeSet) bool {
+	return len(plan.Operations) == 1 && plan.Operations[0].Target == "service:start:"+deployment.resolvedLayout().ContainerName &&
+		len(plan.Operations[0].Command) == 3 && plan.Operations[0].Command[0] == "docker" && plan.Operations[0].Command[1] == "start"
+}
+
 // PlanUninstall removes only the MLink-owned runtime and configuration. The
 // persistent MemoryCore volume is deliberately outside the ordinary uninstall
 // ChangeSet so memory data survives reinstall and upgrades.
@@ -340,6 +377,9 @@ func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeS
 		return install.ChangeSet{}, err
 	}
 	inspected, inspectErr := deployment.inspect(ctx)
+	if inspectErr != nil && !dockerObjectNotFound(inspectErr) {
+		return install.ChangeSet{}, errors.New("verify MemoryCore container ownership before uninstall")
+	}
 	if inspectErr == nil && !inspected.compatible(layout) {
 		return install.ChangeSet{}, errors.New("MLink refuses to remove an unowned or drifted MemoryCore container")
 	}
@@ -360,24 +400,49 @@ func (deployment Deployment) PlanUninstall(ctx context.Context) (install.ChangeS
 	return install.BuildChangeSet(deployment.Target, resources)
 }
 
+func dockerObjectNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		message += " " + strings.ToLower(string(exitErr.Stderr))
+	}
+	return strings.Contains(message, "not found") || strings.Contains(message, "no such object") || strings.Contains(message, "no such container")
+}
+
 func (deployment Deployment) validateInstallRequest(request lifecycle.BackendInstallRequest) error {
+	if err := deployment.validateRuntimeRequest(request); err != nil {
+		return err
+	}
+	if deployment.Secrets == nil || !filepath.IsAbs(deployment.ConfigPath) || !filepath.IsAbs(deployment.EnvPath) {
+		return errors.New("MemoryCore install target, ledger, Keychain, and absolute paths are required")
+	}
+	if err := validateLLMEndpoint(request.LLMBaseURL); err != nil {
+		return errors.New("valid HTTPS or loopback memory LLM endpoint is required")
+	}
+	if strings.TrimSpace(request.LLMModel) == "" || len(request.GatewayToken) < 16 || len(request.LLMAPIKey) == 0 || len(request.GatewayToken) > 16<<10 || len(request.LLMAPIKey) > 16<<10 || bytes.ContainsAny(request.GatewayToken, "\r\n\x00") || bytes.ContainsAny(request.LLMAPIKey, "\r\n\x00") {
+		return errors.New("valid protected MemoryCore and memory LLM inputs are required")
+	}
+	return nil
+}
+
+func (deployment Deployment) validateRuntimeRequest(request lifecycle.BackendInstallRequest) error {
 	layout := deployment.resolvedLayout()
 	if err := layout.validate(); err != nil {
 		return err
 	}
-	if deployment.Target == nil || deployment.Ledger == nil || deployment.Secrets == nil || !filepath.IsAbs(deployment.ConfigPath) || !filepath.IsAbs(deployment.EnvPath) {
-		return errors.New("MemoryCore install target, ledger, Keychain, and absolute paths are required")
+	if deployment.Target == nil || deployment.Ledger == nil {
+		return errors.New("MemoryCore install target and ledger are required")
 	}
 	endpoint, local, err := deploymentEndpoint(request.Endpoint)
 	expectedEndpoint := fmt.Sprintf("http://%s:%d", layout.HostAddress, layout.HostPort)
 	if err != nil || !local || strings.TrimRight(endpoint.String(), "/") != expectedEndpoint {
 		return fmt.Errorf("official local MemoryCore install requires %s", expectedEndpoint)
 	}
-	if err := validateLLMEndpoint(request.LLMBaseURL); err != nil {
-		return errors.New("valid HTTPS or loopback memory LLM endpoint is required")
-	}
-	if request.ProviderID != providerID || strings.TrimSpace(request.LLMModel) == "" || len(request.GatewayToken) < 16 || len(request.LLMAPIKey) == 0 || len(request.GatewayToken) > 16<<10 || len(request.LLMAPIKey) > 16<<10 || bytes.ContainsAny(request.GatewayToken, "\r\n\x00") || bytes.ContainsAny(request.LLMAPIKey, "\r\n\x00") {
-		return errors.New("valid protected MemoryCore and memory LLM inputs are required")
+	if request.ProviderID != providerID {
+		return errors.New("TencentDB MemoryCore provider identity is required")
 	}
 	return nil
 }

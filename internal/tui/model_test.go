@@ -33,6 +33,7 @@ type fakeApplication struct {
 	controlPlan      install.ChangeSet
 	controlApplies   int
 	controlLimit     int
+	bootstrapRequest app.ControlPlaneBootstrapRequest
 	panelStatus      app.PanelControlStatus
 }
 
@@ -85,6 +86,16 @@ func (application *fakeApplication) ApplyControlPlaneProvision(_ context.Context
 	application.controlLimit, application.controlApplies = limit, application.controlApplies+1
 	return nil
 }
+func (application *fakeApplication) PlanControlPlaneBootstrap(_ context.Context, request app.ControlPlaneBootstrapRequest) (install.ChangeSet, error) {
+	application.bootstrapRequest = request
+	application.bootstrapRequest.GatewayToken = append([]byte(nil), request.GatewayToken...)
+	return application.PlanControlPlaneProvision(context.Background(), request.DynamicAgentLimit)
+}
+func (application *fakeApplication) ApplyControlPlaneBootstrap(_ context.Context, _ string, request app.ControlPlaneBootstrapRequest) error {
+	application.bootstrapRequest = request
+	application.bootstrapRequest.GatewayToken = append([]byte(nil), request.GatewayToken...)
+	return application.ApplyControlPlaneProvision(context.Background(), "", request.DynamicAgentLimit)
+}
 func (application *fakeApplication) PlanPanelRuntime(context.Context) (install.ChangeSet, error) {
 	if application.panelPlan.PlanID != "" {
 		return application.panelPlan, nil
@@ -136,6 +147,18 @@ func TestWizardStoppedBackendOffersSetupAndCanConnectExisting(t *testing.T) {
 	}
 }
 
+func TestWizardStoppedOwnedBackendRestartDoesNotRequestLLMCredentials(t *testing.T) {
+	application := &fakeApplication{providerStatus: lifecycle.BackendStatus{ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendStopped, Installed: true}}
+	model := New(application, fixtureRequest())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	model = advance(t, model, enterKey())
+	if model.step != StepConnection || !model.installBackend || len(model.connectionFields()) != 2 {
+		t.Fatalf("restart inputs = step:%d install:%t fields:%d", model.step, model.installBackend, len(model.connectionFields()))
+	}
+}
+
 func TestWizardIncompatibleBackendFailsClosedBeforeCredentials(t *testing.T) {
 	application := &fakeApplication{providerStatus: lifecycle.BackendStatus{ProviderID: "dev.mlink.tencentdb", State: lifecycle.BackendIncompatible}}
 	model := New(application, fixtureRequest())
@@ -174,8 +197,9 @@ func TestWizardCreatesCoreIdentityBeforeAnyAgentInstallPlan(t *testing.T) {
 	application := &fakeApplication{plan: install.ChangeSet{PlanID: "plan_install"}, controlPlan: install.ChangeSet{PlanID: "plan_control"}}
 	model := connectedIdentityModel(application)
 	model = selectIdentityAndCapacity(t, model, "777")
-	if model.step != StepControlPreview || application.planCalls != 0 || application.controlLimit != 777 {
-		t.Fatalf("before control apply = step:%d plan:%d limit:%d", model.step, application.planCalls, application.controlLimit)
+	if model.step != StepControlPreview || application.planCalls != 0 || application.controlLimit != 777 ||
+		application.bootstrapRequest.Connection.ProviderConfig["base_url"] != "http://127.0.0.1:8420" || string(application.bootstrapRequest.GatewayToken) != "memorycore-token" {
+		t.Fatalf("before control apply = step:%d plan:%d limit:%d request:%#v", model.step, application.planCalls, application.controlLimit, application.bootstrapRequest)
 	}
 	model = advance(t, model, enterKey())
 	model = advance(t, model, runeKey('y'))
@@ -193,6 +217,7 @@ func TestWizardBackendApplyResumesAtCoreIdentityAndKeepsFailureRetryable(t *test
 	application := &fakeApplication{controlPlan: install.ChangeSet{PlanID: "plan_control"}}
 	model := New(application, fixtureRequest())
 	model.step, model.backendPlan, model.confirmed = StepBackendApply, install.ChangeSet{PlanID: "plan_backend"}, true
+	model.installBackend = true
 	model.dynamicAgentLimit = 500
 	model.endpoint.SetValue("http://127.0.0.1:8420")
 	model.token.SetValue("gateway-token-long")
@@ -200,8 +225,8 @@ func TestWizardBackendApplyResumesAtCoreIdentityAndKeepsFailureRetryable(t *test
 	model.llmModel.SetValue("model")
 	model.llmAPIKey.SetValue("key")
 	model = advance(t, model, enterKey())
-	if model.step != StepControlPreview || application.providerApplies != 1 || model.llmAPIKey.Value() != "" {
-		t.Fatalf("backend resume = step:%d applies:%d llm-key:%q", model.step, application.providerApplies, model.llmAPIKey.Value())
+	if model.step != StepControlPreview || application.providerApplies != 1 || model.llmAPIKey.Value() != "" || model.installBackend {
+		t.Fatalf("backend resume = step:%d applies:%d llm-key:%q install:%t", model.step, application.providerApplies, model.llmAPIKey.Value(), model.installBackend)
 	}
 
 	application.providerApplyErr = errors.New("docker unavailable")
@@ -242,6 +267,18 @@ func TestWizardRequiresExplicitOwnerSelection(t *testing.T) {
 	model = advance(t, model, enterKey())
 	if model.step != StepCapacity || model.request.OwnerBindingSlot.ID != "owner-feishu-union-1" || string(model.request.SecretInputs[app.OwnerBindingSecret]) != "on_owner" {
 		t.Fatalf("selection = step:%d request:%#v", model.step, model.request)
+	}
+}
+
+func TestWizardCanContinueWithoutHermesOrFeishuIdentity(t *testing.T) {
+	application := &fakeApplication{candidates: []identity.Candidate{}}
+	model := New(application, fixtureRequest())
+	model.step = StepIdentity
+	model.candidates = []identity.Candidate{}
+	model.err = errors.New("no Hermes Feishu identity candidates were detected")
+	model = advance(t, model, runeKey('s'))
+	if model.step != StepCapacity || model.selected[app.Hermes] || model.request.OwnerBindingSlot.ID != "" {
+		t.Fatalf("local-only identity = step:%d hermes:%t binding:%#v", model.step, model.selected[app.Hermes], model.request.OwnerBindingSlot)
 	}
 }
 
