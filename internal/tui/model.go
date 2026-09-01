@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -106,12 +107,12 @@ type Model struct {
 	welcomeCursor      int
 	restoreCursor      int
 	restoreBundle      textinput.Model
-	restorePassphrase  textinput.Model
+	restorePassphrase  protectedInput
 	restorePlan        install.ChangeSet
 	backupCursor       int
 	backupOutput       textinput.Model
-	backupPassphrase   textinput.Model
-	backupConfirmation textinput.Model
+	backupPassphrase   protectedInput
+	backupConfirmation protectedInput
 	backupPlan         install.ChangeSet
 	credentialStatuses []app.CredentialStatus
 	credentialCursor   int
@@ -213,13 +214,13 @@ func New(application Application, request app.InstallRequest) Model {
 	restoreBundle.Placeholder = "/absolute/path/workspace.mlink-backup"
 	restoreBundle.Prompt = "> "
 	restoreBundle.CharLimit = 4096
-	restorePassphrase := passwordInput("Backup passphrase")
+	restorePassphrase := newProtectedInput("Backup passphrase", 4096)
 	backupOutput := textinput.New()
 	backupOutput.Placeholder = "/absolute/path/workspace.mlink-backup"
 	backupOutput.Prompt = "> "
 	backupOutput.CharLimit = 4096
-	backupPassphrase := passwordInput("New backup passphrase")
-	backupConfirmation := passwordInput("Repeat backup passphrase")
+	backupPassphrase := newProtectedInput("New backup passphrase", 4096)
+	backupConfirmation := newProtectedInput("Repeat backup passphrase", 4096)
 	return Model{
 		application: application, request: cloneRequest(request), width: 100, height: 30,
 		selected: map[app.Agent]bool{app.Codex: true, app.Pi: true, app.Hermes: true, app.Cursor: true},
@@ -682,7 +683,7 @@ func (model Model) updateBackupInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.backupCursor++
 			return model, model.focusBackupField()
 		}
-		if !filepath.IsAbs(strings.TrimSpace(model.backupOutput.Value())) || len(model.backupPassphrase.Value()) < 12 || model.backupPassphrase.Value() != model.backupConfirmation.Value() {
+		if !filepath.IsAbs(strings.TrimSpace(model.backupOutput.Value())) || model.backupPassphrase.Len() < 12 || !bytes.Equal(model.backupPassphrase.value, model.backupConfirmation.value) {
 			model.err = errors.New("enter an absolute output path and two matching passphrases of at least 12 bytes")
 			return model, nil
 		}
@@ -737,7 +738,7 @@ func (model Model) updateRestoreInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.restoreCursor = 1
 			return model, model.focusRestoreField()
 		}
-		if !filepath.IsAbs(strings.TrimSpace(model.restoreBundle.Value())) || len(model.restorePassphrase.Value()) < 12 {
+		if !filepath.IsAbs(strings.TrimSpace(model.restoreBundle.Value())) || model.restorePassphrase.Len() < 12 {
 			model.err = errors.New("enter an absolute backup path and a passphrase of at least 12 bytes")
 			return model, nil
 		}
@@ -976,7 +977,7 @@ func (model Model) panelStatusCommand() tea.Cmd {
 
 func (model Model) workspaceRestoreRequest() app.WorkspaceRestoreRequest {
 	return app.WorkspaceRestoreRequest{
-		BundlePath: strings.TrimSpace(model.restoreBundle.Value()), Passphrase: []byte(model.restorePassphrase.Value()), SelectedAgents: model.selectedAgents(),
+		BundlePath: strings.TrimSpace(model.restoreBundle.Value()), Passphrase: model.restorePassphrase.Bytes(),
 	}
 }
 
@@ -998,7 +999,7 @@ func (model Model) restoreApplyCommand() tea.Cmd {
 }
 
 func (model Model) workspaceBackupRequest() app.WorkspaceBackupRequest {
-	return app.WorkspaceBackupRequest{OutputPath: strings.TrimSpace(model.backupOutput.Value()), Passphrase: []byte(model.backupPassphrase.Value())}
+	return app.WorkspaceBackupRequest{OutputPath: strings.TrimSpace(model.backupOutput.Value()), Passphrase: model.backupPassphrase.Bytes()}
 }
 
 func (model Model) backupPlanCommand() tea.Cmd {
@@ -1085,17 +1086,13 @@ func (model *Model) wipeSecrets() {
 }
 
 func (model *Model) wipeBackupPassphrases() {
-	for _, input := range []*textinput.Model{&model.backupPassphrase, &model.backupConfirmation} {
-		value := []byte(input.Value())
-		wipe(value)
-		input.SetValue("")
+	for _, input := range []*protectedInput{&model.backupPassphrase, &model.backupConfirmation} {
+		input.Clear()
 	}
 }
 
 func (model *Model) wipeRestorePassphrase() {
-	value := []byte(model.restorePassphrase.Value())
-	wipe(value)
-	model.restorePassphrase.SetValue("")
+	model.restorePassphrase.Clear()
 }
 
 func (model *Model) selectOwnerBinding() error {

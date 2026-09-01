@@ -290,6 +290,9 @@ func (service *Service) workspaceBackupSecrets(ctx context.Context, configuratio
 type LocalWorkspaceArchiver struct{}
 
 func (LocalWorkspaceArchiver) Open(ctx context.Context, paths layout.Paths) (io.ReadCloser, error) {
+	if err := journal.CheckpointAndVerify(ctx, paths.Journal); err != nil {
+		return nil, err
+	}
 	for _, required := range []string{paths.Config, paths.Journal, filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml")} {
 		info, err := os.Lstat(required)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {

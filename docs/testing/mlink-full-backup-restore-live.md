@@ -47,22 +47,25 @@ Protected inputs are loaded from Keychain or test-process memory. They are not c
 
 ## Evidence
 
-- Full bundle size: `296,487,267` bytes.
-- Full bundle SHA-256: `28e228c6499fa87337462bea8f9762d7c04b433cdff79cc3a8ed753b9d7306dd`.
+- Full bundle size: `296,595,331` bytes.
+- Full bundle SHA-256: `7a6372ef714ec26a35d3fdeed5f93b3d53610c295fee07e96cb63ee6924972f0`.
 - Bundle format: `mlink-full-backup/v1`.
 - Encrypted sections: Core, Knowledge, MLink state, identity, credentials, and Agent selection.
 - Agent selection: Codex, Cursor, Pi, and Hermes.
 - First isolated restore duration: `40.69s`.
-- Two-stage dynamic-Agent acceptance duration (final run): `82.38s`.
+- Two-stage dynamic-Agent acceptance duration with SQLite and canonical volume verification (final hardened run): `103.86s`.
 - Fixed Owner User / Team / Agent / Asset IDs matched the encrypted manifest.
 - The first restored Core recalled at least one pre-existing Owner memory item through the restored identity dimensions.
 - Two isolated dynamic principals were provisioned through the official metadata API (`hermes-private` and `hermes-group`), persisted to the restored Journal, backed up again, and restored into a second isolated Core.
 - The second restore verified both dynamic Agent and Chat Memory Asset IDs byte-for-byte against the encrypted manifest.
+- Source and restored Journal/Core/Knowledge SQLite files passed `PRAGMA quick_check`; restored volumes matched source file count, logical bytes, and a canonical SHA-256 over sorted relative paths, lengths, and file contents.
 - No `init-admin`, `create-user`, or replacement Owner identity call occurs during restore.
 - Core secrets reached Docker through the process environment with `-e NAME`; secret values were absent from argv, Plan JSON, logs, and temporary files.
 - A transient macOS `launchctl bootstrap` compensation race was reproduced. Recovery now polls the actual Broker and Provider state, retries bootstrap, and accepts a compensation error only after all original services are verified running.
 - After each acceptance run, no container, volume, or network with prefix `mlink-restore-e2e-` remained.
 - Formal `tdai-memory-core`, `tdai-memory-hub`, and `dev.mlink.broker` were healthy/running after the test.
+
+The isolated live fixture uses an Agent lifecycle double so it cannot overwrite the operator's real Codex, Cursor, Pi, or Hermes files. Real semantic Agent merge/rollback behavior is covered by the app, adapter, TUI, and e2e test suites; a disposable macOS user/host remains the appropriate environment for a destructive all-Agent UI acceptance.
 
 ## Safety assertions
 

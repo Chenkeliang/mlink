@@ -176,6 +176,9 @@ func TestRestoreFlowMasksPassphraseUsesExactPlanAndWipesAfterApply(t *testing.T)
 	if model.step != StepRestorePreview || application.workspaceRestorePlans != 1 || string(application.workspaceRestoreRequest.Passphrase) != "correct-passphrase" {
 		t.Fatalf("preview = step:%d plans:%d request:%#v", model.step, application.workspaceRestorePlans, application.workspaceRestoreRequest)
 	}
+	if len(application.workspaceRestoreRequest.SelectedAgents) != 0 {
+		t.Fatalf("restore TUI overrode bundle Agent selection: %#v", application.workspaceRestoreRequest.SelectedAgents)
+	}
 	model = advance(t, model, enterKey())
 	model = advance(t, model, runeKey('y'))
 	model = advance(t, model, enterKey())

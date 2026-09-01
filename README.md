@@ -174,7 +174,7 @@ TencentDB MemoryCore is the first real connector, not a hard-coded product ceili
 
 - Secrets live in macOS Keychain; plans and logs contain fingerprints only.
 - Full backups use authenticated outer encryption plus independently encrypted sections; ciphertext-only staging is mode `0700`, and the final bundle is mode `0600`.
-- Restore creates only empty formal resources, starts the official digest-pinned Core with secrets outside argv, verifies fixed and dynamic IDs, then installs Agent integrations.
+- Restore creates only empty formal resources, runs SQLite `quick_check`, verifies canonical full-volume content fingerprints, starts the official digest-pinned Core with secrets outside argv, verifies fixed and dynamic IDs, then installs Agent integrations.
 - A non-secret restore sidecar survives interruption before the restored Journal is available; Journal schema v7 records restore phases and verified bundle fingerprints without paths or raw IDs.
 - `mlink doctor` reports `backup.last_verified`, `restore.state`, and `restore.identity_gate`.
 - The Journal separates delivery state from operator resolution and clears payloads after audited resolution.

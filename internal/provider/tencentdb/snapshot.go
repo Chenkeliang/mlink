@@ -3,7 +3,6 @@ package tencentdb
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -144,18 +143,24 @@ func (driver SnapshotDriver) StreamSection(ctx context.Context, request lifecycl
 	if err != nil {
 		return workspacebackup.VolumeManifest{}, err
 	}
+	if err := driver.validateVolumeSQLite(ctx, volume); err != nil {
+		return workspacebackup.VolumeManifest{}, err
+	}
 	files, logicalBytes, err := driver.volumeStats(ctx, volume)
 	if err != nil {
 		return workspacebackup.VolumeManifest{}, err
 	}
-	digest := sha256.New()
-	written := &countWriter{Writer: io.MultiWriter(destination, digest)}
+	contentDigest, err := driver.volumeContentDigest(ctx, volume)
+	if err != nil {
+		return workspacebackup.VolumeManifest{}, err
+	}
+	written := &countWriter{Writer: destination}
 	if err := driver.Stream.RunStream(ctx, snapshotTarCommand(volume), nil, written); err != nil {
 		return workspacebackup.VolumeManifest{}, err
 	}
 	return workspacebackup.VolumeManifest{
 		Kind: kind, Name: volume, LogicalBytes: logicalBytes, FileCount: files,
-		SHA256: hex.EncodeToString(digest.Sum(nil)),
+		SHA256: contentDigest,
 	}, nil
 }
 
@@ -207,12 +212,18 @@ func (driver SnapshotDriver) ApplySection(ctx context.Context, request lifecycle
 	if volume == "" {
 		return errors.New("TencentDB restore target volume is required")
 	}
-	return driver.Stream.RunStream(ctx, restoreTarCommand(volume), source, io.Discard)
+	if err := driver.Stream.RunStream(ctx, restoreTarCommand(volume), source, io.Discard); err != nil {
+		return err
+	}
+	return driver.validateVolumeSQLite(ctx, volume)
 }
 
 func (driver SnapshotDriver) VerifyRestore(ctx context.Context, request lifecycle.RestoreRequest, manifest workspacebackup.Manifest) error {
 	if driver.Metadata == nil || len(request.OwnerUserKey) == 0 {
 		return errors.New("TencentDB restore metadata verification is unavailable")
+	}
+	if err := driver.verifyRestoredVolumes(ctx, request, manifest.Provider.Volumes); err != nil {
+		return err
 	}
 	started := false
 	if driver.Environment != nil {
@@ -236,7 +247,7 @@ func (driver SnapshotDriver) VerifyRestore(ctx context.Context, request lifecycl
 	if err != nil || !hasTeam(teams, control.OwnerTeamID, control.OwnerUserID) {
 		return fail("restored Owner Team mismatch")
 	}
-	agents, err := driver.Metadata.ListAgents(ctx, request.OwnerUserKey, ListAgentsRequest{TeamID: control.OwnerTeamID, OwnerUserID: control.OwnerUserID, Limit: 100})
+	agents, err := driver.listAllRestoreAgents(ctx, request.OwnerUserKey, control)
 	if err != nil || !hasAgent(agents, control.OwnerAgentID, control.OwnerTeamID, control.OwnerUserID) {
 		return fail("restored Owner Agent mismatch")
 	}
@@ -245,7 +256,8 @@ func (driver SnapshotDriver) VerifyRestore(ctx context.Context, request lifecycl
 		return fail("restored Owner Asset mismatch")
 	}
 	for _, mapping := range manifest.PrincipalAgents {
-		if !hasAgent(agents, mapping.BackendAgentID, mapping.BackendTeamID, mapping.BackendUserID) {
+		agent, found := findAgent(agents, mapping.BackendAgentID, mapping.BackendTeamID, mapping.BackendUserID)
+		if !found || mapping.Fingerprint != "" && !agentMatchesPrincipalManifest(agent, mapping) {
 			return fail("restored dynamic Agent mismatch")
 		}
 		asset, err := driver.Metadata.GetAsset(ctx, request.OwnerUserKey, mapping.BackendAssetID)
@@ -254,6 +266,122 @@ func (driver SnapshotDriver) VerifyRestore(ctx context.Context, request lifecycl
 		}
 	}
 	return nil
+}
+
+func (driver SnapshotDriver) listAllRestoreAgents(ctx context.Context, ownerKey []byte, control workspacebackup.ControlPlaneManifest) ([]Agent, error) {
+	const pageSize = 100
+	maximum := control.DynamicAgentLimit + 1
+	if maximum <= 1 || maximum > 10_001 {
+		return nil, errors.New("restored dynamic Agent limit is invalid")
+	}
+	result := make([]Agent, 0, min(maximum, pageSize))
+	seen := map[string]bool{}
+	for offset := 0; offset < maximum; offset += pageSize {
+		page, err := driver.Metadata.ListAgents(ctx, ownerKey, ListAgentsRequest{TeamID: control.OwnerTeamID, OwnerUserID: control.OwnerUserID, Limit: pageSize, Offset: offset})
+		if err != nil {
+			return nil, err
+		}
+		for _, agent := range page {
+			if agent.AgentID == "" || seen[agent.AgentID] {
+				return nil, errors.New("restored Agent listing is invalid")
+			}
+			seen[agent.AgentID] = true
+			result = append(result, agent)
+			if len(result) > maximum {
+				return nil, errors.New("restored Agent listing exceeds declared capacity")
+			}
+		}
+		if len(page) < pageSize {
+			return result, nil
+		}
+	}
+	return nil, errors.New("restored Agent listing exceeded pagination bound")
+}
+
+func findAgent(values []Agent, agentID, teamID, ownerID string) (Agent, bool) {
+	for _, value := range values {
+		if value.AgentID == agentID && value.TeamID == teamID && value.OwnerUserID == ownerID {
+			return value, true
+		}
+	}
+	return Agent{}, false
+}
+
+func agentMatchesPrincipalManifest(agent Agent, mapping workspacebackup.PrincipalAgentManifest) bool {
+	var document struct {
+		MLink struct {
+			Fingerprint string `json:"principal_fingerprint"`
+			RouteKind   string `json:"route_kind"`
+			Role        string `json:"role"`
+		} `json:"mlink"`
+	}
+	return json.Unmarshal([]byte(agent.MetadataJSON), &document) == nil && document.MLink.Role == "dynamic-agent" &&
+		document.MLink.Fingerprint == mapping.Fingerprint && document.MLink.RouteKind == mapping.RouteKind
+}
+
+func (driver SnapshotDriver) validateVolumeSQLite(ctx context.Context, volume string) error {
+	if driver.Runner == nil || volume == "" {
+		return errors.New("snapshot SQLite validation dependencies are required")
+	}
+	script := `const fs=require('fs'),path=require('path'),sqlite=require('node:sqlite');let n=0;function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(/\.(db|sqlite|sqlite3)$/.test(e.name)){const t='/check/db-'+n++;fs.copyFileSync(f,t);for(const s of ['-wal','-shm'])if(fs.existsSync(f+s))fs.copyFileSync(f+s,t+s);const d=new sqlite.DatabaseSync(t,{readOnly:true});const r=d.prepare('PRAGMA quick_check').all();d.close();for(const s of ['', '-wal','-shm'])try{fs.unlinkSync(t+s)}catch{};if(r.length!==1||r[0].quick_check!=='ok')throw new Error('quick_check');}}}walk('/source');`
+	_, err := driver.Runner.Run(ctx, []string{
+		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"--tmpfs", "/check:rw,nosuid,nodev,noexec,size=1g",
+		"-v", volume + ":/source:ro", MemoryCoreImageReference, "node", "--experimental-sqlite", "-e", script,
+	}, nil)
+	if err != nil {
+		return errors.New("snapshot SQLite quick_check failed")
+	}
+	return nil
+}
+
+func (driver SnapshotDriver) verifyRestoredVolumes(ctx context.Context, request lifecycle.RestoreRequest, volumes []workspacebackup.VolumeManifest) error {
+	if len(volumes) == 0 {
+		return nil
+	}
+	if driver.Stream == nil {
+		return errors.New("restored volume verification stream is unavailable")
+	}
+	for _, expected := range volumes {
+		volume := request.CoreVolume
+		if expected.Kind == workspacebackup.VolumeKnowledge {
+			volume = request.KnowledgeVolume
+		}
+		if volume == "" {
+			return errors.New("restored volume target is missing")
+		}
+		files, logicalBytes, err := driver.volumeStats(ctx, volume)
+		if err != nil || files != expected.FileCount || logicalBytes != expected.LogicalBytes {
+			return errors.New("restored volume statistics differ from manifest")
+		}
+		contentDigest, err := driver.volumeContentDigest(ctx, volume)
+		if err != nil || contentDigest != expected.SHA256 {
+			return errors.New("restored volume content hash differs from manifest")
+		}
+		if err := driver.validateVolumeSQLite(ctx, volume); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (driver SnapshotDriver) volumeContentDigest(ctx context.Context, volume string) (string, error) {
+	if driver.Runner == nil || volume == "" {
+		return "", errors.New("volume content fingerprint dependencies are required")
+	}
+	script := `const fs=require('fs'),path=require('path'),crypto=require('crypto');const files=[];function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())walk(f);else if(e.isFile())files.push(f);}}walk('/source');files.sort();const h=crypto.createHash('sha256');for(const f of files){const r=path.relative('/source',f);const b=fs.readFileSync(f);h.update(r);h.update('\0');h.update(String(b.length));h.update('\0');h.update(b);}process.stdout.write(h.digest('hex'));`
+	output, err := driver.Runner.Run(ctx, []string{
+		"docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"-v", volume + ":/source:ro", MemoryCoreImageReference, "node", "-e", script,
+	}, nil)
+	value := strings.TrimSpace(string(output))
+	if err != nil || len(value) != 64 {
+		return "", errors.New("compute canonical volume content fingerprint")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", errors.New("canonical volume content fingerprint is invalid")
+	}
+	return value, nil
 }
 
 func (driver SnapshotDriver) startRestoredCore(ctx context.Context, request lifecycle.RestoreRequest) error {
@@ -431,12 +559,8 @@ func hasTeam(values []Team, teamID, ownerID string) bool {
 	return false
 }
 func hasAgent(values []Agent, agentID, teamID, ownerID string) bool {
-	for _, value := range values {
-		if value.AgentID == agentID && value.TeamID == teamID && value.OwnerUserID == ownerID {
-			return true
-		}
-	}
-	return false
+	_, found := findAgent(values, agentID, teamID, ownerID)
+	return found
 }
 
 func imageDigestReference(reference string) string {

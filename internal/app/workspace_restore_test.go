@@ -20,10 +20,19 @@ import (
 )
 
 type restoreBundle struct {
-	manifest workspacebackup.Manifest
-	sections map[workspacebackup.Section]string
-	err      error
-	opens    int
+	manifest    workspacebackup.Manifest
+	sections    map[workspacebackup.Section]string
+	err         error
+	opens       int
+	fingerprint string
+	errAtOpen   int
+}
+
+func (bundle *restoreBundle) Fingerprint(context.Context, string) (string, error) {
+	if bundle.fingerprint == "" {
+		return strings.Repeat("a", 64), nil
+	}
+	return bundle.fingerprint, nil
 }
 
 func (*restoreBundle) Pack(context.Context, string, []byte, *workspacebackup.Manifest, ...workspacebackup.SectionSource) error {
@@ -31,6 +40,9 @@ func (*restoreBundle) Pack(context.Context, string, []byte, *workspacebackup.Man
 }
 func (bundle *restoreBundle) Open(_ context.Context, _ string, _ []byte, visitor func(workspacebackup.Section, io.Reader) error) (workspacebackup.Manifest, error) {
 	bundle.opens++
+	if bundle.errAtOpen > 0 && bundle.opens == bundle.errAtOpen {
+		return workspacebackup.Manifest{}, errors.New("injected bundle reopen failure")
+	}
 	if bundle.err != nil {
 		return workspacebackup.Manifest{}, bundle.err
 	}
@@ -148,6 +160,24 @@ func TestWorkspaceRestorePreviewIsZeroWriteAndSecretIndependent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRestorePlanChangesWhenBundleContentChangesAtSamePath(t *testing.T) {
+	service, _, bundle, _, _ := workspaceRestoreFixture(t)
+	request := WorkspaceRestoreRequest{BundlePath: "/tmp/workspace.mlink-backup", Passphrase: []byte("twelve-byte-passphrase"), SelectedAgents: []Agent{Codex}}
+	bundle.fingerprint = strings.Repeat("a", 64)
+	first, err := service.PlanWorkspaceRestore(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.fingerprint = strings.Repeat("b", 64)
+	second, err := service.PlanWorkspaceRestore(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PlanID == second.PlanID {
+		t.Fatal("restore Plan was not bound to encrypted bundle contents")
+	}
+}
+
 func TestWorkspaceRestoreDefaultsToAgentsRecordedInBundle(t *testing.T) {
 	service, _, bundle, _, _ := workspaceRestoreFixture(t)
 	bundle.manifest.Agents = []string{"codex", "pi"}
@@ -210,6 +240,24 @@ func TestWorkspaceRestoreFailureRollsBackOnlyCreatedResources(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRestoreReopenFailureRecordsTerminalState(t *testing.T) {
+	service, _, bundle, _, _ := workspaceRestoreFixture(t)
+	operations := &restoreOperationStore{}
+	service.RestoreOperations = operations
+	request := WorkspaceRestoreRequest{BundlePath: "/tmp/workspace.mlink-backup", Passphrase: []byte("twelve-byte-passphrase"), SelectedAgents: []Agent{Codex}}
+	plan, err := service.PlanWorkspaceRestore(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.errAtOpen = bundle.opens + 2 // Apply re-plans first, then reopens after the sidecar enters applying.
+	if err := service.ApplyWorkspaceRestore(context.Background(), plan.PlanID, request); err == nil {
+		t.Fatal("bundle reopen failure was accepted")
+	}
+	if got := operations.values[len(operations.values)-1].Phase; got != journal.RestorePhaseFailed {
+		t.Fatalf("final restore phase = %s", got)
+	}
+}
+
 func TestWorkspaceRestoreRejectsWrongPassphraseAndIncompatibleManifest(t *testing.T) {
 	service, target, bundle, _, _ := workspaceRestoreFixture(t)
 	bundle.err = workspacebackup.ErrAuthentication
@@ -224,6 +272,11 @@ func TestWorkspaceRestoreRejectsWrongPassphraseAndIncompatibleManifest(t *testin
 	bundle.manifest.MLink.GOARCH = "amd64"
 	if _, err := service.PlanWorkspaceRestore(context.Background(), request); err == nil || !strings.Contains(err.Error(), "platform") {
 		t.Fatalf("platform error = %v", err)
+	}
+	bundle.manifest.MLink.GOARCH = runtime.GOARCH
+	bundle.manifest.MLink.SchemaMin, bundle.manifest.MLink.SchemaMax = 4, 4
+	if _, err := service.PlanWorkspaceRestore(context.Background(), request); err == nil || !strings.Contains(err.Error(), "schema") {
+		t.Fatalf("schema error = %v", err)
 	}
 }
 
@@ -249,6 +302,7 @@ func workspaceRestoreFixture(t *testing.T) (*Service, *memoryTarget, *restoreBun
 	snapshot := &restoreSnapshotDriver{target: target}
 	local := &restoreLocal{target: target, provider: lifecycle.RestoreRequest{ProviderID: "dev.mlink.tencentdb", CoreVolume: "core", KnowledgeVolume: "knowledge", OwnerUserKey: []byte("owner")}}
 	service := &Service{Target: target, Ledger: newMemoryLedger(), WorkspacePacker: bundle, SnapshotDriver: snapshot, WorkspaceRestorer: local}
+	service.WorkspaceFingerprinter = bundle
 	return service, target, bundle, snapshot, local
 }
 

@@ -56,6 +56,8 @@ type localWorkspaceRestorer struct {
 	passphrase     []byte
 	manifest       workspacebackup.Manifest
 	provider       lifecycle.RestoreRequest
+	bundle         app.WorkspaceBundle
+	statePath      string
 	selectedAgents []app.Agent
 	agents         restoredAgentLifecycle
 	staged         restoreSecretMaterial
@@ -98,6 +100,11 @@ func (store *deferredRestoreOperationStore) SaveRestoreOperation(ctx context.Con
 		return err
 	}
 	if _, err := os.Stat(store.path); errors.Is(err, fs.ErrNotExist) {
+		if operation.Phase == journal.RestorePhaseComplete || operation.Phase == journal.RestorePhaseRolledBack {
+			if removeErr := os.Remove(store.statePath); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				return removeErr
+			}
+		}
 		return nil
 	} else if err != nil {
 		return err
@@ -394,6 +401,13 @@ func (restorer *localWorkspaceRestorer) PlanRestore(ctx context.Context, request
 	if restorer == nil || restorer.secrets == nil || !filepath.IsAbs(request.BundlePath) || len(request.Passphrase) < 12 {
 		return install.ChangeSet{}, errors.New("local workspace restore dependencies are required")
 	}
+	if restorer.statePath != "" {
+		if _, err := os.Lstat(restorer.statePath); err == nil {
+			return install.ChangeSet{}, errors.New("an interrupted restore operation requires resolution before retry")
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return install.ChangeSet{}, errors.New("inspect restore operation sidecar")
+		}
+	}
 	for _, path := range []string{restorer.paths.Config, restorer.paths.Journal, restorer.paths.PanelRegistry} {
 		if _, err := os.Lstat(path); err == nil {
 			return install.ChangeSet{}, fmt.Errorf("restore target %q already exists", filepath.Base(path))
@@ -413,6 +427,22 @@ func (restorer *localWorkspaceRestorer) PlanRestore(ctx context.Context, request
 			return install.ChangeSet{}, errors.New("inspect local restore credential")
 		}
 	}
+	if restorer.bundle != nil {
+		accounts, err := restorer.inspectBundleAccounts(ctx, request)
+		if err != nil {
+			return install.ChangeSet{}, err
+		}
+		for _, account := range accounts {
+			value, err := restorer.secrets.Get(ctx, account)
+			wipeRuntimeSecret(value)
+			if err == nil {
+				return install.ChangeSet{}, errors.New("restore target contains an existing MLink credential")
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				return install.ChangeSet{}, errors.New("inspect local restore credential")
+			}
+		}
+	}
 	restorer.manifest = manifest
 	restorer.selectedAgents = append([]app.Agent(nil), request.SelectedAgents...)
 	if len(restorer.selectedAgents) == 0 {
@@ -425,6 +455,72 @@ func (restorer *localWorkspaceRestorer) PlanRestore(ctx context.Context, request
 		OwnerID: "dev.mlink.workspace-restore", Target: "artifact:restore-local-state", Action: install.ActionUnchanged,
 		SemanticDiff: []install.SemanticDiff{{Path: "restore.local", Before: "absent", After: "MLink state, Keychain and selected Agent integrations"}},
 	}})
+}
+
+func (restorer *localWorkspaceRestorer) inspectBundleAccounts(ctx context.Context, request app.WorkspaceRestoreRequest) ([]string, error) {
+	accounts := map[string]bool{}
+	_, err := restorer.bundle.Open(ctx, request.BundlePath, request.Passphrase, func(section workspacebackup.Section, reader io.Reader) error {
+		switch section {
+		case workspacebackup.SectionMLink:
+			archive := tar.NewReader(reader)
+			for {
+				header, err := archive.Next()
+				if errors.Is(err, io.EOF) {
+					return errors.New("restored MLink config is missing")
+				}
+				if err != nil || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > 4<<20 {
+					return errors.New("restored MLink archive is invalid")
+				}
+				if header.Name != "config.yaml" {
+					continue
+				}
+				content, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
+				if err != nil || int64(len(content)) != header.Size {
+					return errors.New("read restored MLink config")
+				}
+				configuration, err := config.Decode(content)
+				if err != nil {
+					return err
+				}
+				connection := configuration.Connections[configuration.ActiveConnectionID]
+				account, err := runtimeCredentialAccount(connection.SecretRefs["token"])
+				if err != nil {
+					return err
+				}
+				accounts[account] = true
+				return nil
+			}
+		case workspacebackup.SectionIdentity:
+			content, err := io.ReadAll(io.LimitReader(reader, (8<<20)+1))
+			if err != nil || len(content) == 0 || len(content) > 8<<20 {
+				wipeRuntimeSecret(content)
+				return errors.New("identity restore section is invalid")
+			}
+			defer wipeRuntimeSecret(content)
+			bundle, err := identity.DecryptBundle(content, request.Passphrase)
+			if err != nil {
+				return err
+			}
+			defer bundle.Wipe()
+			for _, binding := range bundle.Bindings {
+				account, err := identity.BindingAccount(binding.Ref.ID)
+				if err != nil {
+					return err
+				}
+				accounts[account] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(accounts))
+	for account := range accounts {
+		result = append(result, account)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func (restorer *localWorkspaceRestorer) StageSection(_ context.Context, section workspacebackup.Section, reader io.Reader) error {
@@ -814,6 +910,15 @@ func (restorer *localWorkspaceRestorer) RollbackRestore(ctx context.Context) err
 	return errors.Join(rollbackErrors...)
 }
 
+func (restorer *localWorkspaceRestorer) wipeTransient() {
+	if restorer == nil {
+		return
+	}
+	restorer.staged.wipe()
+	wipeRuntimeSecret(restorer.passphrase)
+	restorer.passphrase = nil
+}
+
 func (runtime *runtimeApplication) PlanWorkspaceBackup(ctx context.Context, request app.WorkspaceBackupRequest) (install.ChangeSet, error) {
 	service, closeService, err := runtime.workspaceBackupService(ctx, false)
 	if err != nil {
@@ -842,11 +947,13 @@ func (runtime *runtimeApplication) InspectWorkspaceBackup(ctx context.Context, p
 
 func (runtime *runtimeApplication) PlanWorkspaceRestore(ctx context.Context, request app.WorkspaceRestoreRequest) (install.ChangeSet, error) {
 	service := runtime.workspaceRestoreService(request)
+	defer service.WorkspaceRestorer.(*localWorkspaceRestorer).wipeTransient()
 	return service.PlanWorkspaceRestore(ctx, request)
 }
 
 func (runtime *runtimeApplication) ApplyWorkspaceRestore(ctx context.Context, planID string, request app.WorkspaceRestoreRequest) error {
 	service := runtime.workspaceRestoreService(request)
+	defer service.WorkspaceRestorer.(*localWorkspaceRestorer).wipeTransient()
 	return service.ApplyWorkspaceRestore(ctx, planID, request)
 }
 
@@ -891,6 +998,7 @@ func (runtime *runtimeApplication) workspaceRestoreService(request app.Workspace
 	local := &localWorkspaceRestorer{
 		paths: runtime.paths, secrets: runtime.secretStore(), passphrase: append([]byte(nil), request.Passphrase...),
 		selectedAgents: append([]app.Agent(nil), request.SelectedAgents...),
+		bundle:         workspacebackup.Packer{}, statePath: filepath.Join(runtime.paths.Run, "restore-operation.json"),
 	}
 	local.agents = &runtimeRestoreAgents{runtime: runtime}
 	driver := &tencentdb.SnapshotDriver{
@@ -899,7 +1007,8 @@ func (runtime *runtimeApplication) workspaceRestoreService(request app.Workspace
 	}
 	return &app.Service{
 		Paths: runtime.paths, UID: runtime.uid, Target: localTarget, Ledger: &restoreMemoryLedger{}, Secrets: runtime.secretStore(),
-		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")}, WorkspaceRestorer: local,
+		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: filepath.Join(runtime.paths.Home, "tmp")},
+		WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: local,
 		RestoreOperations: &deferredRestoreOperationStore{path: runtime.paths.Journal, statePath: filepath.Join(runtime.paths.Run, "restore-operation.json")},
 	}
 }

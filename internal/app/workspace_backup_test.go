@@ -250,7 +250,7 @@ func TestLocalWorkspaceArchiverStreamsOnlyExpectedRegularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, content := range map[string]string{
-		paths.Config: "config", paths.Journal: "journal", paths.PanelRegistry: "registry",
+		paths.Config: "config", paths.PanelRegistry: "registry",
 		filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml"): "gateway-config",
 		filepath.Join(paths.Backups, "plan", "file.json"):            "backup",
 	} {
@@ -261,6 +261,11 @@ func TestLocalWorkspaceArchiverStreamsOnlyExpectedRegularFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	journalStore, err := journal.Open(context.Background(), paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journalStore.Close()
 	reader, err := (LocalWorkspaceArchiver{}).Open(context.Background(), paths)
 	if err != nil {
 		t.Fatal(err)

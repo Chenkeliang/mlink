@@ -45,6 +45,38 @@ type Packer struct {
 	StagingParent string
 }
 
+func (Packer) Fingerprint(ctx context.Context, path string) (string, error) {
+	if ctx == nil || !filepath.IsAbs(path) {
+		return "", errors.New("absolute workspace bundle path is required")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
+		return "", errors.New("safe workspace bundle is required")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", errors.New("open workspace bundle")
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, &contextReader{ctx: ctx, reader: file}); err != nil {
+		return "", errors.New("hash workspace bundle")
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader *contextReader) Read(value []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(value)
+}
+
 func (packer Packer) Open(ctx context.Context, input string, passphrase []byte, visitor func(Section, io.Reader) error) (Manifest, error) {
 	return Open(ctx, input, passphrase, visitor)
 }

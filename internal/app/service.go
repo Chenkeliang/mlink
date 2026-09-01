@@ -106,6 +106,10 @@ type WorkspaceBundle interface {
 	Open(context.Context, string, []byte, func(workspacebackup.Section, io.Reader) error) (workspacebackup.Manifest, error)
 }
 
+type WorkspaceBundleFingerprinter interface {
+	Fingerprint(context.Context, string) (string, error)
+}
+
 type WorkspaceStateArchiver interface {
 	Open(context.Context, layout.Paths) (io.ReadCloser, error)
 }
@@ -167,38 +171,39 @@ type InstalledBinaryVerifier interface {
 }
 
 type Service struct {
-	Paths                layout.Paths
-	UID                  int
-	Target               install.Target
-	Ledger               install.Ledger
-	Secrets              secret.Store
-	BlockingEvents       BlockingEventStore
-	HermesEndpoint       string
-	HermesListenAddress  string
-	HermesGrantToken     []byte
-	IdentityKey          []byte
-	ControlPlaneStates   ControlPlaneStateStore
-	ControlProvisioner   ControlPlaneProvisioner
-	ProviderBackend      ProviderBackendUninstaller
-	SnapshotDriver       lifecycle.SnapshotDriver
-	WorkspacePacker      WorkspaceBundle
-	WorkspaceArchiver    WorkspaceStateArchiver
-	WorkspaceRestorer    WorkspaceRestoreLocal
-	WorkspaceEvidence    WorkspaceEvidenceStore
-	WorkspaceResumer     WorkspaceServiceResumer
-	RestoreOperations    RestoreOperationStore
-	ControlRequest       controlplane.ProvisionRequest
-	PanelRuntime         *panel.Runtime
-	PanelDesired         panel.Desired
-	PanelConnectionID    string
-	PrincipalAgentStates PrincipalAgentStateStore
-	JournalMaintenance   JournalMaintenanceStore
-	OperatorID           string
-	HermesConfigPath     string
-	Restarter            MaintenanceRestarter
-	HermesGrantVerifier  HermesGrantVerifier
-	RandomSource         io.Reader
-	ActiveSchema         int
-	UpgradeCandidates    UpgradeCandidateLoader
-	InstalledVerifier    InstalledBinaryVerifier
+	Paths                  layout.Paths
+	UID                    int
+	Target                 install.Target
+	Ledger                 install.Ledger
+	Secrets                secret.Store
+	BlockingEvents         BlockingEventStore
+	HermesEndpoint         string
+	HermesListenAddress    string
+	HermesGrantToken       []byte
+	IdentityKey            []byte
+	ControlPlaneStates     ControlPlaneStateStore
+	ControlProvisioner     ControlPlaneProvisioner
+	ProviderBackend        ProviderBackendUninstaller
+	SnapshotDriver         lifecycle.SnapshotDriver
+	WorkspacePacker        WorkspaceBundle
+	WorkspaceFingerprinter WorkspaceBundleFingerprinter
+	WorkspaceArchiver      WorkspaceStateArchiver
+	WorkspaceRestorer      WorkspaceRestoreLocal
+	WorkspaceEvidence      WorkspaceEvidenceStore
+	WorkspaceResumer       WorkspaceServiceResumer
+	RestoreOperations      RestoreOperationStore
+	ControlRequest         controlplane.ProvisionRequest
+	PanelRuntime           *panel.Runtime
+	PanelDesired           panel.Desired
+	PanelConnectionID      string
+	PrincipalAgentStates   PrincipalAgentStateStore
+	JournalMaintenance     JournalMaintenanceStore
+	OperatorID             string
+	HermesConfigPath       string
+	Restarter              MaintenanceRestarter
+	HermesGrantVerifier    HermesGrantVerifier
+	RandomSource           io.Reader
+	ActiveSchema           int
+	UpgradeCandidates      UpgradeCandidateLoader
+	InstalledVerifier      InstalledBinaryVerifier
 }

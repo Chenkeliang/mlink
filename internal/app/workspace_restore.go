@@ -14,6 +14,7 @@ import (
 
 	"mlink/internal/install"
 	"mlink/internal/journal"
+	"mlink/internal/version"
 	"mlink/internal/workspacebackup"
 )
 
@@ -38,7 +39,7 @@ func (request *WorkspaceRestoreRequest) Wipe() {
 }
 
 func (service *Service) PlanWorkspaceRestore(ctx context.Context, request WorkspaceRestoreRequest) (install.ChangeSet, error) {
-	if service == nil || service.Target == nil || service.Ledger == nil || service.WorkspacePacker == nil || service.SnapshotDriver == nil || service.WorkspaceRestorer == nil {
+	if service == nil || service.Target == nil || service.Ledger == nil || service.WorkspacePacker == nil || service.WorkspaceFingerprinter == nil || service.SnapshotDriver == nil || service.WorkspaceRestorer == nil {
 		return install.ChangeSet{}, errors.New("full workspace restore dependencies are required")
 	}
 	if !filepath.IsAbs(request.BundlePath) || len(request.Passphrase) < 12 || len(request.Passphrase) > 4096 {
@@ -49,6 +50,10 @@ func (service *Service) PlanWorkspaceRestore(ctx context.Context, request Worksp
 		return install.ChangeSet{}, err
 	}
 	if err := validateWorkspaceRestoreManifest(manifest); err != nil {
+		return install.ChangeSet{}, err
+	}
+	bundleFingerprint, err := service.WorkspaceFingerprinter.Fingerprint(ctx, request.BundlePath)
+	if err != nil {
 		return install.ChangeSet{}, err
 	}
 	if len(request.SelectedAgents) == 0 {
@@ -77,6 +82,7 @@ func (service *Service) PlanWorkspaceRestore(ctx context.Context, request Worksp
 	}
 	bindingPlan, err := install.BuildChangeSet(service.Target, []install.DesiredResource{{
 		OwnerID: "dev.mlink.workspace-restore", Target: "artifact:workspace-restore:" + restorePathFingerprint(request.BundlePath), Action: install.ActionUnchanged,
+		Content:      []byte(bundleFingerprint),
 		SemanticDiff: []install.SemanticDiff{{Path: "restore.bundle", Before: "encrypted workspace", After: strings.Join(agentStrings(agents), ",")}},
 	}})
 	if err != nil {
@@ -102,16 +108,16 @@ func (service *Service) ApplyWorkspaceRestore(ctx context.Context, planID string
 	}
 	manifest, err := service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(workspacebackup.Section, io.Reader) error { return nil })
 	if err != nil {
-		return err
+		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseFailed, "bundle_open_failed"))
 	}
 	providerRequest, err := service.WorkspaceRestorer.ProviderRequest(ctx, manifest)
 	if err != nil {
-		return err
+		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseFailed, "provider_request_failed"))
 	}
 	transaction := install.NewTransaction(service.Target, service.Ledger)
 	applied, err := transaction.ApplyDeferredOwnership(ctx, plan)
 	if err != nil {
-		return err
+		return errors.Join(err, service.saveRestoreOperation(context.Background(), operation, journal.RestorePhaseRolledBack, "resource_apply_failed"))
 	}
 	rollback := func(cause error) error {
 		localErr := service.WorkspaceRestorer.RollbackRestore(context.Background())
@@ -174,10 +180,14 @@ func validateWorkspaceRestoreManifest(manifest workspacebackup.Manifest) error {
 	if err := workspacebackup.VerifyManifest(manifest); err != nil {
 		return err
 	}
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		return errors.New("workspace restore is supported only on macOS arm64")
+	}
 	if manifest.MLink.GOOS != runtime.GOOS || manifest.MLink.GOARCH != runtime.GOARCH {
 		return errors.New("workspace backup platform is incompatible with this restore target")
 	}
-	if manifest.MLink.SchemaMin <= 0 || manifest.MLink.SchemaMax < manifest.MLink.SchemaMin {
+	current := version.Current()
+	if manifest.MLink.SchemaMin <= 0 || manifest.MLink.SchemaMax < manifest.MLink.SchemaMin || manifest.MLink.SchemaMin > current.SchemaMax || manifest.MLink.SchemaMax < current.SchemaMin {
 		return errors.New("workspace backup schema range is invalid")
 	}
 	return nil
@@ -204,13 +214,20 @@ func workspaceRestoreOperation(plan install.ChangeSet, bundlePath string) journa
 		}
 	}
 	ownerIDs := make([]string, 0, len(owners))
+	bundleFingerprint := restorePathFingerprint(bundlePath)
 	for ownerID := range owners {
 		ownerIDs = append(ownerIDs, ownerID)
 	}
+	for _, operation := range plan.Operations {
+		if operation.OwnerID == "dev.mlink.workspace-restore" && len(operation.ProposedHash) >= 16 {
+			bundleFingerprint = operation.ProposedHash[:16]
+			break
+		}
+	}
 	sort.Strings(ownerIDs)
-	digest := sha256.Sum256([]byte(plan.PlanID + "\x00" + restorePathFingerprint(bundlePath)))
+	digest := sha256.Sum256([]byte(plan.PlanID + "\x00" + bundleFingerprint))
 	return journal.RestoreOperation{
-		OperationID: "restore_" + hex.EncodeToString(digest[:])[:16], BundleFingerprint: restorePathFingerprint(bundlePath),
+		OperationID: "restore_" + hex.EncodeToString(digest[:])[:16], BundleFingerprint: bundleFingerprint,
 		PlanID: plan.PlanID, CreatedOwnerIDs: ownerIDs,
 	}
 }

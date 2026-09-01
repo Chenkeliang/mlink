@@ -36,6 +36,31 @@ func TestEncryptSectionStagesCiphertextOnly(t *testing.T) {
 	}
 }
 
+func TestPackerFingerprintChangesWithBundleContentAndRejectsSymlink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "workspace.mlink-backup")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := (Packer{}).Fingerprint(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := (Packer{}).Fingerprint(context.Background(), path)
+	if err != nil || first == second {
+		t.Fatalf("fingerprints/error = %s/%s/%v", first, second, err)
+	}
+	link := filepath.Join(t.TempDir(), "bundle-link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Packer{}).Fingerprint(context.Background(), link); err == nil {
+		t.Fatal("bundle symlink was accepted")
+	}
+}
+
 func TestPackAndOpenRoundTripCleansCiphertextStaging(t *testing.T) {
 	staging := t.TempDir()
 	output := filepath.Join(t.TempDir(), "workspace.mlink-backup")

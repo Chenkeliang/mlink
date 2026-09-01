@@ -64,6 +64,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	agents := &restoreTestAgents{}
 	local := &localWorkspaceRestorer{
 		paths: paths, secrets: keys, passphrase: append([]byte(nil), passphrase...), agents: agents,
+		bundle: workspacebackup.Packer{},
 		provider: lifecycle.RestoreRequest{
 			CoreContainer: coreContainer, CoreVolume: coreVolume, KnowledgeVolume: knowledgeVolume, CoreNetwork: network,
 			CoreConfigPath: filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml"), Endpoint: "http://127.0.0.1:18421",
@@ -77,7 +78,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	}
 	service := &app.Service{
 		Paths: paths, UID: os.Getuid(), Target: target, Ledger: &restoreMemoryLedger{}, Secrets: keys,
-		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: staging}, WorkspaceRestorer: local,
+		SnapshotDriver: driver, WorkspacePacker: workspacebackup.Packer{StagingParent: staging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: local,
 	}
 	request := app.WorkspaceRestoreRequest{BundlePath: bundlePath, Passphrase: append([]byte(nil), passphrase...)}
 	defer request.Wipe()
@@ -180,6 +181,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	secondKeys := &restoreTestSecrets{values: map[string][]byte{}}
 	secondLocal := &localWorkspaceRestorer{
 		paths: secondPaths, secrets: secondKeys, passphrase: append([]byte(nil), passphrase...), agents: &restoreTestAgents{},
+		bundle: workspacebackup.Packer{},
 		provider: lifecycle.RestoreRequest{
 			CoreContainer: secondContainer, CoreVolume: secondCoreVolume, KnowledgeVolume: secondKnowledge, CoreNetwork: secondNetwork,
 			CoreConfigPath: filepath.Join(secondPaths.Home, "memorycore", "tdai-gateway.yaml"), Endpoint: "http://127.0.0.1:18422",
@@ -192,7 +194,7 @@ func TestLiveFullWorkspaceBackupRestore(t *testing.T) {
 	}
 	secondService := &app.Service{
 		Paths: secondPaths, UID: os.Getuid(), Target: target, Ledger: &restoreMemoryLedger{}, Secrets: secondKeys,
-		SnapshotDriver: secondDriver, WorkspacePacker: workspacebackup.Packer{StagingParent: secondStaging}, WorkspaceRestorer: secondLocal,
+		SnapshotDriver: secondDriver, WorkspacePacker: workspacebackup.Packer{StagingParent: secondStaging}, WorkspaceFingerprinter: workspacebackup.Packer{}, WorkspaceRestorer: secondLocal,
 	}
 	secondRequest := app.WorkspaceRestoreRequest{BundlePath: dynamicBundle, Passphrase: append([]byte(nil), passphrase...)}
 	secondPlan, err := secondService.PlanWorkspaceRestore(context.Background(), secondRequest)

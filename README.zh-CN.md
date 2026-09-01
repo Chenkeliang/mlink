@@ -247,7 +247,7 @@ TencentDB MemoryCore 是首个真实 Provider，但不是硬编码的能力上�
 
 - 密钥保存在 macOS Keychain，Plan 和日志只包含指纹或存在性标记。
 - 全量备份采用“外层认证加密 + 分段独立加密”；暂存目录只出现密文且权限为 `0700`，最终包权限为 `0600`。
-- 恢复只创建空的正式资源，使用官方 digest 固定镜像启动 Core，密钥不进入 argv；固定 ID 与动态 Agent/Asset ID 验证一致后才安装 Agent 接入。
+- 恢复只创建空的正式资源，先执行 SQLite `quick_check` 并核对规范化整卷内容指纹，再使用官方 digest 固定镜像启动 Core；密钥不进入 argv，固定 ID 与动态 Agent/Asset ID 验证一致后才安装 Agent 接入。
 - 主 Journal 尚未恢复时，由不含路径、密钥和原始 ID 的 sidecar 记录中断阶段；Journal schema v7 保存恢复阶段与已验证包指纹。
 - `mlink doctor` 会显示 `backup.last_verified`、`restore.state` 与 `restore.identity_gate`。
 - SQLite Journal 负责防重复、投递状态、审计与安全重试。

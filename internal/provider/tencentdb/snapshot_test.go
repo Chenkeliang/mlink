@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -45,6 +46,9 @@ func (runner *snapshotRunner) Run(_ context.Context, args []string, _ io.Reader)
 		if strings.Contains(joined, "find /source") {
 			return []byte("files=3\nbytes=12\n"), nil
 		}
+		if strings.Contains(joined, "createHash('sha256')") {
+			return []byte(strings.Repeat("b", 64)), nil
+		}
 		return []byte("ok"), nil
 	}
 }
@@ -76,6 +80,24 @@ type snapshotMetadata struct {
 	teams  []Team
 	agents []Agent
 	assets map[string]Asset
+}
+
+type pagedSnapshotMetadata struct {
+	*snapshotMetadata
+	all   []Agent
+	calls int
+}
+
+func (metadata *pagedSnapshotMetadata) ListAgents(_ context.Context, _ []byte, request ListAgentsRequest) ([]Agent, error) {
+	metadata.calls++
+	if request.Offset >= len(metadata.all) {
+		return nil, nil
+	}
+	end := request.Offset + request.Limit
+	if end > len(metadata.all) {
+		end = len(metadata.all)
+	}
+	return append([]Agent(nil), metadata.all[request.Offset:end]...), nil
 }
 
 func (*snapshotMetadata) InitAdmin(context.Context, InitAdminRequest) (UserCredential, error) {
@@ -190,6 +212,18 @@ func TestSnapshotStreamsReadOnlyPinnedVolumeTar(t *testing.T) {
 			t.Fatalf("stream command missing %q: %s", want, joined)
 		}
 	}
+	validationCommands := strings.Join(flattenCommands(runner.commands), "\n")
+	if !strings.Contains(validationCommands, "--tmpfs /check:rw,nosuid,nodev,noexec,size=1g") || !strings.Contains(validationCommands, "PRAGMA quick_check") {
+		t.Fatalf("SQLite validation command is incomplete: %s", validationCommands)
+	}
+}
+
+func flattenCommands(commands [][]string) []string {
+	result := make([]string, len(commands))
+	for index, command := range commands {
+		result[index] = strings.Join(command, " ")
+	}
+	return result
 }
 
 func TestSnapshotRestorePlanCreatesOnlyEmptyFormalResourcesAndApplyStreamsTar(t *testing.T) {
@@ -284,10 +318,39 @@ func TestSnapshotVerifyStartsOfficialCoreWithSecretsOutsideArgv(t *testing.T) {
 	}
 }
 
+func TestSnapshotVerifyPaginatesDynamicAgentsToDeclaredLimit(t *testing.T) {
+	base := &snapshotMetadata{
+		owner: User{UserID: "usr-owner", UserType: "normal"}, teams: []Team{{TeamID: "team-owner", OwnerUserID: "usr-owner"}},
+		assets: map[string]Asset{"asset-owner": {AssetID: "asset-owner", TeamID: "team-owner", OwnerUserID: "usr-owner"}},
+	}
+	manifest := fixtureManifestForSnapshot()
+	manifest.PrincipalAgents = nil
+	all := []Agent{{AgentID: "agt-owner", TeamID: "team-owner", OwnerUserID: "usr-owner"}}
+	for index := 0; index < 125; index++ {
+		fingerprint := fmt.Sprintf("prn_%026d", index)
+		agentID := fmt.Sprintf("agt-dynamic-%03d", index)
+		assetID := "chat_memory-team-owner-" + agentID
+		marker := fmt.Sprintf(`{"mlink":{"principal_fingerprint":%q,"route_kind":"hermes-private","role":"dynamic-agent"}}`, fingerprint)
+		all = append(all, Agent{AgentID: agentID, TeamID: "team-owner", OwnerUserID: "usr-owner", MetadataJSON: marker})
+		base.assets[assetID] = Asset{AssetID: assetID, TeamID: "team-owner", OwnerUserID: "usr-owner"}
+		manifest.PrincipalAgents = append(manifest.PrincipalAgents, workspacebackup.PrincipalAgentManifest{
+			Fingerprint: fingerprint, RouteKind: "hermes-private", BackendUserID: "usr-owner", BackendTeamID: "team-owner", BackendAgentID: agentID, BackendAssetID: assetID,
+		})
+	}
+	metadata := &pagedSnapshotMetadata{snapshotMetadata: base, all: all}
+	driver := SnapshotDriver{Metadata: metadata}
+	if err := driver.VerifyRestore(context.Background(), lifecycle.RestoreRequest{OwnerUserKey: []byte("owner-key")}, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.calls != 2 {
+		t.Fatalf("Agent pagination calls = %d", metadata.calls)
+	}
+}
+
 func fixtureManifestForSnapshot() workspacebackup.Manifest {
 	return workspacebackup.Manifest{
 		ControlPlane: workspacebackup.ControlPlaneManifest{
-			OwnerUserID: "usr-owner", OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner", OwnerAssetID: "asset-owner",
+			OwnerUserID: "usr-owner", OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner", OwnerAssetID: "asset-owner", DynamicAgentLimit: 500,
 		},
 		PrincipalAgents: []workspacebackup.PrincipalAgentManifest{{
 			BackendUserID: "usr-owner", BackendTeamID: "team-owner", BackendAgentID: "agt-dynamic", BackendAssetID: "asset-dynamic",
