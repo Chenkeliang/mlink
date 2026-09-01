@@ -24,6 +24,8 @@ Panel is not an identity generator. It is an optional UI over the same MemoryCor
 
 Schema v2 and the existing v2→v3 cutover remain supported only for installations created before this onboarding flow. They are not used for new installations.
 
+Installing the MemoryCore runtime alone is not an initialized MLink memory plane. In that intermediate state MLink reports `pending_identity`, installs no Agent integration, and accepts no capture. MLink must never substitute a user-chosen `agent_id` for the Core metadata object: the headless control-plane step calls the same official MemoryCore metadata APIs that the Hub uses, records the returned IDs, and makes those IDs authoritative. A Hub installed later receives the existing instance and Owner credential and therefore opens the same Team, Agent, and Asset instead of bootstrapping replacements. Any memory written outside MLink under an arbitrary pre-provisioning `agent_id` remains a separate legacy scope and is not silently remapped.
+
 ## Product flow
 
 The guided TUI becomes:
