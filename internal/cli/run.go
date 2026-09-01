@@ -86,6 +86,9 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if len(args) > 0 && args[0] == "panel" {
 		return runPanel(ctx, args[1:], deps, input)
 	}
+	if len(args) > 0 && args[0] == "maintenance" {
+		return runMaintenance(ctx, args[1:], deps, input)
+	}
 	if len(args) == 3 && args[0] == "hook" && args[1] == "codex" {
 		if deps.RunCodexHook == nil || deps.RunCodexHook(ctx, args[2]) != nil {
 			writeLine(deps.Stderr, "mlink codex hook failed")

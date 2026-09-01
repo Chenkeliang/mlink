@@ -69,6 +69,11 @@ type PrincipalAgentStateStore interface {
 	ListPrincipalAgents(context.Context) ([]journal.PrincipalAgent, error)
 }
 
+type JournalMaintenanceStore interface {
+	ListUnresolvedEvents(context.Context) ([]journal.Event, error)
+	ResolveUnresolvedEvent(context.Context, string, journal.ResolutionRequest) (journal.Event, error)
+}
+
 type Service struct {
 	Paths                layout.Paths
 	UID                  int
@@ -87,4 +92,6 @@ type Service struct {
 	PanelDesired         panel.Desired
 	PanelConnectionID    string
 	PrincipalAgentStates PrincipalAgentStateStore
+	JournalMaintenance   JournalMaintenanceStore
+	OperatorID           string
 }

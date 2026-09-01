@@ -659,6 +659,45 @@ func (runtime *runtimeApplication) IdentityList(ctx context.Context) ([]app.Iden
 	return runtime.identityService(previewLedger{}).IdentityList(ctx)
 }
 
+func (runtime *runtimeApplication) ListUnresolvedJournalEvents(ctx context.Context) ([]app.JournalEventDescriptor, error) {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return runtime.journalMaintenanceService(store).ListUnresolvedJournalEvents(ctx)
+}
+
+func (runtime *runtimeApplication) PlanJournalResolution(ctx context.Context, request app.JournalResolutionRequest) (install.ChangeSet, error) {
+	store, err := journal.OpenReadOnly(ctx, runtime.paths.Journal)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	defer store.Close()
+	return runtime.journalMaintenanceService(store).PlanJournalResolution(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyJournalResolution(ctx context.Context, planID string, request app.JournalResolutionRequest) error {
+	store, err := journal.Open(ctx, runtime.paths.Journal)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.journalMaintenanceService(store).ApplyJournalResolution(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) journalMaintenanceService(store *journal.Store) *app.Service {
+	service := runtime.baseService
+	service.Target = install.LocalTarget{}
+	service.JournalMaintenance = store
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "localhost"
+	}
+	service.OperatorID = fmt.Sprintf("uid:%d@%s", runtime.uid, sanitizeStableID(hostname))
+	return &service
+}
+
 func (runtime *runtimeApplication) DetectIdentityCandidates(ctx context.Context) ([]identity.Candidate, error) {
 	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
 	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)

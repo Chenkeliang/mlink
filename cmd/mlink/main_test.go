@@ -12,11 +12,61 @@ import (
 	"mlink/internal/app"
 	"mlink/internal/cli"
 	"mlink/internal/config"
+	"mlink/internal/connection"
 	"mlink/internal/doctor"
 	"mlink/internal/identity"
 	"mlink/internal/install"
 	"mlink/internal/journal"
+	"mlink/internal/layout"
+	"mlink/internal/model"
 )
+
+func TestRuntimeJournalMaintenanceUsesReadOnlyPreviewAndWritableApply(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths, err := layout.FromHome(home, "/tmp/mlink-candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.Open(ctx, paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, _, err := store.EnqueueTurn(ctx, journal.Envelope{
+		AdapterID: "codex",
+		Route:     connection.RouteKey{ConnectionID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-3"},
+		Turn:      model.Turn{Identity: model.IdentityScope{TenantID: "team", AgentID: "agent", UserID: "user", SessionID: "session", TurnID: "turn"}, Messages: []model.Message{{Role: "user", Content: "private"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAmbiguous(ctx, event.ID, "response_lost"); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	runtime := &runtimeApplication{paths: paths, uid: 501}
+	descriptors, err := runtime.ListUnresolvedJournalEvents(ctx)
+	if err != nil || len(descriptors) != 1 {
+		t.Fatalf("descriptors/error = %#v/%v", descriptors, err)
+	}
+	request := app.JournalResolutionRequest{EventRef: descriptors[0].EventSuffix, Resolution: journal.ResolutionDiscarded, Reason: "legacy scope inactive"}
+	plan, err := runtime.PlanJournalResolution(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplyJournalResolution(ctx, plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	store, err = journal.OpenReadOnly(ctx, paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	remaining, err := store.ListUnresolvedEvents(ctx)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("remaining/error = %#v/%v", remaining, err)
+	}
+}
 
 type runtimeSecretStore map[string][]byte
 
