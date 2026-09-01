@@ -85,7 +85,19 @@ func (runtime *runtimeApplication) ConfigDiff(ctx context.Context) (app.DriftRep
 	if err != nil {
 		return app.DriftReport{}, err
 	}
-	return service.ConfigDiff(ctx)
+	report, err := service.ConfigDiff(ctx)
+	if err != nil {
+		return app.DriftReport{}, err
+	}
+	if status.Adapters[app.Hermes] && runtime.checkHermesGrantFingerprint(ctx).State == doctor.StatePassed {
+		for index := range report.Resources {
+			clean := filepath.Clean(report.Resources[index].Target)
+			if filepath.Base(clean) == "mlink.json" && strings.Contains(clean, string(filepath.Separator)+".hermes"+string(filepath.Separator)) {
+				report.Resources[index].State = app.DriftMatching
+			}
+		}
+	}
+	return report, nil
 }
 
 func (runtime *runtimeApplication) ListBackups(ctx context.Context) ([]journal.BackupSummary, error) {

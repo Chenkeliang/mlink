@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/config"
 	"mlink/internal/controlplane"
 	"mlink/internal/install"
@@ -59,6 +60,13 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 	}
 	full := isFullAgentSet(agents)
 	resources := make([]install.DesiredResource, 0, len(backups)+1)
+	if agentSelected(agents, Cursor) {
+		cursorResources, err := service.cursorUninstallResources(ctx, backups)
+		if err != nil {
+			return install.ChangeSet{}, err
+		}
+		resources = append(resources, cursorResources...)
+	}
 	var activeConfiguration config.Config
 	if full {
 		activeConfiguration, err = service.activeConfiguration(ctx)
@@ -217,7 +225,50 @@ func panelUninstallResources(registryPath string) []install.DesiredResource {
 }
 
 func isFullAgentSet(agents []Agent) bool {
-	return len(agents) == 3 && agents[0] == Codex && agents[1] == Pi && agents[2] == Hermes
+	return (len(agents) == 3 || len(agents) == 4) && agents[0] == Codex && agents[1] == Pi && agents[2] == Hermes && (len(agents) == 3 || agents[3] == Cursor)
+}
+
+func (service *Service) cursorUninstallResources(ctx context.Context, backups []install.Backup) ([]install.DesiredResource, error) {
+	home := filepath.Dir(service.Paths.Home)
+	var resources []install.DesiredResource
+	for _, item := range []struct {
+		path   string
+		owner  string
+		remove func([]byte) ([]byte, error)
+		diff   string
+	}{
+		{filepath.Join(home, ".cursor", "hooks.json"), "dev.mlink.adapter.cursor", cursoradapter.RemoveOwnedHooks, "hooks"},
+		{filepath.Join(home, ".cursor", "mcp.json"), "dev.mlink.adapter.cursor", cursoradapter.RemoveOwnedMCPConfig, "mcpServers.mlink-memory"},
+	} {
+		if containsBackupTarget(backups, item.path) {
+			continue
+		}
+		current, mode, err := service.Target.Read(ctx, item.path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		content, err := item.remove(current)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, install.DesiredResource{
+			OwnerID: item.owner, Target: item.path, Content: content, Mode: mode,
+			SemanticDiff: []install.SemanticDiff{{Path: item.diff, Before: "MLink-owned entry present", After: "MLink-owned entry removed; unrelated entries preserved"}},
+		})
+	}
+	return resources, nil
+}
+
+func containsBackupTarget(backups []install.Backup, target string) bool {
+	for _, backup := range backups {
+		if filepath.Clean(backup.Target) == filepath.Clean(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {

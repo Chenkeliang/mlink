@@ -30,3 +30,20 @@ func TestConfigDiffDistinguishesMatchingModifiedAndMissingResources(t *testing.T
 		}
 	}
 }
+
+func TestConfigDiffDeduplicatesHistoricalOwnersAndIgnoresServiceActions(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	service.Ledger.(*memoryLedger).owned = []install.OwnedResource{
+		{OwnerID: "dev.mlink.restore", Target: "/shared", PostApplyHash: contentHash(nil)},
+		{OwnerID: "dev.mlink.config", Target: "/shared", PostApplyHash: contentHash([]byte("current"))},
+		{OwnerID: "dev.mlink.broker", Target: "service:kickstart:dev.mlink.broker", PostApplyHash: contentHash(nil)},
+	}
+	target.files["/shared"] = memoryFile{content: []byte("current"), mode: 0o600}
+	report, err := service.ConfigDiff(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Resources) != 1 || report.Resources[0].Target != "/shared" || report.Resources[0].OwnerID != "dev.mlink.config" || report.Resources[0].State != DriftMatching {
+		t.Fatalf("report = %#v", report)
+	}
+}

@@ -61,6 +61,44 @@ func TestFullUninstallUsesLatestSemanticBackupAndDeletesConnectionSecret(t *test
 	}
 }
 
+func TestFullUninstallAfterIncrementalCursorEnableRemovesOnlyOwnedCursorEntries(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	target.files["/Users/test/.cursor/hooks.json"] = memoryFile{content: []byte(`{"version":1,"hooks":{"afterFileEdit":[{"command":"./format.sh"}]}}`), mode: 0o600}
+	target.files["/Users/test/.cursor/mcp.json"] = memoryFile{content: []byte(`{"mcpServers":{"postgres":{"command":"npx"}}}`), mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	cursorPlan, err := service.PlanCursorEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyCursorEnable(context.Background(), cursorPlan.PlanID); err != nil {
+		t.Fatal(err)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Cursor}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := target.files[service.Paths.Binary]; exists {
+		t.Fatal("full uninstall left MLink binary")
+	}
+	if hooks := string(target.files["/Users/test/.cursor/hooks.json"].content); !strings.Contains(hooks, "./format.sh") || strings.Contains(hooks, "hook cursor") {
+		t.Fatalf("Cursor hooks after uninstall = %s", hooks)
+	}
+	if mcp := string(target.files["/Users/test/.cursor/mcp.json"].content); !strings.Contains(mcp, "postgres") || strings.Contains(mcp, "mlink-memory") {
+		t.Fatalf("Cursor MCP after uninstall = %s", mcp)
+	}
+}
+
 func (store blockingEvents) ListStateDeletionBlockers(context.Context) ([]journal.Event, error) {
 	return append([]journal.Event(nil), store.events...), nil
 }
