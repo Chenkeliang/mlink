@@ -35,6 +35,7 @@ type Dependencies struct {
 	InstallRequest app.InstallRequest
 	ServeTencentDB func(context.Context) error
 	ServeBroker    func(context.Context) error
+	ServeMCP       func(context.Context) error
 	RunCodexHook   func(context.Context, string) error
 	RunCursorHook  func(context.Context, string) error
 	RunTUI         func(context.Context) error
@@ -59,6 +60,13 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if slices.Equal(args, []string{"broker", "serve"}) {
 		if deps.ServeBroker == nil || deps.ServeBroker(ctx) != nil {
 			writeLine(deps.Stderr, "mlink broker command failed")
+			return 1
+		}
+		return 0
+	}
+	if slices.Equal(args, []string{"mcp", "serve"}) {
+		if deps.ServeMCP == nil || deps.ServeMCP(ctx) != nil {
+			writeLine(deps.Stderr, "mlink MCP command failed")
 			return 1
 		}
 		return 0

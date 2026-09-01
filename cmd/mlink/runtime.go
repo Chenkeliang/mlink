@@ -26,6 +26,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	adapterclient "mlink/internal/adapter/client"
 	"mlink/internal/adapter/codex"
@@ -41,6 +42,7 @@ import (
 	"mlink/internal/install"
 	"mlink/internal/journal"
 	"mlink/internal/layout"
+	"mlink/internal/mcpserver"
 	"mlink/internal/panel"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
@@ -229,6 +231,10 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 		})
 	}
 	dependencies.ServeBroker = runtime.ServeBroker
+	dependencies.ServeMCP = func(ctx context.Context) error {
+		backend := adapterclient.Client{SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 2 * time.Second, CaptureTimeout: 2 * time.Second}
+		return mcpserver.New(backend, version.Current().Version).Run(ctx, &mcp.StdioTransport{})
+	}
 	dependencies.RunTUI = func(context.Context) error {
 		_, err := tea.NewProgram(tui.New(runtime, dependencies.InstallRequest), tea.WithAltScreen(), tea.WithInput(stdin), tea.WithOutput(stdout)).Run()
 		return err

@@ -216,6 +216,20 @@ func TestRunStartsBrokerService(t *testing.T) {
 	}
 }
 
+func TestRunStartsMCPService(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), []string{"mcp", "serve"}, Dependencies{
+		Stderr: io.Discard,
+		ServeMCP: func(context.Context) error {
+			calls++
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}
+
 func TestInstallDryRunPrintsPlanAndNeverApplies(t *testing.T) {
 	application := &fakeApplication{plan: fixtureInstallPlan()}
 	stdout := new(bytes.Buffer)

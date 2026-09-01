@@ -55,3 +55,22 @@ func TestClientSendsAdapterAndBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStatusUsesBrokerHealthAndDoesNotFailOpen(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/health" || request.URL.Query().Get("adapter_id") != "cursor" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.String())
+		}
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte(`{"status":"ready"}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, AdapterID: "cursor", RecallTimeout: time.Second}
+	if err := client.Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	client.BaseURL = "http://127.0.0.1:1"
+	if err := client.Status(context.Background()); err == nil {
+		t.Fatal("Status() hid connection failure")
+	}
+}

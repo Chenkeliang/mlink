@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -45,6 +46,32 @@ func (c Client) Recall(ctx context.Context, input broker.RecallInput) (model.Con
 		return model.ContextBundle{Warnings: []string{"MLink recall unavailable; continuing without external memory"}}, nil
 	}
 	return bundle, err
+}
+
+func (c Client) Status(ctx context.Context) error {
+	requestCtx := ctx
+	cancel := func() {}
+	if c.RecallTimeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, c.RecallTimeout)
+	}
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, strings.TrimRight(c.baseURL(), "/")+"/v1/health?adapter_id="+url.QueryEscape(c.AdapterID), nil)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	response, err := c.httpClient().Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBytes))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Broker health failed with status %d", response.StatusCode)
+	}
+	return nil
 }
 
 func (c Client) SubmitTurn(ctx context.Context, input broker.TurnInput) (broker.SubmitReceipt, error) {
