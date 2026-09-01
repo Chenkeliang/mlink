@@ -30,13 +30,14 @@ const (
 )
 
 type InstallRequest struct {
-	Agents           []Agent
-	Connection       config.Connection
-	OwnerSlug        string
-	OwnerBindingSlot config.BindingRef
-	SecretInputs     map[string][]byte
-	HermesMachine    string
-	HermesHome       string
+	Agents            []Agent
+	Connection        config.Connection
+	OwnerSlug         string
+	OwnerBindingSlot  config.BindingRef
+	SecretInputs      map[string][]byte
+	HermesMachine     string
+	HermesHome        string
+	DynamicAgentLimit int
 }
 
 type UninstallRequest struct {

@@ -76,7 +76,12 @@ func TestIdentityImportRefusesCanonicalUserCollision(t *testing.T) {
 }
 
 func TestIdentityExportRoundTripPreservesOwnerAndBinding(t *testing.T) {
-	service, _, _ := installedIdentityFixture(t)
+	service, _, secrets := installedIdentityFixture(t)
+	state := journal.ControlPlaneState{InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated", OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "active"}
+	store := &identityControlStore{state: state, mappings: map[string]journal.PrincipalAgent{}}
+	service.ControlPlaneStates, service.PrincipalAgentStates = store, store
+	secrets.values["control/tencentdb/admin-user-key"] = []byte("admin-key")
+	secrets.values["control/tencentdb/owner-user-key"] = []byte("owner-key")
 	encrypted, err := service.ExportIdentity(context.Background(), []byte("passphrase-12"), bytes.NewReader(bytes.Repeat([]byte{0x31}, 64)))
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +91,7 @@ func TestIdentityExportRoundTripPreservesOwnerAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bundle.Wipe()
-	if bundle.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(bundle.Bindings) != 1 || string(bundle.Bindings[0].Value) != "on_owner" {
+	if bundle.SchemaVersion != 2 || bundle.Principals["owner"].CanonicalUserID != "usr-owner-generated" || len(bundle.Bindings) != 1 || string(bundle.Bindings[0].Value) != "on_owner" {
 		t.Fatal("exported identity does not match installed owner")
 	}
 }
@@ -109,13 +114,6 @@ func TestIdentityExportV2IncludesGeneratedControlPlaneAndMappings(t *testing.T) 
 	}}
 	service.ControlPlaneStates = store
 	service.PrincipalAgentStates = store
-	plan, err := service.PlanControlPlaneCutover(context.Background(), ControlPlaneCutoverRequest{DynamicAgentLimit: 500})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.ApplyControlPlaneCutover(context.Background(), plan.PlanID, ControlPlaneCutoverRequest{DynamicAgentLimit: 500}); err != nil {
-		t.Fatal(err)
-	}
 	encrypted, err := service.ExportIdentity(context.Background(), []byte("passphrase-12"), bytes.NewReader(bytes.Repeat([]byte{0x41}, 64)))
 	if err != nil {
 		t.Fatal(err)

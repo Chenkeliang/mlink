@@ -12,7 +12,9 @@ import (
 
 	"mlink/internal/app"
 	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 	"mlink/internal/layout"
 )
 
@@ -111,6 +113,40 @@ func (store secrets) Put(_ context.Context, account string, value []byte) error 
 	return nil
 }
 
+type e2eControlStore struct {
+	state    journal.ControlPlaneState
+	mappings map[string]journal.PrincipalAgent
+}
+
+func (store *e2eControlStore) LoadControlPlane(context.Context) (journal.ControlPlaneState, error) {
+	if store.state.State == "" {
+		return journal.ControlPlaneState{}, fs.ErrNotExist
+	}
+	return store.state, nil
+}
+func (store *e2eControlStore) MarkControlPlaneState(_ context.Context, state string) error {
+	store.state.State = state
+	return nil
+}
+func (store *e2eControlStore) GetPrincipalAgent(_ context.Context, fingerprint string) (journal.PrincipalAgent, error) {
+	value, ok := store.mappings[fingerprint]
+	if !ok {
+		return journal.PrincipalAgent{}, fs.ErrNotExist
+	}
+	return value, nil
+}
+func (store *e2eControlStore) PutPrincipalAgent(_ context.Context, value journal.PrincipalAgent) error {
+	store.mappings[value.Fingerprint] = value
+	return nil
+}
+func (store *e2eControlStore) ListPrincipalAgents(context.Context) ([]journal.PrincipalAgent, error) {
+	result := make([]journal.PrincipalAgent, 0, len(store.mappings))
+	for _, value := range store.mappings {
+		result = append(result, value)
+	}
+	return result, nil
+}
+
 func (store secrets) Get(_ context.Context, account string) ([]byte, error) {
 	value, exists := store[account]
 	if !exists {
@@ -197,16 +233,25 @@ func fixture(t *testing.T) (*app.Service, *target, app.InstallRequest) {
 		},
 	}}
 	ledger := &ledger{backups: make(map[string]install.Backup)}
+	secretStore := secrets{
+		controlplane.AdminUserKeyAccount: []byte("admin-key"),
+		controlplane.OwnerUserKeyAccount: []byte("owner-key"),
+	}
+	controlStore := &e2eControlStore{state: journal.ControlPlaneState{
+		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
+	}, mappings: map[string]journal.PrincipalAgent{}}
 	service := &app.Service{
-		Paths: paths, UID: 501, Target: target, Ledger: ledger, Secrets: secrets{},
+		Paths: paths, UID: 501, Target: target, Ledger: ledger, Secrets: secretStore,
 		HermesEndpoint: "http://192.168.139.3:8097", HermesListenAddress: "192.168.139.3:8097",
 		HermesGrantToken: []byte("hermes-grant"), IdentityKey: bytes.Repeat([]byte{0x2a}, 32),
+		ControlPlaneStates: controlStore, PrincipalAgentStates: controlStore,
 	}
 	request := app.InstallRequest{
 		Agents: []app.Agent{app.Codex, app.Pi, app.Hermes},
 		Connection: config.Connection{
 			ID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-local-1",
-			ProviderConfig: map[string]any{"base_url": "http://127.0.0.1:8096", "service_id": "default", "timeout_ms": 5000},
+			ProviderConfig: map[string]any{"base_url": "http://127.0.0.1:8420", "service_id": "default", "timeout_ms": 5000},
 			TenantID:       "personal", AgentID: "default", UserID: "local-user",
 		},
 		SecretInputs: map[string][]byte{app.MemoryCoreTokenSecret: []byte("memorycore-token"), app.OwnerBindingSecret: []byte("on_owner")},
@@ -216,6 +261,7 @@ func fixture(t *testing.T) (*app.Service, *target, app.InstallRequest) {
 			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
 		},
 		HermesMachine: "hermes-agent-env", HermesHome: "/home/test/.hermes",
+		DynamicAgentLimit: 500,
 	}
 	return service, target, request
 }

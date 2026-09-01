@@ -170,13 +170,7 @@ func TestControlPlaneUninstallRemovesOnlyLocalPanelAndKeepsBackendMetadata(t *te
 	service.PrincipalAgentStates = store
 	secrets.values["control/tencentdb/admin-user-key"] = []byte("admin-key")
 	secrets.values["control/tencentdb/owner-user-key"] = []byte("owner-key")
-	cutover, err := service.PlanControlPlaneCutover(context.Background(), ControlPlaneCutoverRequest{DynamicAgentLimit: 500})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.ApplyControlPlaneCutover(context.Background(), cutover.PlanID, ControlPlaneCutoverRequest{DynamicAgentLimit: 500}); err != nil {
-		t.Fatal(err)
-	}
+	store.state.State = "active"
 	target.files[service.Paths.PanelRegistry] = memoryFile{content: []byte("protected registry"), mode: 0o600}
 	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes}}
 	plan, err := service.PlanUninstall(context.Background(), request)

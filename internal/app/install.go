@@ -42,8 +42,19 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if len(service.IdentityKey) != 32 {
 		return install.ChangeSet{}, errors.New("32-byte MLink identity key is required")
 	}
-	if _, _, err := normalizeOwner(request); err != nil {
+	namespaceID, _, err := normalizeOwner(request)
+	if err != nil {
 		return install.ChangeSet{}, err
+	}
+	if service.ControlPlaneStates == nil {
+		return install.ChangeSet{}, errors.New("fresh install requires provisioned Core identity")
+	}
+	controlState, err := service.ControlPlaneStates.LoadControlPlane(ctx)
+	if err != nil {
+		return install.ChangeSet{}, fmt.Errorf("load provisioned Core identity: %w", err)
+	}
+	if (controlState.State != "provisioned" && controlState.State != "active") || controlState.InstallationID != namespaceID || request.DynamicAgentLimit <= 0 || request.DynamicAgentLimit > 10_000 {
+		return install.ChangeSet{}, errors.New("matching Core identity and explicit dynamic Agent limit are required")
 	}
 	if agentSelected(agents, Hermes) {
 		if err := validateOwnerBinding(request); err != nil {
@@ -69,17 +80,21 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 	if err != nil {
 		return install.ChangeSet{}, err
 	}
+	configuration, err = buildCutoverConfig(configuration, controlState, request.DynamicAgentLimit)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
 	configData, err := yaml.Marshal(configuration)
 	if err != nil {
 		return install.ChangeSet{}, fmt.Errorf("render MLink config: %w", err)
 	}
 	configDiff := []install.SemanticDiff{
-		{Path: "schema_version", Before: "absent or owned", After: "2"},
+		{Path: "schema_version", Before: "absent or owned", After: "3"},
 		{Path: "connection:" + request.Connection.ID, Before: "absent or owned", After: "TencentDB with Keychain secret reference"},
-		{Path: "principal:owner", Before: "absent or owned", After: "stable canonical owner"},
-		{Path: "space:personal-owner", Before: "absent or owned", After: "owner L1/L2/L3; Codex/Pi/owner Hermes"},
-		{Path: "space:hermes-private", Before: "absent or owned", After: "per-user L1 only; no agent-shared"},
-		{Path: "space:hermes-groups", Before: "absent or owned", After: "per-group L1 only; topics share group principal"},
+		{Path: "principal:owner", Before: "absent or owned", After: "Core-generated Owner"},
+		{Path: "routing:owner", Before: "absent", After: "Core Owner L1/L2/L3"},
+		{Path: "routing:hermes-private", Before: "absent", After: "dynamic Agent per principal; L1"},
+		{Path: "routing:hermes-groups", Before: "absent", After: "dynamic Agent per group; topic session; L1"},
 	}
 	if agentSelected(agents, Hermes) {
 		configDiff = append(configDiff, install.SemanticDiff{
@@ -87,7 +102,7 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 		})
 	}
 	for _, agent := range agents {
-		after := "fixed personal-owner"
+		after := "fixed Core Owner"
 		if agent == Hermes {
 			after = "dynamic owner/private/group"
 		}
@@ -102,7 +117,11 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 			if bytes.Contains(content, request.SecretInputs[MemoryCoreTokenSecret]) {
 				return errors.New("MemoryCore token leaked into MLink config")
 			}
-			return nil
+			active, err := config.Decode(content)
+			if err != nil {
+				return err
+			}
+			return verifyGeneratedControlPlane(active, controlState)
 		},
 	})
 
@@ -201,13 +220,21 @@ func (service *Service) ApplyInstall(ctx context.Context, planID string, request
 		}
 		return err
 	}
+	if service.ControlPlaneStates != nil {
+		if err := service.ControlPlaneStates.MarkControlPlaneState(ctx, "active"); err != nil {
+			rollbackErr := transaction.Rollback(ctx, plan)
+			secretErr := service.restoreManagedSecrets(ctx, managedSecrets)
+			return errors.Join(err, rollbackErr, secretErr)
+		}
+	}
 	if recorder, ok := service.Ledger.(InstallPlanRecorder); ok {
 		agents := make([]string, len(plan.DetectedAgents))
 		copy(agents, plan.DetectedAgents)
 		if err := recorder.RecordInstallPlan(ctx, plan.PlanID, agents); err != nil {
 			rollbackErr := transaction.Rollback(ctx, plan)
 			secretErr := service.restoreManagedSecrets(ctx, managedSecrets)
-			return errors.Join(err, rollbackErr, secretErr)
+			stateErr := service.ControlPlaneStates.MarkControlPlaneState(ctx, "provisioned")
+			return errors.Join(err, rollbackErr, secretErr, stateErr)
 		}
 	}
 	return nil

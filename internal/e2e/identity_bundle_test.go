@@ -26,7 +26,7 @@ func TestInstalledIdentityExportsWithStableCanonicalOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bundle.Wipe()
-	if bundle.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(bundle.Bindings) != 1 {
+	if bundle.SchemaVersion != 2 || bundle.Principals["owner"].CanonicalUserID != "usr-owner-generated" || len(bundle.Bindings) != 1 {
 		t.Fatal("identity Bundle did not preserve owner")
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"mlink/internal/config"
 	"mlink/internal/install"
+	"mlink/internal/journal"
 	"mlink/internal/layout"
 )
 
@@ -206,6 +207,42 @@ func TestPlanInstallContainsAllSelectedResourcesAndNoWrites(t *testing.T) {
 	}
 }
 
+func TestFreshInstallRequiresProvisionedCoreIdentity(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	service.ControlPlaneStates = nil
+	request := fixtureInstallRequest()
+	if _, err := service.PlanInstall(context.Background(), request); err == nil {
+		t.Fatal("fresh install accepted missing Core control-plane state")
+	}
+}
+
+func TestFreshInstallWritesCoreGeneratedSchemaV3BeforeBrokerStart(t *testing.T) {
+	service, _, _ := newInstallFixture(t)
+	service.ControlPlaneStates = &cutoverStateStore{state: journal.ControlPlaneState{
+		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
+	}}
+	request := fixtureInstallRequest()
+	plan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := operationForTarget(t, plan, service.Paths.Config)
+	configuration, err := config.Decode(operation.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.SchemaVersion != 3 || configuration.ControlPlane == nil || configuration.ControlPlane.OwnerUserID != "usr-owner-generated" || configuration.ControlPlane.OwnerTeamID != "team-owner-generated" || configuration.ControlPlane.OwnerAgentID != "agt-owner-generated" || configuration.ControlPlane.OwnerAssetID != "chat_memory-team-owner-generated-agt-owner-generated" {
+		t.Fatalf("configuration = %#v", configuration)
+	}
+	if len(configuration.Spaces) != 0 || configuration.RoutingPolicies["owner"].AgentPolicy != config.AgentFixed || configuration.Adapters["codex"].SpaceID != "owner" {
+		t.Fatalf("v3 routing = %#v/%#v", configuration.RoutingPolicies, configuration.Adapters)
+	}
+	if last := plan.Operations[len(plan.Operations)-1].Target; last != "service:kickstart:dev.mlink.broker" {
+		t.Fatalf("last operation = %q", last)
+	}
+}
+
 func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testing.T) {
 	service, target, _ := newInstallFixture(t)
 	request := fixtureInstallRequest()
@@ -230,7 +267,7 @@ func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testin
 			t.Fatalf("Cursor model settings targeted: %s", operation.Target)
 		}
 	}
-	if !bytes.Contains(hooks, []byte("hook cursor beforeSubmitPrompt")) || !bytes.Contains(mcpConfig, []byte(`"mlink-memory"`)) || !bytes.Contains(mcpConfig, []byte(`"mcp"`)) || !bytes.Contains(configuration, []byte("cursor:")) || !bytes.Contains(configuration, []byte("space_id: personal-owner")) {
+	if !bytes.Contains(hooks, []byte("hook cursor beforeSubmitPrompt")) || !bytes.Contains(mcpConfig, []byte(`"mlink-memory"`)) || !bytes.Contains(mcpConfig, []byte(`"mcp"`)) || !bytes.Contains(configuration, []byte("cursor:")) || !bytes.Contains(configuration, []byte("space_id: owner")) {
 		t.Fatalf("hooks/mcp/config = %s\n%s\n%s", hooks, mcpConfig, configuration)
 	}
 	if target.writes != 0 {
@@ -238,7 +275,7 @@ func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testin
 	}
 }
 
-func TestPlanInstallCreatesThreeSpacesAndStableOwner(t *testing.T) {
+func TestPlanInstallCreatesCoreRoutingAndStableOwner(t *testing.T) {
 	service, _, _ := newInstallFixture(t)
 	plan, err := service.PlanInstall(context.Background(), fixtureInstallRequest())
 	if err != nil {
@@ -249,25 +286,25 @@ func TestPlanInstallCreatesThreeSpacesAndStableOwner(t *testing.T) {
 	if err := yaml.Unmarshal(configOperation.Content, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 2 || got.Principals["owner"].CanonicalUserID != "usr_owner_keliang" || len(got.Spaces) != 3 {
+	if got.SchemaVersion != 3 || got.Principals["owner"].CanonicalUserID != "usr-owner-generated" || len(got.Spaces) != 0 {
 		t.Fatalf("config = %#v", got)
 	}
-	if !got.Spaces["personal-owner"].IncludeAgentShared || got.Spaces["hermes-groups"].IncludeAgentShared || got.Spaces["hermes-private"].IncludeAgentShared {
-		t.Fatalf("spaces = %#v", got.Spaces)
+	if got.RoutingPolicies["owner"].AgentPolicy != config.AgentFixed || got.RoutingPolicies["hermes-private"].AgentPolicy != config.AgentDynamicPrincipal || got.RoutingPolicies["hermes-groups"].SessionPolicy != config.SessionPerTopic {
+		t.Fatalf("routing = %#v", got.RoutingPolicies)
 	}
 	connection := got.Connections["local"]
 	if connection.TenantID != "" || connection.AgentID != "" || connection.UserID != "" || connection.IncludeAgentShared {
 		t.Fatalf("legacy identity leaked into Connection: %#v", connection)
 	}
 	wantDiffs := map[string]string{
-		"schema_version":               "2",
-		"principal:owner":              "stable canonical owner",
+		"schema_version":               "3",
+		"principal:owner":              "Core-generated Owner",
 		"binding:owner-feishu-union-1": "redacted union_id alias -> owner",
-		"space:personal-owner":         "owner L1/L2/L3; Codex/Pi/owner Hermes",
-		"space:hermes-private":         "per-user L1 only; no agent-shared",
-		"space:hermes-groups":          "per-group L1 only; topics share group principal",
-		"adapter:codex.route":          "fixed personal-owner",
-		"adapter:pi.route":             "fixed personal-owner",
+		"routing:owner":                "Core Owner L1/L2/L3",
+		"routing:hermes-private":       "dynamic Agent per principal; L1",
+		"routing:hermes-groups":        "dynamic Agent per group; topic session; L1",
+		"adapter:codex.route":          "fixed Core Owner",
+		"adapter:pi.route":             "fixed Core Owner",
 		"adapter:hermes.route":         "dynamic owner/private/group",
 	}
 	for path, after := range wantDiffs {
@@ -422,6 +459,10 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 		},
 	})
 	secrets := &memorySecrets{values: make(map[string][]byte)}
+	states := &cutoverStateStore{state: journal.ControlPlaneState{
+		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
+		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", State: "provisioned",
+	}}
 	return &Service{
 		Paths:               paths,
 		UID:                 501,
@@ -432,6 +473,7 @@ func newInstallFixture(t *testing.T) (*Service, *memoryTarget, *memorySecrets) {
 		HermesListenAddress: "192.168.139.1:8097",
 		HermesGrantToken:    []byte("hermes-grant-secret"),
 		IdentityKey:         bytes.Repeat([]byte{0x2a}, 32),
+		ControlPlaneStates:  states,
 	}, target, secrets
 }
 
@@ -441,7 +483,7 @@ func fixtureInstallRequest() InstallRequest {
 		Connection: config.Connection{
 			ID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-1",
 			ProviderConfig: map[string]any{
-				"base_url": "http://127.0.0.1:8096", "service_id": "default", "team_id": "personal",
+				"base_url": "http://127.0.0.1:8420", "service_id": "default", "timeout_ms": 5000,
 			},
 			TenantID: "personal", AgentID: "default", UserID: "user-local", IncludeAgentShared: true,
 		},
@@ -451,8 +493,9 @@ func fixtureInstallRequest() InstallRequest {
 			ID: "owner-feishu-union-1", Source: "feishu", Kind: "union_id", PrincipalID: "owner",
 			SecretRef: "keychain://dev.mlink/identity/binding/owner-feishu-union-1", Status: config.BindingActive,
 		},
-		HermesMachine: "hermes-agent-env",
-		HermesHome:    "/home/test/.hermes",
+		HermesMachine:     "hermes-agent-env",
+		HermesHome:        "/home/test/.hermes",
+		DynamicAgentLimit: 500,
 	}
 	return request
 }
