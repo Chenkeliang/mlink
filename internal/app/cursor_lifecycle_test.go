@@ -32,7 +32,7 @@ func TestPlanCursorEnablePreservesSchemaV3AndAddsOnlyOwnedCursorConfig(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.writes != 0 || len(plan.Operations) != 3 {
+	if target.writes != 0 || len(plan.Operations) != 4 || plan.Operations[3].Target != "service:kickstart:dev.mlink.broker" {
 		t.Fatalf("writes/operations = %d/%#v", target.writes, plan.Operations)
 	}
 	var proposed []byte
@@ -47,8 +47,8 @@ func TestPlanCursorEnablePreservesSchemaV3AndAddsOnlyOwnedCursorConfig(t *testin
 	if err := service.ApplyCursorEnable(context.Background(), plan.PlanID); err != nil {
 		t.Fatal(err)
 	}
-	if target.writes != 3 {
-		t.Fatalf("apply writes = %d", target.writes)
+	if target.writes != 3 || target.runs != 1 {
+		t.Fatalf("apply writes/runs = %d/%d", target.writes, target.runs)
 	}
 }
 

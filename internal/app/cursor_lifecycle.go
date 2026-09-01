@@ -71,6 +71,12 @@ func (service *Service) PlanCursorEnable(ctx context.Context) (install.ChangeSet
 		},
 		hooksResource,
 		mcpResource,
+		{
+			OwnerID: "dev.mlink.broker", Target: "service:kickstart:dev.mlink.broker", Action: install.ActionService,
+			Command:         []string{"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/dev.mlink.broker", service.UID)},
+			RollbackCommand: []string{"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/dev.mlink.broker", service.UID)},
+			SemanticDiff:    []install.SemanticDiff{{Path: "service:broker", Before: "previous adapter registry", After: "Cursor adapter active"}},
+		},
 	})
 }
 
