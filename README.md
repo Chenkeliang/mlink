@@ -2,7 +2,7 @@
 
 <img src="assets/mlink-logo.svg" alt="MLink — One memory plane. Your models stay yours." width="900">
 
-[English](README.md) · [简体中文 Wiki](https://github.com/Chenkeliang/mlink/wiki)
+[English](README.md) · [简体中文](README.zh-CN.md)
 
 Connect Codex, Cursor, Pi, and Hermes Agent to one local memory service—without replacing their model provider, subscription, API key, or authentication flow.
 
@@ -23,6 +23,25 @@ Every coding agent has its own lifecycle, configuration, and memory surface. MLi
 - **TencentDB MemoryCore** — the first production Provider, including the official Memory Hub Panel.
 
 MLink is not an LLM proxy. Your agent continues using the model account and provider it already had.
+
+## What MLink actually solves
+
+TencentDB Agent Memory already provides a multi-user and team-aware memory foundation: Users and User Keys, Teams and memberships, Agents and Tasks, asset ownership and ACLs, plus the L0–L3 memory engine. MLink does not replace or reimplement those capabilities.
+
+MLink turns those primitives into one safe, consistent integration layer for heterogeneous agents and chat channels:
+
+| Boundary | TencentDB Agent Memory provides | MLink provides |
+|---|---|---|
+| Memory engine | L0–L3 extraction, storage, and retrieval | Uses the engine through a versioned Provider; does not duplicate it |
+| Backend identity | User, Team, Agent, Task, Asset, User Key, and ACL APIs | Provisions permanent Core IDs before the first write and verifies them on every runtime start |
+| Agent integration | HTTP APIs, SDKs, and an optional LLM Proxy | Codex Hooks, Cursor Hooks/MCP, Pi Extension, and Hermes MemoryProvider without changing model routing |
+| External identity | Requires explicit User / Team / Agent dimensions | Maps stable Feishu identities, groups, and topics to deterministic MLink routes |
+| Session routing | Accepts caller-supplied identity and session dimensions | Derives stable DM, group, topic, and local-Agent sessions |
+| Isolation policy | Stores and retrieves within Core identity dimensions | Gives the Owner L1/L2/L3 while limiting other DMs and groups to their isolated L1 routes |
+| Delivery reliability | Memory capture and recall APIs | SQLite Journal deduplication, retry, ambiguous-write audit, and operator resolution |
+| Operations | MemoryCore and Memory Hub runtimes | Detection, guided installation, exact Plans, backups, upgrades, uninstall, and Doctor |
+
+In the current Hermes integration, the Owner is a normal MemoryCore User. Each other Feishu DM principal and each group is mapped to its own dynamic Agent under the Owner Team. This provides isolated multi-principal access without pretending that every Feishu member has been registered as a separate MemoryCore User.
 
 ## Architecture
 
