@@ -45,6 +45,10 @@ type Packer struct {
 	StagingParent string
 }
 
+func (packer Packer) Open(ctx context.Context, input string, passphrase []byte, visitor func(Section, io.Reader) error) (Manifest, error) {
+	return Open(ctx, input, passphrase, visitor)
+}
+
 func EncryptSection(ctx context.Context, staging string, passphrase []byte, source SectionSource) (result StagedSection, err error) {
 	if ctx == nil || !source.Name.Valid() || source.Open == nil || !filepath.IsAbs(staging) {
 		return StagedSection{}, errors.New("valid workspace backup section source is required")

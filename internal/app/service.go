@@ -12,8 +12,10 @@ import (
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/panel"
+	"mlink/internal/provider/lifecycle"
 	"mlink/internal/secret"
 	"mlink/internal/version"
+	"mlink/internal/workspacebackup"
 )
 
 type Agent string
@@ -99,6 +101,15 @@ type ProviderBackendUninstaller interface {
 	PlanUninstall(context.Context) (install.ChangeSet, error)
 }
 
+type WorkspaceBundle interface {
+	Pack(context.Context, string, []byte, *workspacebackup.Manifest, ...workspacebackup.SectionSource) error
+	Open(context.Context, string, []byte, func(workspacebackup.Section, io.Reader) error) (workspacebackup.Manifest, error)
+}
+
+type WorkspaceStateArchiver interface {
+	Open(context.Context, layout.Paths) (io.ReadCloser, error)
+}
+
 type PrincipalAgentStateStore interface {
 	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
 	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
@@ -148,6 +159,9 @@ type Service struct {
 	ControlPlaneStates   ControlPlaneStateStore
 	ControlProvisioner   ControlPlaneProvisioner
 	ProviderBackend      ProviderBackendUninstaller
+	SnapshotDriver       lifecycle.SnapshotDriver
+	WorkspacePacker      WorkspaceBundle
+	WorkspaceArchiver    WorkspaceStateArchiver
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime
 	PanelDesired         panel.Desired
