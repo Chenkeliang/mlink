@@ -1,64 +1,75 @@
-# MLink Real-Machine Stage A Preview
+# MLink Real-Machine Official Memory Hub Stage A
 
-Date: 2026-08-31
+Date: 2026-09-01
 
-Status: **previewed, not applied**. Stage A is blocked because the unchanged official Panel Dockerfile cannot build on this host; see `mlink-control-plane-live.md`.
+Status: **Stage A applied and verified. Stage B not run.**
 
-## Candidate
+## Candidate and exact plan
 
 - Branch: `feat_product_design`
-- Candidate: `/tmp/mlink-control-plane-preview`
-- Candidate SHA-256: `b73b6cb365fa8f5efb4f062e9b8ebd9dde625d31362ab0116f449df7a76d8b2f`
-- Installed MLink SHA-256 before/after preview: `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256`
-- Official Panel source: clean checkout at `a5dcbe6`
-- Planned image: `mlink-memory-panel:a5dcbe6`
+- Candidate: `/tmp/mlink-memory-hub-candidate`
+- Candidate SHA-256: `b66fbaed49ac07ff3eebf1864242287221856f5fdf15b328b3bf5f5bab121103`
+- Installed MLink remained unchanged: `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256`
+- Official arm64 image: `agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104`
+- Exact Stage A Plan (three consecutive previews): `plan_d3a4c14416b4627a1d33915c02`
 
-## Exact Stage A ChangeSet
+The Plan contained eight operations:
 
-- Plan ID (three consecutive previews): `plan_99e293816f1d956726df0a56db`
-- Selected instance: `default`
-- Full JSON preview: `/tmp/mlink-stage-a-preview.json` (local ephemeral evidence)
+1. Core system-admin intent;
+2. normal Owner User intent;
+3. Owner Team intent;
+4. Owner Agent and auto-minted Chat Memory Asset intent;
+5. protected `0600` instance registry;
+6. digest-pinned official image pull;
+7. labeled persistent `tdai-panel-data` volume;
+8. `tdai-memory-hub` with Panel and Knowledge bound to host loopback.
 
-Operations:
+No operation changed active MLink routing, Agent configuration, model providers, or legacy memory.
 
-1. `remote:tencentdb:default:create:system-admin`
-2. `remote:tencentdb:default:create:owner-user`
-3. `remote:tencentdb:default:create:owner-team`
-4. `remote:tencentdb:default:create:owner-agent`
-5. create protected `~/.mlink/panel/metadata-instances.json` at mode `0600` during Apply only
-6. build `mlink-memory-panel:a5dcbe6` from the pinned official Dockerfile
-7. run `mlink-memory-panel` at `127.0.0.1:8125:8123`
+## Zero-write preview evidence
 
-The registry content and Gateway Bearer are absent from the ChangeSet. Stage A contains no active MLink config operation, no Broker/Hermes restart, no MemoryProxy/8096 operation, and no model/auth operation.
+Before Apply:
 
-## Zero-Write Proof
+- the active Journal contained migrations `1,2,3` only;
+- control-plane Keychain accounts were absent;
+- the production Hub container, volume, registry, and ports were absent;
+- three previews returned the same Plan ID;
+- config, Hook, Pi, installed binary, and Hermes hashes matched the values below.
 
-Hashes were identical immediately before and after another preview:
+## Applied resources
+
+- container `tdai-memory-hub`: healthy;
+- Panel: `127.0.0.1:8125`, healthy;
+- Knowledge: `127.0.0.1:8424`, healthy;
+- Memory instance `default`: visible in Panel;
+- Knowledge volume: `tdai-panel-data`, label `dev.mlink.component=memory-hub`;
+- registry: `~/.mlink/panel/metadata-instances.json`, mode `0600`;
+- control-plane state: `provisioned`;
+- generated ID suffixes: User `moi6r72v`, Team `mo0mljnc`, Agent `mo8s7iqg`;
+- admin and Owner user keys: present and distinct;
+- Owner login through Panel: HTTP 200, `valid=true`;
+- Wiki assets: `0`;
+- CodeGraph assets: `0`;
+- image RepoDigest exactly matches the approved official digest;
+- no listener on port 8096.
+
+## Protected hash comparison
+
+The following hashes were identical before and after Apply:
 
 | Resource | SHA-256 |
 |---|---|
 | `~/.mlink/config.yaml` | `9fde5087c73671c5403ed736233ed8d509c80bfddb912392ab0f6f5a0b6c0161` |
 | `~/.codex/hooks.json` | `a2f139c141781fdc9467e10ee603288b8903fbb17045e266feb34846b991a9bd` |
 | Pi extension | `004055a36522fd6417d80c4abedcba3aa30489ff4d5510960bb063b6143b99a4` |
+| Installed MLink | `bbda95d1b3c3bbfdf45e71ddae6c5771942807b9065e3d564b22b2830c887256` |
 | Hermes `config.yaml` | `ce5d0d530ca10010b5df2440211a3dd4f5dcb3065d17bff2575484eb62950f8d` |
 | Hermes `mlink.json` | `3ce380cb387da5ed3083be2f69a081a294802f5261f2cfa1b337030aa2845cb3` |
 | Hermes plugin manifest | `65bd2e99d6df2ffaf53ca076e11e645a7aa9d16b9aee667615dd508a91808673` |
 | Hermes plugin code | `64c876cf72e76b558c15f0816cf42a47576d7bb0d05c087508ac80e0d4d091d9` |
 
-Additional checks after preview:
-
-- Journal migrations remain `1,2,3`; preview did not create v4 tables.
-- Admin and Owner Keychain accounts are absent.
-- Panel registry is absent.
-- No `mlink-memory-panel` image or container exists.
-- No listener exists on port `8125`.
-- The installed binary was not replaced.
+Journal migration `4` was added during Apply to persist generated control-plane state. No active configuration was cut over.
 
 ## Gate
 
-Do not approve or apply this Stage A Plan yet. The exact official Panel build fails before image creation because of the upstream apt/CA ordering issue. A fresh Stage A Plan must be generated after choosing one of these separately authorized paths:
-
-1. Tencent publishes a fixed official Dockerfile or prebuilt Panel-only image; or
-2. the user explicitly authorizes a derived Dockerfile workaround, which is currently out of scope because the requested policy is “no compatibility modification.”
-
-Stage B has not been previewed against real generated IDs and cannot be applied before Stage A succeeds.
+Do not run `panel cutover` yet. Stage B remains a separate exact preview and confirmation after the user reviews the working Hub/Panel.

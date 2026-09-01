@@ -29,11 +29,13 @@ func TestLiveControlPlaneAndOfficialPanel(t *testing.T) {
 	token := os.Getenv("MLINK_TEST_MEMORYCORE_TOKEN")
 	serviceID := os.Getenv("MLINK_TEST_SERVICE_ID")
 	panelPort, err := strconv.Atoi(os.Getenv("MLINK_TEST_PANEL_PORT"))
-	if err != nil || panelPort <= 1024 || panelPort == 8125 || baseURL != "http://127.0.0.1:8420" || token == "" ||
+	knowledgePort, knowledgeErr := strconv.Atoi(os.Getenv("MLINK_TEST_KNOWLEDGE_PORT"))
+	if err != nil || knowledgeErr != nil || panelPort <= 1024 || panelPort == 8125 || knowledgePort <= 1024 || knowledgePort == 8424 || panelPort == knowledgePort || baseURL != "http://127.0.0.1:8420" || token == "" ||
 		serviceID == "default" || !strings.HasPrefix(serviceID, "mlink-control-e2e-") {
 		t.Fatal("safe unique live-test URL, token, Service ID, and non-production Panel port are required")
 	}
 	containerName := serviceID + "-panel"
+	volumeName := serviceID + "-knowledge"
 	if containerName == panel.ContainerName {
 		t.Fatal("live test refuses the production Panel container name")
 	}
@@ -85,17 +87,19 @@ func TestLiveControlPlaneAndOfficialPanel(t *testing.T) {
 	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	panelSource := os.Getenv("MLINK_TEST_PANEL_SOURCE")
-	if filepath.Base(panelSource) != "MemoryPanel" {
-		t.Fatal("MLINK_TEST_PANEL_SOURCE must point to the pinned official MemoryPanel")
-	}
-	runCommand(t, ctx, "docker", "build", "--build-arg", "PANEL_UI=web", "-t", panel.ImageName, "-f", filepath.Join(panelSource, "docker", "local", "Dockerfile.local"), panelSource)
-	defer exec.Command("docker", "rm", "-f", containerName).Run()
+	runCommand(t, ctx, "docker", "pull", panel.ImageReference)
+	runCommand(t, ctx, "docker", "volume", "create", "--label", "dev.mlink.component=memory-hub-e2e", volumeName)
+	defer func() {
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+		_ = exec.Command("docker", "volume", "rm", volumeName).Run()
+	}()
 	runCommand(t, ctx, "docker", "run", "-d", "--name", containerName, "--add-host", "host.docker.internal:host-gateway",
-		"-p", fmt.Sprintf("127.0.0.1:%d:8123", panelPort), "-e", "UI_DIST_DIR=./web/dist",
-		"-e", "METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json", "-e", "KNOWLEDGE_LLM_BINDING_SYNC=false",
-		"-v", registryPath+":/app/config/metadata-instances.json:ro", panel.ImageName)
-	waitPanel(t, ctx, panelPort, serviceID, keys[controlplane.OwnerUserKeyAccount])
+		"-p", fmt.Sprintf("127.0.0.1:%d:8125", panelPort), "-p", fmt.Sprintf("127.0.0.1:%d:8424", knowledgePort),
+		"-e", fmt.Sprintf("KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:%d/v3", knowledgePort),
+		"-e", "KNOWLEDGE_LLM_PROXY_BASE_URL=http://host.docker.internal:8420", "-e", "LLM_MODE=proxy",
+		"-e", "KNOWLEDGE_LLM_BINDING_SYNC=true", "-v", volumeName+":/data/knowledge",
+		"-v", registryPath+":/app/panel/config/metadata-instances.json:ro", panel.ImageReference)
+	waitPanel(t, ctx, panelPort, knowledgePort, serviceID, keys[controlplane.OwnerUserKeyAccount])
 }
 
 func runCommand(t *testing.T, ctx context.Context, name string, args ...string) {
@@ -107,7 +111,7 @@ func runCommand(t *testing.T, ctx context.Context, name string, args ...string) 
 	}
 }
 
-func waitPanel(t *testing.T, ctx context.Context, port int, serviceID string, ownerKey []byte) {
+func waitPanel(t *testing.T, ctx context.Context, port, knowledgePort int, serviceID string, ownerKey []byte) {
 	t.Helper()
 	client := &http.Client{Timeout: 3 * time.Second}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -127,7 +131,13 @@ func waitPanel(t *testing.T, ctx context.Context, port int, serviceID string, ow
 					verifyBody, _ := io.ReadAll(verified.Body)
 					verified.Body.Close()
 					if verified.StatusCode == http.StatusOK && bytes.Contains(verifyBody, []byte(`"valid":true`)) {
-						return
+						knowledge, knowledgeErr := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", knowledgePort))
+						if knowledgeErr == nil {
+							knowledge.Body.Close()
+							if knowledge.StatusCode == http.StatusOK {
+								return
+							}
+						}
 					}
 				}
 			}
