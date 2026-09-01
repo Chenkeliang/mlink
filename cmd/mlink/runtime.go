@@ -6,7 +6,10 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"debug/buildinfo"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +17,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +44,7 @@ import (
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
 	"mlink/internal/tui"
+	"mlink/internal/version"
 )
 
 type runtimeApplication struct {
@@ -65,6 +72,70 @@ func (restarter maintenanceRestarter) RestartHermes(ctx context.Context) error {
 
 type httpHermesGrantVerifier struct {
 	Client *http.Client
+}
+
+type localUpgradeLoader struct {
+	RunVersion func(context.Context, string) ([]byte, error)
+}
+
+func (loader localUpgradeLoader) LoadUpgradeCandidate(ctx context.Context, path string, uid int) (app.UpgradeCandidate, error) {
+	if !filepath.IsAbs(path) {
+		return app.UpgradeCandidate{}, errors.New("candidate path must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return app.UpgradeCandidate{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o100 == 0 || info.Mode().Perm()&0o022 != 0 || info.Size() <= 0 || info.Size() > 256<<20 {
+		return app.UpgradeCandidate{}, errors.New("candidate must be a safe executable regular file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != uid {
+		return app.UpgradeCandidate{}, errors.New("candidate must be owned by the current user")
+	}
+	if _, err := buildinfo.ReadFile(path); err != nil {
+		return app.UpgradeCandidate{}, errors.New("candidate is not a Go executable")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return app.UpgradeCandidate{}, err
+	}
+	runVersion := loader.RunVersion
+	if runVersion == nil {
+		runVersion = func(ctx context.Context, binary string) ([]byte, error) {
+			command := exec.CommandContext(ctx, binary, "version", "--json")
+			return command.Output()
+		}
+	}
+	versionOutput, err := runVersion(ctx, path)
+	if err != nil || len(versionOutput) == 0 || len(versionOutput) > 64<<10 {
+		return app.UpgradeCandidate{}, errors.New("candidate version self-test failed")
+	}
+	var candidateInfo version.Info
+	if err := json.Unmarshal(versionOutput, &candidateInfo); err != nil {
+		return app.UpgradeCandidate{}, errors.New("candidate version metadata is invalid")
+	}
+	if candidateInfo.GOOS != runtime.GOOS || candidateInfo.GOARCH != runtime.GOARCH || candidateInfo.SchemaMin <= 0 || candidateInfo.SchemaMax < candidateInfo.SchemaMin {
+		return app.UpgradeCandidate{}, errors.New("candidate platform or schema metadata is incompatible")
+	}
+	return app.UpgradeCandidate{Path: path, Content: content, Mode: info.Mode().Perm(), Info: candidateInfo}, nil
+}
+
+type localInstalledVerifier struct {
+	Loader localUpgradeLoader
+}
+
+func (verifier localInstalledVerifier) VerifyInstalledBinary(ctx context.Context, path, expectedHash string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != expectedHash {
+		return errors.New("installed binary hash differs from preview")
+	}
+	_, err = verifier.Loader.LoadUpgradeCandidate(ctx, path, os.Getuid())
+	return err
 }
 
 func (verifier httpHermesGrantVerifier) VerifyHermesGrant(ctx context.Context, endpoint string, newGrant, oldGrant []byte) error {
@@ -794,6 +865,46 @@ func (runtime *runtimeApplication) hermesCredentialService(ctx context.Context) 
 	service.HermesConfigPath = filepath.Join(detection.HermesHome, "mlink.json")
 	service.Restarter = maintenanceRestarter{target: routingTarget, uid: runtime.uid}
 	service.HermesGrantVerifier = httpHermesGrantVerifier{}
+	return &service, nil
+}
+
+func (runtime *runtimeApplication) PlanUpgrade(ctx context.Context, request app.UpgradeRequest) (install.ChangeSet, error) {
+	service, err := runtime.upgradeService(previewLedger{})
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	return service.PlanUpgrade(ctx, request)
+}
+
+func (runtime *runtimeApplication) ApplyUpgrade(ctx context.Context, planID string, request app.UpgradeRequest) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	service, err := runtime.upgradeService(ledger)
+	if err != nil {
+		return err
+	}
+	return service.ApplyUpgrade(ctx, planID, request)
+}
+
+func (runtime *runtimeApplication) upgradeService(ledger install.Ledger) (*app.Service, error) {
+	configuration, err := (config.Store{Path: runtime.paths.Config}).Load()
+	if err != nil {
+		return nil, err
+	}
+	target := install.LocalTarget{}
+	loader := localUpgradeLoader{}
+	service := runtime.baseService
+	service.Paths = runtime.paths
+	service.UID = runtime.uid
+	service.Target = target
+	service.Ledger = ledger
+	service.ActiveSchema = configuration.SchemaVersion
+	service.UpgradeCandidates = loader
+	service.InstalledVerifier = localInstalledVerifier{Loader: loader}
+	service.Restarter = maintenanceRestarter{target: target, uid: runtime.uid}
 	return &service, nil
 }
 

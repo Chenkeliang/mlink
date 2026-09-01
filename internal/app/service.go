@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"io"
+	"io/fs"
 
 	"mlink/internal/config"
 	"mlink/internal/controlplane"
@@ -11,6 +12,7 @@ import (
 	"mlink/internal/layout"
 	"mlink/internal/panel"
 	"mlink/internal/secret"
+	"mlink/internal/version"
 )
 
 type Agent string
@@ -84,6 +86,21 @@ type HermesGrantVerifier interface {
 	VerifyHermesGrant(context.Context, string, []byte, []byte) error
 }
 
+type UpgradeCandidate struct {
+	Path    string
+	Content []byte
+	Mode    fs.FileMode
+	Info    version.Info
+}
+
+type UpgradeCandidateLoader interface {
+	LoadUpgradeCandidate(context.Context, string, int) (UpgradeCandidate, error)
+}
+
+type InstalledBinaryVerifier interface {
+	VerifyInstalledBinary(context.Context, string, string) error
+}
+
 type Service struct {
 	Paths                layout.Paths
 	UID                  int
@@ -108,4 +125,7 @@ type Service struct {
 	Restarter            MaintenanceRestarter
 	HermesGrantVerifier  HermesGrantVerifier
 	RandomSource         io.Reader
+	ActiveSchema         int
+	UpgradeCandidates    UpgradeCandidateLoader
+	InstalledVerifier    InstalledBinaryVerifier
 }

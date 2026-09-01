@@ -23,6 +23,9 @@ type credentialMaintenanceApplication interface {
 }
 
 func runMaintenance(ctx context.Context, args []string, deps Dependencies, _ *bufio.Reader) int {
+	if len(args) >= 1 && args[0] == "upgrade" {
+		return runUpgrade(ctx, args[1:], deps)
+	}
 	if len(args) >= 3 && args[0] == "credentials" && args[1] == "rotate" && args[2] == "hermes-grant" {
 		return runHermesGrantRotation(ctx, args[3:], deps)
 	}
@@ -45,6 +48,67 @@ func runMaintenance(ctx context.Context, args []string, deps Dependencies, _ *bu
 	default:
 		return 2
 	}
+}
+
+type upgradeApplication interface {
+	PlanUpgrade(context.Context, app.UpgradeRequest) (install.ChangeSet, error)
+	ApplyUpgrade(context.Context, string, app.UpgradeRequest) error
+}
+
+func runUpgrade(ctx context.Context, args []string, deps Dependencies) int {
+	application, ok := deps.App.(upgradeApplication)
+	if !ok {
+		writeLine(deps.Stderr, "mlink upgrade is unavailable")
+		return 1
+	}
+	var candidate, applyPlan string
+	var yes, jsonOutput, dryRun bool
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--candidate", "--apply-plan":
+			flag := args[index]
+			index++
+			if index >= len(args) || strings.HasPrefix(args[index], "--") {
+				return 2
+			}
+			if flag == "--candidate" {
+				candidate = args[index]
+			} else {
+				applyPlan = args[index]
+			}
+		case "--yes":
+			yes = true
+		case "--json":
+			jsonOutput = true
+		case "--dry-run":
+			dryRun = true
+		default:
+			return 2
+		}
+	}
+	if !strings.HasPrefix(candidate, "/") || dryRun && applyPlan != "" || yes && applyPlan == "" {
+		return 2
+	}
+	request := app.UpgradeRequest{CandidatePath: candidate}
+	plan, err := application.PlanUpgrade(ctx, request)
+	if err != nil {
+		writeLine(deps.Stderr, "mlink upgrade planning failed")
+		return exitCodeFor(err)
+	}
+	if err := renderPlan(deps.Stdout, plan, jsonOutput); err != nil {
+		return 1
+	}
+	if applyPlan == "" {
+		return 0
+	}
+	if !yes || applyPlan != plan.PlanID {
+		return 3
+	}
+	if err := application.ApplyUpgrade(ctx, plan.PlanID, request); err != nil {
+		writeLine(deps.Stderr, "mlink upgrade failed")
+		return exitCodeFor(err)
+	}
+	return 0
 }
 
 func runHermesGrantRotation(ctx context.Context, args []string, deps Dependencies) int {

@@ -21,6 +21,18 @@ type maintenanceApplication struct {
 	request            app.JournalResolutionRequest
 	rotationPlan       install.ChangeSet
 	rotationApplyCalls int
+	upgradePlan        install.ChangeSet
+	upgradeApplyCalls  int
+}
+
+func (application *maintenanceApplication) PlanUpgrade(_ context.Context, _ app.UpgradeRequest) (install.ChangeSet, error) {
+	return application.upgradePlan, nil
+}
+
+func (application *maintenanceApplication) ApplyUpgrade(_ context.Context, planID string, _ app.UpgradeRequest) error {
+	application.upgradeApplyCalls++
+	application.appliedPlan = planID
+	return nil
 }
 
 func (application *maintenanceApplication) ListUnresolvedJournalEvents(context.Context) ([]app.JournalEventDescriptor, error) {
@@ -86,5 +98,19 @@ func TestMaintenanceHermesGrantRotationRequiresExactPlan(t *testing.T) {
 	code := Run(context.Background(), args, Dependencies{App: application, Stdin: strings.NewReader(""), Stdout: stdout, Stderr: io.Discard})
 	if code != 0 || application.rotationApplyCalls != 1 || application.appliedPlan != "plan_rotate" || strings.Contains(strings.ToLower(stdout.String()), "secret") {
 		t.Fatalf("code/application/output = %d/%#v/%s", code, application, stdout)
+	}
+}
+
+func TestMaintenanceUpgradeRequiresAbsoluteCandidateAndExactPlan(t *testing.T) {
+	application := &maintenanceApplication{fakeApplication: &fakeApplication{}, upgradePlan: install.ChangeSet{
+		PlanID: "plan_upgrade", MLinkVersion: "1.0.0", Operations: []install.Operation{{Target: "/Users/test/.local/bin/mlink", Action: install.ActionSemanticMerge}},
+	}}
+	args := []string{"maintenance", "upgrade", "--candidate", "/tmp/mlink-new", "--apply-plan", "plan_upgrade", "--yes"}
+	code := Run(context.Background(), args, Dependencies{App: application, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard})
+	if code != 0 || application.upgradeApplyCalls != 1 || application.appliedPlan != "plan_upgrade" {
+		t.Fatalf("code/application = %d/%#v", code, application)
+	}
+	if code := Run(context.Background(), []string{"maintenance", "upgrade", "--candidate", "relative"}, Dependencies{App: application, Stdout: io.Discard, Stderr: io.Discard}); code != 2 {
+		t.Fatalf("relative candidate code = %d", code)
 	}
 }

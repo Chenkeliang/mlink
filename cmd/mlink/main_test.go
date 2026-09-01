@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"mlink/internal/app"
@@ -21,6 +27,7 @@ import (
 	"mlink/internal/journal"
 	"mlink/internal/layout"
 	"mlink/internal/model"
+	"mlink/internal/version"
 )
 
 func TestRuntimeJournalMaintenanceUsesReadOnlyPreviewAndWritableApply(t *testing.T) {
@@ -88,6 +95,70 @@ func TestHTTPHermesGrantVerifierRequiresNewAcceptedAndOldRejected(t *testing.T) 
 	}
 	if err := verifier.VerifyHermesGrant(context.Background(), server.URL, []byte("old-grant"), []byte("new-grant")); err == nil {
 		t.Fatal("accepted inverted grants")
+	}
+}
+
+func TestLocalUpgradeLoaderRejectsSymlinkAndUnsafeMode(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "mlink-new")
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executableData, err := os.ReadFile(testExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, executableData, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runnerCalls := 0
+	loader := localUpgradeLoader{RunVersion: func(context.Context, string) ([]byte, error) {
+		runnerCalls++
+		return []byte(`{"version":"1.0.0","commit":"abc","build_date":"now","go_version":"go1.27.0","goos":"` + runtime.GOOS + `","goarch":"` + runtime.GOARCH + `","schema_min":2,"schema_max":3}`), nil
+	}}
+	candidate, err := loader.LoadUpgradeCandidate(context.Background(), path, os.Getuid())
+	if err != nil || candidate.Info.Version != "1.0.0" || runnerCalls != 1 {
+		t.Fatalf("candidate/error/calls = %#v/%v/%d", candidate, err, runnerCalls)
+	}
+	if err := os.Chmod(path, 0o722); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.LoadUpgradeCandidate(context.Background(), path, os.Getuid()); err == nil {
+		t.Fatal("accepted group/world-writable candidate")
+	}
+	link := filepath.Join(directory, "mlink-link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.LoadUpgradeCandidate(context.Background(), link, os.Getuid()); err == nil {
+		t.Fatal("accepted symlink candidate")
+	}
+}
+
+func TestLocalInstalledVerifierChecksHashAndVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mlink")
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(testExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	verifier := localInstalledVerifier{Loader: localUpgradeLoader{RunVersion: func(context.Context, string) ([]byte, error) {
+		data, _ := json.Marshal(version.Info{Version: "1.0.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, SchemaMin: 2, SchemaMax: 3})
+		return data, nil
+	}}}
+	digest := sha256.Sum256(content)
+	if err := verifier.VerifyInstalledBinary(context.Background(), path, hex.EncodeToString(digest[:])); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.VerifyInstalledBinary(context.Background(), path, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("accepted wrong installed hash")
 	}
 }
 
