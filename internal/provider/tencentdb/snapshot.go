@@ -158,7 +158,7 @@ func (driver SnapshotDriver) StreamSection(ctx context.Context, request lifecycl
 
 func (driver SnapshotDriver) PlanRestore(ctx context.Context, request lifecycle.RestoreRequest, provider workspacebackup.ProviderManifest) (install.ChangeSet, error) {
 	if driver.Target == nil || request.ProviderID != providerID || provider.ProviderID != providerID || provider.DriverVersion != SnapshotDriverVersion ||
-		provider.InstanceID == "" || provider.CoreImageDigest != MemoryCoreImageReference || provider.HubImageDigest != panel.ImageReference {
+		provider.InstanceID == "" || provider.CoreImageDigest != imageDigestReference(MemoryCoreImageReference) || provider.HubImageDigest != imageDigestReference(panel.ImageReference) {
 		return install.ChangeSet{}, errors.New("compatible TencentDB restore request and manifest are required")
 	}
 	if request.CoreContainer == "" || request.CoreVolume == "" || request.KnowledgeVolume == "" || request.CoreNetwork == "" {
@@ -380,4 +380,12 @@ func hasAgent(values []Agent, agentID, teamID, ownerID string) bool {
 		}
 	}
 	return false
+}
+
+func imageDigestReference(reference string) string {
+	_, digest, found := strings.Cut(reference, "@")
+	if !found {
+		return reference
+	}
+	return digest
 }

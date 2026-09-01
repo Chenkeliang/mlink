@@ -184,7 +184,7 @@ func TestSnapshotRestorePlanCreatesOnlyEmptyFormalResourcesAndApplyStreamsTar(t 
 		ProviderID: providerID, CoreContainer: MemoryCoreContainerName, CoreVolume: MemoryCoreVolumeName,
 		KnowledgeVolume: panel.VolumeName, CoreNetwork: MemoryCoreNetworkName, Endpoint: "http://127.0.0.1:8420",
 	}
-	provider := workspacebackup.ProviderManifest{ProviderID: providerID, DriverVersion: SnapshotDriverVersion, InstanceID: "default", CoreImageDigest: MemoryCoreImageReference, HubImageDigest: panel.ImageReference}
+	provider := workspacebackup.ProviderManifest{ProviderID: providerID, DriverVersion: SnapshotDriverVersion, InstanceID: "default", CoreImageDigest: imageDigestReference(MemoryCoreImageReference), HubImageDigest: imageDigestReference(panel.ImageReference)}
 	plan, err := driver.PlanRestore(context.Background(), request, provider)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func TestSnapshotRestoreRefusesExistingTargetVolume(t *testing.T) {
 	runner := &snapshotRunner{objects: map[string]bool{"docker volume inspect " + MemoryCoreVolumeName: true}}
 	driver := SnapshotDriver{Runner: runner, Target: install.LocalTarget{Runner: runner}, InstanceID: "default"}
 	request := lifecycle.RestoreRequest{ProviderID: providerID, CoreContainer: MemoryCoreContainerName, CoreVolume: MemoryCoreVolumeName, KnowledgeVolume: panel.VolumeName, CoreNetwork: MemoryCoreNetworkName, Endpoint: "http://127.0.0.1:8420"}
-	provider := workspacebackup.ProviderManifest{ProviderID: providerID, DriverVersion: SnapshotDriverVersion, InstanceID: "default", CoreImageDigest: MemoryCoreImageReference, HubImageDigest: panel.ImageReference}
+	provider := workspacebackup.ProviderManifest{ProviderID: providerID, DriverVersion: SnapshotDriverVersion, InstanceID: "default", CoreImageDigest: imageDigestReference(MemoryCoreImageReference), HubImageDigest: imageDigestReference(panel.ImageReference)}
 	if _, err := driver.PlanRestore(context.Background(), request, provider); err == nil {
 		t.Fatal("existing target volume was accepted")
 	}

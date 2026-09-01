@@ -110,6 +110,15 @@ type WorkspaceStateArchiver interface {
 	Open(context.Context, layout.Paths) (io.ReadCloser, error)
 }
 
+type WorkspaceRestoreLocal interface {
+	PlanRestore(context.Context, WorkspaceRestoreRequest, workspacebackup.Manifest) (install.ChangeSet, error)
+	StageSection(context.Context, workspacebackup.Section, io.Reader) error
+	ApplySection(context.Context, workspacebackup.Section, io.Reader) error
+	ProviderRequest(context.Context, workspacebackup.Manifest) (lifecycle.RestoreRequest, error)
+	VerifyRestore(context.Context, workspacebackup.Manifest) error
+	RollbackRestore(context.Context) error
+}
+
 type PrincipalAgentStateStore interface {
 	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
 	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
@@ -162,6 +171,7 @@ type Service struct {
 	SnapshotDriver       lifecycle.SnapshotDriver
 	WorkspacePacker      WorkspaceBundle
 	WorkspaceArchiver    WorkspaceStateArchiver
+	WorkspaceRestorer    WorkspaceRestoreLocal
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime
 	PanelDesired         panel.Desired

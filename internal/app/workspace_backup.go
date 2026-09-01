@@ -157,7 +157,7 @@ func (service *Service) createWorkspaceBackup(ctx context.Context, request Works
 		Format: workspacebackup.FormatV1, CreatedAt: time.Now().UTC(), MLink: version.Current(),
 		Provider: workspacebackup.ProviderManifest{
 			ProviderID: source.ProviderID, DriverVersion: source.DriverVersion, InstanceID: source.InstanceID,
-			CoreImageDigest: source.CoreImage, HubImageDigest: hubImage,
+			CoreImageDigest: imageDigest(source.CoreImage), HubImageDigest: imageDigest(hubImage),
 		},
 		ControlPlane: workspacebackup.ControlPlaneManifest{
 			InstallationID: state.InstallationID, InstanceID: state.InstanceID, OwnerUserID: state.OwnerUserID,
@@ -192,6 +192,12 @@ func (service *Service) createWorkspaceBackup(ctx context.Context, request Works
 
 	snapshotRequest := lifecycle.BackupRequest{ProviderID: source.ProviderID, ApproveExternalSource: request.ApproveExternalSource}
 	sources := []workspacebackup.SectionSource{
+		{Name: workspacebackup.SectionMLink, Open: func(ctx context.Context) (io.ReadCloser, error) {
+			return service.WorkspaceArchiver.Open(ctx, service.Paths)
+		}},
+		byteSection(workspacebackup.SectionIdentity, identityBundle),
+		byteSection(workspacebackup.SectionSecrets, secretData),
+		byteSection(workspacebackup.SectionAgents, agentData),
 		service.snapshotSectionSource(snapshotRequest, workspacebackup.SectionCore, &manifest),
 	}
 	for _, volume := range source.Volumes {
@@ -200,14 +206,6 @@ func (service *Service) createWorkspaceBackup(ctx context.Context, request Works
 			break
 		}
 	}
-	sources = append(sources,
-		workspacebackup.SectionSource{Name: workspacebackup.SectionMLink, Open: func(ctx context.Context) (io.ReadCloser, error) {
-			return service.WorkspaceArchiver.Open(ctx, service.Paths)
-		}},
-		byteSection(workspacebackup.SectionIdentity, identityBundle),
-		byteSection(workspacebackup.SectionSecrets, secretData),
-		byteSection(workspacebackup.SectionAgents, agentData),
-	)
 	return service.WorkspacePacker.Pack(ctx, request.OutputPath, request.Passphrase, &manifest, sources...)
 }
 
@@ -407,4 +405,12 @@ func byteSection(name workspacebackup.Section, value []byte) workspacebackup.Sec
 func pathFingerprint(path string) string {
 	digest := sha256.Sum256([]byte(filepath.Clean(path)))
 	return hex.EncodeToString(digest[:])[:16]
+}
+
+func imageDigest(reference string) string {
+	_, digest, found := strings.Cut(reference, "@")
+	if !found {
+		return reference
+	}
+	return digest
 }
