@@ -42,7 +42,7 @@ func runStatus(ctx context.Context, args []string, deps Dependencies) int {
 		state = "installed"
 	}
 	_, _ = fmt.Fprintf(deps.Stdout, "MLink\t%s\nConnection\t%s\nPlan\t%s\n", state, emptyDash(status.ConnectionID), emptyDash(status.ActivePlanID))
-	for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes} {
+	for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} {
 		_, _ = fmt.Fprintf(deps.Stdout, "%s\t%t\n", agent, status.Adapters[agent])
 	}
 	return 0

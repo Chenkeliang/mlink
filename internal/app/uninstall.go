@@ -236,9 +236,17 @@ func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {
 			if isHermesConfigPath(clean) || filepath.Base(clean) == "mlink.json" || strings.Contains(clean, string(filepath.Separator)+"plugins"+string(filepath.Separator)+"mlink"+string(filepath.Separator)) {
 				return true
 			}
+		case Cursor:
+			if isCursorHooksPath(clean) {
+				return true
+			}
 		}
 	}
 	return full
+}
+
+func isCursorHooksPath(path string) bool {
+	return filepath.Base(path) == "hooks.json" && filepath.Base(filepath.Dir(path)) == ".cursor"
 }
 
 func (service *Service) activeConfiguration(ctx context.Context) (config.Config, error) {

@@ -132,7 +132,7 @@ func New(application Application, request app.InstallRequest) Model {
 		width:       100,
 		height:      30,
 		selected: map[app.Agent]bool{
-			app.Codex: true, app.Pi: true, app.Hermes: true,
+			app.Codex: true, app.Pi: true, app.Hermes: true, app.Cursor: true,
 		},
 		token:            token,
 		capacity:         capacity,
@@ -526,7 +526,7 @@ func (model Model) selectedAgents() []app.Agent {
 	return result
 }
 
-func orderedAgents() []app.Agent { return []app.Agent{app.Codex, app.Pi, app.Hermes} }
+func orderedAgents() []app.Agent { return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} }
 
 func cloneRequest(input app.InstallRequest) app.InstallRequest {
 	output := input

@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"mlink/internal/adapter/codex"
+	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/adapter/hermes"
 	"mlink/internal/adapter/pi"
 	"mlink/internal/app"
@@ -72,7 +73,7 @@ func (runtime *runtimeApplication) ConfigDiff(ctx context.Context) (app.DriftRep
 		return app.DriftReport{}, err
 	}
 	request := defaultInstallRequest()
-	for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes} {
+	for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} {
 		if status.Adapters[agent] {
 			request.Agents = append(request.Agents, agent)
 		}
@@ -114,7 +115,7 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 	}
 	agents := selected
 	if len(agents) == 0 {
-		for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes} {
+		for _, agent := range []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} {
 			if status.Adapters[agent] {
 				agents = append(agents, agent)
 			}
@@ -151,6 +152,8 @@ func (runtime *runtimeApplication) Doctor(ctx context.Context, selected []app.Ag
 		case app.Hermes:
 			providerCheck, bridgeCheck, sessionCheck := runtime.checkHermes(ctx, configuration)
 			report.Checks = append(report.Checks, providerCheck, bridgeCheck, sessionCheck, runtime.checkHermesGrantFingerprint(ctx))
+		case app.Cursor:
+			report.Checks = append(report.Checks, runtime.checkCursor(ctx, activity))
 		}
 	}
 	if status.Installed && configuration.ControlPlane != nil {
@@ -376,6 +379,25 @@ func (runtime *runtimeApplication) checkPi(ctx context.Context, activity map[str
 	return doctor.Check{ID: "pi.extension", State: doctor.StatePassed, Code: "active"}
 }
 
+func (runtime *runtimeApplication) checkCursor(_ context.Context, activity map[string]bool) doctor.Check {
+	path := filepath.Join(filepath.Dir(runtime.paths.Home), ".cursor", "hooks.json")
+	content, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "missing"}
+	}
+	if err != nil {
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}
+	}
+	desired, err := cursoradapter.PlanHooks(content, runtime.paths.Binary)
+	if err != nil || !bytes.Equal(content, desired) {
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StateFailed, Code: "config_conflict"}
+	}
+	if !activity["cursor"] {
+		return doctor.Check{ID: "cursor.hooks", State: doctor.StatePendingAction, Code: "awaiting_first_turn"}
+	}
+	return doctor.Check{ID: "cursor.hooks", State: doctor.StatePassed, Code: "active"}
+}
+
 func (runtime *runtimeApplication) checkHermes(ctx context.Context, configuration config.Config) (doctor.Check, doctor.Check, doctor.Check) {
 	machine := environmentDefault("MLINK_HERMES_MACHINE", "hermes-agent-env")
 	detection, err := hermes.Detect(ctx, install.LocalTarget{}, machine)
@@ -486,7 +508,7 @@ func (runtime *runtimeApplication) adapterActivity(ctx context.Context) map[stri
 		return result
 	}
 	defer store.Close()
-	for _, adapterID := range []string{"codex", "pi", "hermes"} {
+	for _, adapterID := range []string{"codex", "pi", "hermes", "cursor"} {
 		_, err := store.LatestAdapterActivity(ctx, adapterID)
 		result[adapterID] = err == nil
 	}

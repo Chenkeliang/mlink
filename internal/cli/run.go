@@ -36,6 +36,7 @@ type Dependencies struct {
 	ServeTencentDB func(context.Context) error
 	ServeBroker    func(context.Context) error
 	RunCodexHook   func(context.Context, string) error
+	RunCursorHook  func(context.Context, string) error
 	RunTUI         func(context.Context) error
 }
 
@@ -95,6 +96,13 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if len(args) == 3 && args[0] == "hook" && args[1] == "codex" {
 		if deps.RunCodexHook == nil || deps.RunCodexHook(ctx, args[2]) != nil {
 			writeLine(deps.Stderr, "mlink codex hook failed")
+			return 1
+		}
+		return 0
+	}
+	if len(args) == 3 && args[0] == "hook" && args[1] == "cursor" {
+		if deps.RunCursorHook == nil || deps.RunCursorHook(ctx, args[2]) != nil {
+			writeLine(deps.Stderr, "mlink cursor hook failed")
 			return 1
 		}
 		return 0

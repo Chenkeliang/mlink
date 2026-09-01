@@ -29,6 +29,7 @@ import (
 
 	adapterclient "mlink/internal/adapter/client"
 	"mlink/internal/adapter/codex"
+	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/adapter/hermes"
 	"mlink/internal/app"
 	"mlink/internal/backend"
@@ -220,6 +221,11 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 	dependencies.RunCodexHook = func(ctx context.Context, event string) error {
 		return codex.Handle(ctx, event, stdin, stdout, adapterclient.Client{
 			SocketPath: paths.Socket, AdapterID: "codex", RecallTimeout: 800 * time.Millisecond, CaptureTimeout: 2 * time.Second,
+		})
+	}
+	dependencies.RunCursorHook = func(ctx context.Context, event string) error {
+		return cursoradapter.Handle(ctx, event, stdin, stdout, adapterclient.Client{
+			SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 800 * time.Millisecond, CaptureTimeout: 2 * time.Second,
 		})
 	}
 	dependencies.ServeBroker = runtime.ServeBroker
@@ -512,7 +518,7 @@ func (runtime *runtimeApplication) PlanRestore(ctx context.Context, request app.
 	}
 	defer store.Close()
 	installRequest := defaultInstallRequest()
-	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes}
+	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor}
 	service, _, err := runtime.prepare(ctx, installRequest, ledger)
 	if err != nil {
 		return install.ChangeSet{}, err
@@ -527,7 +533,7 @@ func (runtime *runtimeApplication) ApplyRestore(ctx context.Context, planID stri
 	}
 	defer store.Close()
 	installRequest := defaultInstallRequest()
-	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes}
+	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor}
 	service, _, err := runtime.prepare(ctx, installRequest, ledger)
 	if err != nil {
 		return err

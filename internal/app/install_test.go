@@ -206,6 +206,36 @@ func TestPlanInstallContainsAllSelectedResourcesAndNoWrites(t *testing.T) {
 	}
 }
 
+func TestPlanInstallCursorUsesFixedOwnerHooksWithoutModelConfiguration(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	request := fixtureInstallRequest()
+	request.Agents = []Agent{Cursor}
+	request.OwnerBindingSlot = config.BindingRef{}
+	delete(request.SecretInputs, OwnerBindingSecret)
+	plan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hooks, configuration []byte
+	for _, operation := range plan.Operations {
+		switch operation.Target {
+		case "/Users/test/.cursor/hooks.json":
+			hooks = operation.Content
+		case service.Paths.Config:
+			configuration = operation.Content
+		}
+		if strings.Contains(strings.ToLower(operation.Target), "settings.json") {
+			t.Fatalf("Cursor model settings targeted: %s", operation.Target)
+		}
+	}
+	if !bytes.Contains(hooks, []byte("hook cursor beforeSubmitPrompt")) || !bytes.Contains(configuration, []byte("cursor:")) || !bytes.Contains(configuration, []byte("space_id: personal-owner")) {
+		t.Fatalf("hooks/config = %s\n%s", hooks, configuration)
+	}
+	if target.writes != 0 {
+		t.Fatalf("preview writes = %d", target.writes)
+	}
+}
+
 func TestPlanInstallCreatesThreeSpacesAndStableOwner(t *testing.T) {
 	service, _, _ := newInstallFixture(t)
 	plan, err := service.PlanInstall(context.Background(), fixtureInstallRequest())

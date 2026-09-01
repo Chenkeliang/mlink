@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"mlink/internal/adapter/codex"
+	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/adapter/hermes"
 	"mlink/internal/adapter/pi"
 	"mlink/internal/config"
@@ -121,6 +122,17 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 			resources = append(resources, resource)
 		case Pi:
 			resource, err := pi.PlanExtension(service.Paths.Binary, service.Paths.Socket)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resources = append(resources, resource)
+		case Cursor:
+			target := filepath.Join(home, ".cursor", "hooks.json")
+			existing, err := readOptional(ctx, service.Target, target)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resource, err := cursoradapter.DesiredHooksResource(existing, target, service.Paths.Binary)
 			if err != nil {
 				return install.ChangeSet{}, err
 			}
@@ -374,14 +386,14 @@ func normalizeAgents(input []Agent) ([]Agent, error) {
 	seen := make(map[Agent]bool, len(input))
 	for _, agent := range input {
 		switch agent {
-		case Codex, Pi, Hermes:
+		case Codex, Pi, Hermes, Cursor:
 			seen[agent] = true
 		default:
 			return nil, fmt.Errorf("unsupported Agent %q", agent)
 		}
 	}
 	result := make([]Agent, 0, len(seen))
-	for _, agent := range []Agent{Codex, Pi, Hermes} {
+	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor} {
 		if seen[agent] {
 			result = append(result, agent)
 		}

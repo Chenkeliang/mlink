@@ -369,3 +369,20 @@ func TestRunDispatchesCodexHookEvent(t *testing.T) {
 		t.Fatalf("code/calls = %d/%d", code, calls)
 	}
 }
+
+func TestRunDispatchesCursorHookEvent(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), []string{"hook", "cursor", "afterAgentResponse"}, Dependencies{
+		Stderr: io.Discard,
+		RunCursorHook: func(_ context.Context, event string) error {
+			calls++
+			if event != "afterAgentResponse" {
+				t.Fatalf("event = %q", event)
+			}
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}

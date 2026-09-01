@@ -264,6 +264,8 @@ func agentLabel(agent app.Agent) string {
 		return "Pi Extension"
 	case app.Hermes:
 		return "Hermes Memory Provider"
+	case app.Cursor:
+		return "Cursor Hooks + MCP"
 	default:
 		return string(agent)
 	}
