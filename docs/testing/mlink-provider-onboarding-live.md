@@ -56,6 +56,18 @@ owner_asset=…b6wn8e1j
 
 The repeated run also passed in `26.75s`. A post-run Docker inventory contained no `mlink-e2e-` container, volume, or network.
 
+Post-review verification after adding the fresh-Journal and existing-backend bootstrap guards also passed in `27.68s`:
+
+```text
+provider_plan=plan_2e9c9286aa00c20804f2a51038
+control_plan=plan_a535882c87f867454d03e4f8e9
+install_plan=plan_e6ff5f2f7c853e82d530963900
+owner_user=…4nrtotxd
+owner_team=…4njf52qs
+owner_agent=…4nxho76g
+owner_asset=…4nxho76g
+```
+
 ## Re-run
 
 Provide a compatible OpenAI-style memory LLM endpoint, model, and protected API key, then run:
