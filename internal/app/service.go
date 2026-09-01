@@ -67,6 +67,11 @@ type ControlPlaneStateStore interface {
 	MarkControlPlaneState(context.Context, string) error
 }
 
+type ControlPlaneProvisioner interface {
+	PlanProvision(context.Context, controlplane.ProvisionRequest) (install.ChangeSet, error)
+	ApplyProvision(context.Context, string, controlplane.ProvisionRequest) (controlplane.ProvisionResult, error)
+}
+
 type PrincipalAgentStateStore interface {
 	GetPrincipalAgent(context.Context, string) (journal.PrincipalAgent, error)
 	PutPrincipalAgent(context.Context, journal.PrincipalAgent) error
@@ -114,7 +119,7 @@ type Service struct {
 	HermesGrantToken     []byte
 	IdentityKey          []byte
 	ControlPlaneStates   ControlPlaneStateStore
-	ControlProvisioner   *controlplane.Service
+	ControlProvisioner   ControlPlaneProvisioner
 	ControlRequest       controlplane.ProvisionRequest
 	PanelRuntime         *panel.Runtime
 	PanelDesired         panel.Desired
