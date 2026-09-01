@@ -43,11 +43,6 @@ func (service *Service) PlanWorkspaceRestore(ctx context.Context, request Worksp
 	if !filepath.IsAbs(request.BundlePath) || len(request.Passphrase) < 12 || len(request.Passphrase) > 4096 {
 		return install.ChangeSet{}, errors.New("absolute restore bundle and protected passphrase are required")
 	}
-	agents, err := normalizeAgents(request.SelectedAgents)
-	if err != nil {
-		return install.ChangeSet{}, err
-	}
-	request.SelectedAgents = agents
 	manifest, err := service.WorkspacePacker.Open(ctx, request.BundlePath, request.Passphrase, func(workspacebackup.Section, io.Reader) error { return nil })
 	if err != nil {
 		return install.ChangeSet{}, err
@@ -55,6 +50,17 @@ func (service *Service) PlanWorkspaceRestore(ctx context.Context, request Worksp
 	if err := validateWorkspaceRestoreManifest(manifest); err != nil {
 		return install.ChangeSet{}, err
 	}
+	if len(request.SelectedAgents) == 0 {
+		request.SelectedAgents = make([]Agent, len(manifest.Agents))
+		for index, agent := range manifest.Agents {
+			request.SelectedAgents[index] = Agent(agent)
+		}
+	}
+	agents, err := normalizeAgents(request.SelectedAgents)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
+	request.SelectedAgents = agents
 	providerRequest, err := service.WorkspaceRestorer.ProviderRequest(ctx, manifest)
 	if err != nil {
 		return install.ChangeSet{}, err

@@ -89,6 +89,21 @@ For an existing backend, also pass --endpoint, --service-id,
 Status shows presence and redacted fingerprints. Only Panel login keys may be
 copied; Gateway, LLM, identity, Hermes and binding secrets cannot be exported.
 `,
+		"backup": `Usage: mlink backup create --output <absolute-path> --passphrase-stdin [options]
+       mlink backup inspect <absolute-bundle> --passphrase-stdin [--json]
+       mlink backup restore <absolute-bundle> --passphrase-stdin [options]
+       mlink backup list [--json]
+       mlink backup restore <automatic-backup-id> [options]
+
+Full backup options:
+  --dry-run                 Render an exact zero-write Plan
+  --json                    Render structured output
+  --approve-external-source Allow backup of a compatible unowned Core
+  --apply-plan <id>         Apply only the freshly reproduced Plan
+  --yes                     Required with --apply-plan
+
+Passphrases are accepted only through stdin and are never printed.
+`,
 	}
 	text, exists := sections[strings.TrimSpace(topic)]
 	if !exists {

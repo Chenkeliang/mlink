@@ -208,7 +208,8 @@ func TestLocalWorkspaceArchiverStreamsOnlyExpectedRegularFiles(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		paths.Config: "config", paths.Journal: "journal", paths.PanelRegistry: "registry",
-		filepath.Join(paths.Backups, "plan", "file.json"): "backup",
+		filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml"): "gateway-config",
+		filepath.Join(paths.Backups, "plan", "file.json"):            "backup",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -235,7 +236,7 @@ func TestLocalWorkspaceArchiverStreamsOnlyExpectedRegularFiles(t *testing.T) {
 		names = append(names, header.Name)
 	}
 	sort.Strings(names)
-	want := []string{"backups/plan/file.json", "config.yaml", "journal.db", "panel/metadata-instances.json"}
+	want := []string{"backups/plan/file.json", "config.yaml", "journal.db", "memorycore/tdai-gateway.yaml", "panel/metadata-instances.json"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("archive names = %#v", names)
 	}

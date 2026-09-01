@@ -14,21 +14,26 @@ import (
 	"mlink/internal/doctor"
 	"mlink/internal/install"
 	"mlink/internal/journal"
+	"mlink/internal/workspacebackup"
 )
 
 type fakeApplication struct {
-	plan               install.ChangeSet
-	applyCalls         int
-	appliedPlan        string
-	installCalls       int
-	status             app.Status
-	report             doctor.Report
-	drift              app.DriftReport
-	backups            []journal.BackupSummary
-	panelStatus        app.PanelControlStatus
-	credentialStatuses []app.CredentialStatus
-	credentialCopies   int
-	copiedCredential   app.CredentialRole
+	plan                     install.ChangeSet
+	applyCalls               int
+	appliedPlan              string
+	installCalls             int
+	status                   app.Status
+	report                   doctor.Report
+	drift                    app.DriftReport
+	backups                  []journal.BackupSummary
+	panelStatus              app.PanelControlStatus
+	credentialStatuses       []app.CredentialStatus
+	credentialCopies         int
+	copiedCredential         app.CredentialRole
+	workspaceManifest        workspacebackup.Manifest
+	workspacePassphraseBytes int
+	workspaceBackupApplies   int
+	workspaceRestorePlans    int
 }
 
 func (application *fakeApplication) PlanCursorEnable(context.Context) (install.ChangeSet, error) {
@@ -97,6 +102,26 @@ func (application *fakeApplication) CredentialStatuses(context.Context) ([]app.C
 func (application *fakeApplication) CopyCredential(_ context.Context, role app.CredentialRole) error {
 	application.credentialCopies++
 	application.copiedCredential = role
+	return nil
+}
+func (application *fakeApplication) PlanWorkspaceBackup(_ context.Context, request app.WorkspaceBackupRequest) (install.ChangeSet, error) {
+	application.workspacePassphraseBytes = len(request.Passphrase)
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyWorkspaceBackup(_ context.Context, _ string, request app.WorkspaceBackupRequest) error {
+	application.workspacePassphraseBytes = len(request.Passphrase)
+	application.workspaceBackupApplies++
+	return nil
+}
+func (application *fakeApplication) InspectWorkspaceBackup(context.Context, string, []byte) (workspacebackup.Manifest, error) {
+	return application.workspaceManifest, nil
+}
+func (application *fakeApplication) PlanWorkspaceRestore(_ context.Context, request app.WorkspaceRestoreRequest) (install.ChangeSet, error) {
+	application.workspacePassphraseBytes = len(request.Passphrase)
+	application.workspaceRestorePlans++
+	return application.plan, nil
+}
+func (application *fakeApplication) ApplyWorkspaceRestore(context.Context, string, app.WorkspaceRestoreRequest) error {
 	return nil
 }
 

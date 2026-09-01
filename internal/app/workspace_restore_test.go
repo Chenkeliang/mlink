@@ -140,6 +140,20 @@ func TestWorkspaceRestorePreviewIsZeroWriteAndSecretIndependent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRestoreDefaultsToAgentsRecordedInBundle(t *testing.T) {
+	service, _, bundle, _, _ := workspaceRestoreFixture(t)
+	bundle.manifest.Agents = []string{"codex", "pi"}
+	request := WorkspaceRestoreRequest{BundlePath: "/tmp/workspace.mlink-backup", Passphrase: []byte("twelve-byte-passphrase")}
+	plan, err := service.PlanWorkspaceRestore(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, _ := install.RenderJSON(plan)
+	if !strings.Contains(string(rendered), "codex,pi") {
+		t.Fatalf("bundle Agent selection missing from Plan: %s", rendered)
+	}
+}
+
 func TestWorkspaceRestoreAppliesSectionsThenVerifiesIdentity(t *testing.T) {
 	service, target, _, snapshot, local := workspaceRestoreFixture(t)
 	var events []string

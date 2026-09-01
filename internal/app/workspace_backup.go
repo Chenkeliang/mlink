@@ -274,7 +274,7 @@ func (service *Service) workspaceBackupSecrets(ctx context.Context, configuratio
 type LocalWorkspaceArchiver struct{}
 
 func (LocalWorkspaceArchiver) Open(ctx context.Context, paths layout.Paths) (io.ReadCloser, error) {
-	for _, required := range []string{paths.Config, paths.Journal} {
+	for _, required := range []string{paths.Config, paths.Journal, filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml")} {
 		info, err := os.Lstat(required)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
 			return nil, errors.New("complete regular MLink state files are required")
@@ -292,6 +292,7 @@ func writeWorkspaceStateTar(ctx context.Context, destination io.Writer, paths la
 		optional     bool
 	}{
 		{paths.Config, "config.yaml", false}, {paths.Journal, "journal.db", false},
+		{filepath.Join(paths.Home, "memorycore", "tdai-gateway.yaml"), "memorycore/tdai-gateway.yaml", false},
 		{paths.PanelRegistry, "panel/metadata-instances.json", true},
 	}
 	for _, entry := range entries {
