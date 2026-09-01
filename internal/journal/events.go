@@ -63,6 +63,11 @@ type Event struct {
 	ErrorCode      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Resolution     Resolution
+	ResolvedReason string
+	ResolvedAt     *time.Time
+	ResolvedBy     string
+	ProviderRef    string
 }
 
 func (s *Store) RecordFragment(ctx context.Context, fragment Fragment) error {
@@ -475,7 +480,7 @@ func (s *Store) FlushSession(ctx context.Context, adapterID, sessionID string) (
 }
 
 func (s *Store) ListBlockingEvents(ctx context.Context) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?) ORDER BY created_at, id", StatePermanentFailed, StateAmbiguous)
+	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?) AND resolution IS NULL ORDER BY created_at, id", StatePermanentFailed, StateAmbiguous)
 	if err != nil {
 		return nil, fmt.Errorf("list blocking events: %w", err)
 	}
@@ -492,7 +497,7 @@ func (s *Store) ListBlockingEvents(ctx context.Context) ([]Event, error) {
 }
 
 func (s *Store) ListStateDeletionBlockers(ctx context.Context) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?, ?, ?, ?) ORDER BY created_at, id",
+	rows, err := s.db.QueryContext(ctx, selectEvent+" WHERE state IN (?, ?, ?, ?, ?) AND resolution IS NULL ORDER BY created_at, id",
 		StateQueued, StateDispatching, StateRetryableFailed, StatePermanentFailed, StateAmbiguous)
 	if err != nil {
 		return nil, fmt.Errorf("list state deletion blockers: %w", err)
@@ -513,7 +518,8 @@ const selectEvent = `SELECT
 	id, idempotency_key, adapter_id, session_id, turn_id,
 	connection_id, provider_id, provider_version, config_revision,
 	tenant_id, agent_id, user_id, actor_digest, content_hash, payload, state,
-	attempt_count, next_attempt_at, receipt_json, error_code, created_at, updated_at
+	attempt_count, next_attempt_at, receipt_json, error_code, created_at, updated_at,
+	resolution, resolved_reason, resolved_at, resolved_by, provider_ref
 	FROM journal_events`
 
 type rowScanner interface {
@@ -525,7 +531,7 @@ func scanEvent(row rowScanner) (Event, error) {
 	var sessionID, turnID string
 	var actorDigest string
 	var payload, receiptJSON []byte
-	var nextAttempt, errorCode sql.NullString
+	var nextAttempt, errorCode, resolution, resolvedReason, resolvedAt, resolvedBy, providerRef sql.NullString
 	var createdAt, updatedAt string
 	err := row.Scan(
 		&event.ID,
@@ -550,6 +556,7 @@ func scanEvent(row rowScanner) (Event, error) {
 		&errorCode,
 		&createdAt,
 		&updatedAt,
+		&resolution, &resolvedReason, &resolvedAt, &resolvedBy, &providerRef,
 	)
 	if err != nil {
 		return Event{}, err
@@ -577,6 +584,15 @@ func scanEvent(row rowScanner) (Event, error) {
 		event.NextAttemptAt = &parsed
 	}
 	event.ErrorCode = errorCode.String
+	event.Resolution = Resolution(resolution.String)
+	event.ResolvedReason, event.ResolvedBy, event.ProviderRef = resolvedReason.String, resolvedBy.String, providerRef.String
+	if resolvedAt.Valid {
+		parsed, parseErr := parseTime(resolvedAt.String)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event.ResolvedAt = &parsed
+	}
 	event.CreatedAt, err = parseTime(createdAt)
 	if err != nil {
 		return Event{}, err

@@ -17,7 +17,7 @@ type QueueStatus struct {
 }
 
 func (s *Store) QueueSummary(ctx context.Context) (QueueStatus, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT state, count(*) FROM journal_events GROUP BY state`)
+	rows, err := s.db.QueryContext(ctx, `SELECT state, count(*) FROM journal_events WHERE resolution IS NULL GROUP BY state`)
 	if err != nil {
 		return QueueStatus{}, fmt.Errorf("summarize journal queue: %w", err)
 	}

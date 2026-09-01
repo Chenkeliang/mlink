@@ -26,6 +26,9 @@ var actorDigestMigration string
 //go:embed migrations/004_control_plane_agents.sql
 var controlPlaneAgentsMigration string
 
+//go:embed migrations/005_event_resolution.sql
+var eventResolutionMigration string
+
 type Store struct {
 	db *sql.DB
 }
@@ -105,6 +108,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		{version: 2, sql: fragmentRoutesMigration},
 		{version: 3, sql: actorDigestMigration},
 		{version: 4, sql: controlPlaneAgentsMigration},
+		{version: 5, sql: eventResolutionMigration},
 	}
 	for _, migration := range migrations {
 		var applied int
