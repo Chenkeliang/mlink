@@ -928,13 +928,27 @@ func (runtime *runtimeApplication) OpenPanel(ctx context.Context) error {
 }
 
 func (runtime *runtimeApplication) CopyPanelOwnerKey(ctx context.Context) error {
-	value, err := (secret.Keychain{}).Get(ctx, controlplane.OwnerUserKeyAccount)
-	if err != nil {
-		return err
-	}
-	defer wipeRuntimeSecret(value)
-	_, err = (install.LocalTarget{}).Run(ctx, []string{"pbcopy"}, bytes.NewReader(value))
-	return err
+	return runtime.CopyCredential(ctx, app.CredentialPanelOwner)
+}
+
+func (runtime *runtimeApplication) CredentialStatuses(ctx context.Context) ([]app.CredentialStatus, error) {
+	service := runtime.baseService
+	service.Target = install.LocalTarget{}
+	return service.CredentialStatuses(ctx)
+}
+
+func (runtime *runtimeApplication) CopyCredential(ctx context.Context, role app.CredentialRole) error {
+	service := runtime.baseService
+	reader, writer := io.Pipe()
+	copyResult := make(chan error, 1)
+	go func() {
+		err := service.CopyCredential(ctx, role, writer)
+		_ = writer.CloseWithError(err)
+		copyResult <- err
+	}()
+	_, runErr := (install.LocalTarget{}).Run(ctx, []string{"pbcopy"}, reader)
+	copyErr := <-copyResult
+	return errors.Join(copyErr, runErr)
 }
 
 func (runtime *runtimeApplication) controlPanelService(ctx context.Context, writable bool) (*app.Service, func(), error) {

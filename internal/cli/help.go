@@ -39,6 +39,7 @@ Commands:
   backup               List or restore automatic backups
   identity             List, bind, export or import identity state
   panel                Provision, inspect or open Memory Hub
+  credentials          Inspect credentials or copy a Panel login key
   maintenance          Journal, credential and binary maintenance
   version              Print build and schema compatibility metadata
 
@@ -81,10 +82,17 @@ For an existing backend, also pass --endpoint, --service-id,
 --installation-id, --owner and --secrets-stdin. The protected JSON input is:
   {"gateway_token":"..."}
 `,
+		"credentials": `Usage: mlink credentials status [--json]
+       mlink credentials copy panel-owner --yes
+       mlink credentials copy panel-admin --yes
+
+Status shows presence and redacted fingerprints. Only Panel login keys may be
+copied; Gateway, LLM, identity, Hermes and binding secrets cannot be exported.
+`,
 	}
 	text, exists := sections[strings.TrimSpace(topic)]
 	if !exists {
-		_, _ = fmt.Fprintf(writer, "Usage: mlink help [install|provider|control-plane|maintenance|doctor]\n")
+		_, _ = fmt.Fprintf(writer, "Usage: mlink help [install|provider|control-plane|credentials|maintenance|doctor]\n")
 		return 2
 	}
 	if topic != "" {

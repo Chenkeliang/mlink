@@ -9,8 +9,61 @@ import (
 	"strings"
 	"testing"
 
+	"mlink/internal/controlplane"
 	"mlink/internal/install"
 )
+
+func TestCredentialStatusesInventoryIsRedactedAndOnlyPanelKeysAreCopyable(t *testing.T) {
+	service, _, secrets := installedIdentityFixture(t)
+	secrets.values[controlplane.AdminUserKeyAccount] = []byte("admin-secret")
+	secrets.values[controlplane.OwnerUserKeyAccount] = []byte("owner-secret")
+	secrets.values["provider/tencentdb/llm-api-key"] = []byte("llm-secret")
+
+	statuses, err := service.CredentialStatuses(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoles := []CredentialRole{
+		CredentialPanelOwner, CredentialPanelAdmin, CredentialGateway, CredentialMemoryLLM,
+		CredentialIdentityHMAC, CredentialHermesGrant, CredentialIdentityBindings,
+	}
+	if len(statuses) != len(wantRoles) {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	for index, status := range statuses {
+		if status.Role != wantRoles[index] || !status.Present || status.Fingerprint == "" {
+			t.Fatalf("status[%d] = %#v", index, status)
+		}
+		wantCopy := status.Role == CredentialPanelOwner || status.Role == CredentialPanelAdmin
+		if status.CopyAllowed != wantCopy {
+			t.Fatalf("copy permission for %s = %t", status.Role, status.CopyAllowed)
+		}
+	}
+	rendered, _ := json.Marshal(statuses)
+	for _, secret := range []string{"admin-secret", "owner-secret", "llm-secret", "memorycore-secret", "on_owner"} {
+		if bytes.Contains(rendered, []byte(secret)) {
+			t.Fatalf("credential inventory leaked %q: %s", secret, rendered)
+		}
+	}
+}
+
+func TestCopyCredentialAllowsOnlyPanelRolesAndWritesDestinationOnly(t *testing.T) {
+	service, _, secrets := installedIdentityFixture(t)
+	secrets.values[controlplane.AdminUserKeyAccount] = []byte("admin-secret")
+	secrets.values[controlplane.OwnerUserKeyAccount] = []byte("owner-secret")
+
+	var destination bytes.Buffer
+	if err := service.CopyCredential(context.Background(), CredentialPanelOwner, &destination); err != nil {
+		t.Fatal(err)
+	}
+	if destination.String() != "owner-secret" {
+		t.Fatalf("clipboard input = %q", destination.String())
+	}
+	destination.Reset()
+	if err := service.CopyCredential(context.Background(), CredentialGateway, &destination); err == nil || destination.Len() != 0 {
+		t.Fatalf("protected credential copy error/output = %v/%q", err, destination.String())
+	}
+}
 
 type rotationSecrets struct {
 	values map[string][]byte

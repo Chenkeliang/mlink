@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,13 +12,163 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"sort"
 	"strings"
 
 	"mlink/internal/adapter/hermes"
+	"mlink/internal/config"
+	"mlink/internal/controlplane"
 	"mlink/internal/install"
 )
 
 const hermesGrantAccount = "adapter/hermes/token"
+
+type CredentialRole string
+
+const (
+	CredentialPanelOwner       CredentialRole = "panel-owner"
+	CredentialPanelAdmin       CredentialRole = "panel-admin"
+	CredentialGateway          CredentialRole = "gateway"
+	CredentialMemoryLLM        CredentialRole = "memory-llm"
+	CredentialIdentityHMAC     CredentialRole = "identity-hmac"
+	CredentialHermesGrant      CredentialRole = "hermes-grant"
+	CredentialIdentityBindings CredentialRole = "identity-bindings"
+)
+
+type CredentialStatus struct {
+	Role        CredentialRole `json:"role"`
+	Present     bool           `json:"present"`
+	Fingerprint string         `json:"fingerprint,omitempty"`
+	CopyAllowed bool           `json:"copy_allowed"`
+}
+
+func (service *Service) CredentialStatuses(ctx context.Context) ([]CredentialStatus, error) {
+	if service == nil || service.Secrets == nil || service.Target == nil || service.Paths.Config == "" {
+		return nil, errors.New("credential inventory dependencies are required")
+	}
+	content, _, err := service.Target.Read(ctx, service.Paths.Config)
+	if err != nil {
+		return nil, err
+	}
+	configuration, err := config.Decode(content)
+	if err != nil {
+		return nil, err
+	}
+	connection, exists := configuration.Connections[configuration.ActiveConnectionID]
+	if !exists {
+		return nil, errors.New("active credential connection is unavailable")
+	}
+	gatewayAccount, err := credentialAccount(connection.SecretRefs["token"])
+	if err != nil {
+		return nil, err
+	}
+	definitions := []struct {
+		role        CredentialRole
+		account     string
+		copyAllowed bool
+	}{
+		{CredentialPanelOwner, controlplane.OwnerUserKeyAccount, true},
+		{CredentialPanelAdmin, controlplane.AdminUserKeyAccount, true},
+		{CredentialGateway, gatewayAccount, false},
+		{CredentialMemoryLLM, "provider/tencentdb/llm-api-key", false},
+		{CredentialIdentityHMAC, "identity/hmac-key", false},
+		{CredentialHermesGrant, hermesGrantAccount, false},
+	}
+	result := make([]CredentialStatus, 0, len(definitions)+1)
+	for _, definition := range definitions {
+		status, err := service.credentialStatus(ctx, definition.role, definition.account, definition.copyAllowed)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, status)
+	}
+	bindingStatus, err := service.bindingCredentialStatus(ctx, configuration.Bindings)
+	if err != nil {
+		return nil, err
+	}
+	return append(result, bindingStatus), nil
+}
+
+func (service *Service) CopyCredential(ctx context.Context, role CredentialRole, destination io.Writer) error {
+	if service == nil || service.Secrets == nil || destination == nil {
+		return errors.New("credential copy dependencies are required")
+	}
+	account := ""
+	switch role {
+	case CredentialPanelOwner:
+		account = controlplane.OwnerUserKeyAccount
+	case CredentialPanelAdmin:
+		account = controlplane.AdminUserKeyAccount
+	default:
+		return errors.New("credential role is not allowed to copy")
+	}
+	value, err := service.Secrets.Get(ctx, account)
+	if err != nil {
+		return errors.New("load Panel credential")
+	}
+	defer wipe(value)
+	_, err = io.Copy(destination, bytes.NewReader(value))
+	if err != nil {
+		return errors.New("copy Panel credential")
+	}
+	return nil
+}
+
+func (service *Service) credentialStatus(ctx context.Context, role CredentialRole, account string, copyAllowed bool) (CredentialStatus, error) {
+	status := CredentialStatus{Role: role, CopyAllowed: copyAllowed}
+	value, err := service.Secrets.Get(ctx, account)
+	if errors.Is(err, fs.ErrNotExist) {
+		return status, nil
+	}
+	if err != nil {
+		return CredentialStatus{}, fmt.Errorf("inspect credential %q", role)
+	}
+	defer wipe(value)
+	status.Present = true
+	status.Fingerprint = credentialFingerprint(value)
+	return status, nil
+}
+
+func (service *Service) bindingCredentialStatus(ctx context.Context, bindings map[string]config.BindingRef) (CredentialStatus, error) {
+	status := CredentialStatus{Role: CredentialIdentityBindings}
+	ids := make([]string, 0, len(bindings))
+	for id := range bindings {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return status, nil
+	}
+	digest := sha256.New()
+	for _, id := range ids {
+		account, err := credentialAccount(bindings[id].SecretRef)
+		if err != nil {
+			return CredentialStatus{}, err
+		}
+		value, err := service.Secrets.Get(ctx, account)
+		if errors.Is(err, fs.ErrNotExist) {
+			return status, nil
+		}
+		if err != nil {
+			return CredentialStatus{}, errors.New("inspect identity binding credential")
+		}
+		_, _ = digest.Write([]byte(id))
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(credentialFingerprint(value)))
+		wipe(value)
+	}
+	status.Present = true
+	status.Fingerprint = hex.EncodeToString(digest.Sum(nil))[:12]
+	return status, nil
+}
+
+func credentialAccount(reference string) (string, error) {
+	const prefix = "keychain://dev.mlink/"
+	if !strings.HasPrefix(reference, prefix) || len(reference) == len(prefix) {
+		return "", errors.New("credential secret reference is invalid")
+	}
+	return strings.TrimPrefix(reference, prefix), nil
+}
 
 func (service *Service) PlanHermesGrantRotation(ctx context.Context) (install.ChangeSet, error) {
 	current, _, grant, err := service.currentHermesGrant(ctx)

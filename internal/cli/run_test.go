@@ -17,15 +17,18 @@ import (
 )
 
 type fakeApplication struct {
-	plan         install.ChangeSet
-	applyCalls   int
-	appliedPlan  string
-	installCalls int
-	status       app.Status
-	report       doctor.Report
-	drift        app.DriftReport
-	backups      []journal.BackupSummary
-	panelStatus  app.PanelControlStatus
+	plan               install.ChangeSet
+	applyCalls         int
+	appliedPlan        string
+	installCalls       int
+	status             app.Status
+	report             doctor.Report
+	drift              app.DriftReport
+	backups            []journal.BackupSummary
+	panelStatus        app.PanelControlStatus
+	credentialStatuses []app.CredentialStatus
+	credentialCopies   int
+	copiedCredential   app.CredentialRole
 }
 
 func (application *fakeApplication) PlanCursorEnable(context.Context) (install.ChangeSet, error) {
@@ -88,6 +91,14 @@ func (application *fakeApplication) PanelControlStatus(context.Context) (app.Pan
 }
 func (application *fakeApplication) OpenPanel(context.Context) error         { return nil }
 func (application *fakeApplication) CopyPanelOwnerKey(context.Context) error { return nil }
+func (application *fakeApplication) CredentialStatuses(context.Context) ([]app.CredentialStatus, error) {
+	return application.credentialStatuses, nil
+}
+func (application *fakeApplication) CopyCredential(_ context.Context, role app.CredentialRole) error {
+	application.credentialCopies++
+	application.copiedCredential = role
+	return nil
+}
 
 func (application *fakeApplication) Status(context.Context) (app.Status, error) {
 	return application.status, nil
