@@ -137,6 +137,69 @@ func TestProviderCaptureTurnRejectsInvalidInputBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestProviderCaptureTurnChunksContentToOfficialMessageLimit(t *testing.T) {
+	longASCII := strings.Repeat("a", 8193)
+	longEmoji := strings.Repeat("😀", 5000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role, Content string
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 4 {
+			t.Fatalf("message count = %d, want 4 chunks", len(body.Messages))
+		}
+		if body.Messages[0].Role != "user" || body.Messages[1].Role != "user" || body.Messages[2].Role != "assistant" || body.Messages[3].Role != "assistant" {
+			t.Fatalf("roles = %#v", body.Messages)
+		}
+		if body.Messages[0].Content+body.Messages[1].Content != longASCII || body.Messages[2].Content+body.Messages[3].Content != longEmoji {
+			t.Fatal("chunking did not preserve exact content")
+		}
+		for _, message := range body.Messages {
+			if utf16Units(message.Content) > 8192 {
+				t.Fatalf("chunk exceeds official limit: %d", utf16Units(message.Content))
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accepted_ids":["a","b","c","d"]}}`))
+	}))
+	defer server.Close()
+	provider := newTestProvider(t, server.URL)
+	_, err := provider.CaptureTurn(context.Background(), model.Turn{
+		Identity: model.IdentityScope{TenantID: "team", AgentID: "agent", UserID: "user", SessionID: "session", TurnID: "turn"},
+		Messages: []model.Message{{Role: "user", Content: longASCII}, {Role: "assistant", Content: longEmoji}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderRecallCompactsQueryToOfficialSearchLimit(t *testing.T) {
+	query := strings.Repeat("A", 1500) + strings.Repeat("B", 1500)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := body["query"].(string)
+		if utf16Units(got) != 2048 || !strings.HasPrefix(got, strings.Repeat("A", 1024)) || !strings.HasSuffix(got, strings.Repeat("B", 1024)) {
+			t.Fatalf("compacted query shape/length = %d/%q...%q", utf16Units(got), got[:8], got[len(got)-8:])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"items":[]}}`))
+	}))
+	defer server.Close()
+	provider := newTestProvider(t, server.URL)
+	if _, err := provider.Recall(context.Background(), model.RecallRequest{
+		Identity: model.IdentityScope{TenantID: "team", AgentID: "agent", UserID: "user"}, Query: query,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProviderRecallDefaultsToUserScopedL1(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string

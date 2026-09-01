@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"mlink/internal/model"
 )
@@ -13,6 +14,12 @@ import (
 type Provider struct {
 	client *Client
 }
+
+const (
+	officialConversationContentUnits = 8192
+	officialSearchQueryUnits         = 2048
+	officialConversationMaxMessages  = 100
+)
 
 func NewProvider(client *Client) *Provider {
 	return &Provider{client: client}
@@ -42,11 +49,16 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 		if strings.TrimSpace(message.Content) == "" {
 			return model.WriteReceipt{}, fmt.Errorf("message %d has empty content", i)
 		}
-		converted := requestMessage{Role: message.Role, Content: message.Content}
-		if !message.OccurredAt.IsZero() {
-			converted.Timestamp = message.OccurredAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+		for _, content := range splitByUTF16Units(message.Content, officialConversationContentUnits) {
+			converted := requestMessage{Role: message.Role, Content: content}
+			if !message.OccurredAt.IsZero() {
+				converted.Timestamp = message.OccurredAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+			}
+			messages = append(messages, converted)
 		}
-		messages = append(messages, converted)
+	}
+	if len(messages) > officialConversationMaxMessages {
+		return model.WriteReceipt{}, errors.New("capture turn exceeds MemoryCore's 100-message request limit")
 	}
 
 	request := struct {
@@ -143,7 +155,7 @@ func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (mod
 
 func (p *Provider) recallL1(ctx context.Context, request model.RecallRequest, limit int) ([]model.ContextItem, error) {
 	body := recallScopeBody(request)
-	body["query"] = request.Query
+	body["query"] = compactUTF16(request.Query, officialSearchQueryUnits)
 	body["limit"] = limit
 	var response struct {
 		Items []struct {
@@ -175,6 +187,75 @@ func (p *Provider) recallL1(ctx context.Context, request model.RecallRequest, li
 		})
 	}
 	return items, nil
+}
+
+func utf16Units(value string) int {
+	units := 0
+	for _, current := range value {
+		units += utf16.RuneLen(current)
+	}
+	return units
+}
+
+func splitByUTF16Units(value string, limit int) []string {
+	if utf16Units(value) <= limit {
+		return []string{value}
+	}
+	var chunks []string
+	var chunk strings.Builder
+	units := 0
+	for _, current := range value {
+		currentUnits := utf16.RuneLen(current)
+		if units > 0 && units+currentUnits > limit {
+			chunks = append(chunks, chunk.String())
+			chunk.Reset()
+			units = 0
+		}
+		chunk.WriteRune(current)
+		units += currentUnits
+	}
+	if chunk.Len() > 0 {
+		chunks = append(chunks, chunk.String())
+	}
+	return chunks
+}
+
+func compactUTF16(value string, limit int) string {
+	if utf16Units(value) <= limit {
+		return value
+	}
+	headLimit := limit / 2
+	tailLimit := limit - headLimit
+	return prefixUTF16(value, headLimit) + suffixUTF16(value, tailLimit)
+}
+
+func prefixUTF16(value string, limit int) string {
+	units := 0
+	end := 0
+	for index, current := range value {
+		currentUnits := utf16.RuneLen(current)
+		if units+currentUnits > limit {
+			break
+		}
+		units += currentUnits
+		end = index + len(string(current))
+	}
+	return value[:end]
+}
+
+func suffixUTF16(value string, limit int) string {
+	runes := []rune(value)
+	units := 0
+	start := len(runes)
+	for index := len(runes) - 1; index >= 0; index-- {
+		currentUnits := utf16.RuneLen(runes[index])
+		if units+currentUnits > limit {
+			break
+		}
+		units += currentUnits
+		start = index
+	}
+	return string(runes[start:])
 }
 
 func (p *Provider) recallL2(ctx context.Context, request model.RecallRequest, limit int) ([]model.ContextItem, error) {
