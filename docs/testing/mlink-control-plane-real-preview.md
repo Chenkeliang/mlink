@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: **Stage A applied and verified. Stage B not run.**
+Status: **Stage A and Stage B applied and verified.**
 
 ## Candidate and exact plan
 
@@ -70,6 +70,36 @@ The following hashes were identical before and after Apply:
 
 Journal migration `4` was added during Apply to persist generated control-plane state. No active configuration was cut over.
 
-## Gate
+## Stage B cutover
 
-Do not run `panel cutover` yet. Stage B remains a separate exact preview and confirmation after the user reviews the working Hub/Panel.
+The first cutover Plan correctly rolled back after its Hermes restart was accidentally routed to the macOS host instead of Orb. Evidence after failure showed the original binary hash, Schema v2 config hash, `provisioned` state, running old Broker, and unchanged Hermes process. No cutover ownership was committed.
+
+Two safety fixes were then committed and tested:
+
+- Stage B updates and backs up the MLink binary in the same transaction as Schema v3 config;
+- Hermes restart is routed through the Orb target.
+
+The final exact Plan `plan_2591dc31dd43b31e9db2ac271c` applied:
+
+- installed binary SHA-256 `91c54302f8737185d2a4816dd3ffe77417828d0f8a5c26bafb7e8c26e81a568c`;
+- Schema v3 config SHA-256 `b499b5a2852ea0fb6c6e43b927d86444792af236545bed4dcffde65f68783345`;
+- Core-generated Owner User/Team/Agent/Asset;
+- dynamic Agent limit `500`;
+- Owner policy L1/L2/L3;
+- private/group policies L1 only, with group topics split by Session;
+- Broker PID refreshed and Hermes restarted at 2026-09-01 12:05:30 CST;
+- control-plane state changed to `active`.
+
+Post-cutover read-only probes:
+
+- Codex local Recall: HTTP 200;
+- Pi local Recall: HTTP 200;
+- Owner Hermes Recall through the bridge: HTTP 200;
+- Hub Panel, Knowledge, and instance visibility: healthy;
+- no port 8096 listener;
+- Codex Hook, Pi extension, and all Hermes protected hashes unchanged;
+- dynamic principal mappings: `0` until the first non-Owner DM/group message;
+- legacy memory remains physically present (`L0=132`, `L1=23`, `L2=7`) but is no longer active;
+- new Owner memory starts empty and will be populated by subsequent turns.
+
+Pi still reports `awaiting_first_turn`; Cursor is not part of the current Codex/Pi/Hermes adapter release. One pre-existing ambiguous Journal event remains for separate reconciliation.
