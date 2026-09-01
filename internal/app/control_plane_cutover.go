@@ -60,7 +60,18 @@ func (service *Service) PlanControlPlaneCutover(ctx context.Context, request Con
 	if err != nil {
 		return install.ChangeSet{}, err
 	}
+	candidateBinary, _, err := service.Target.Read(ctx, service.Paths.SourceExecutable)
+	if err != nil {
+		return install.ChangeSet{}, fmt.Errorf("read Schema v3 MLink candidate: %w", err)
+	}
+	if len(candidateBinary) == 0 {
+		return install.ChangeSet{}, errors.New("Schema v3 MLink candidate is empty")
+	}
 	resources := []install.DesiredResource{
+		{
+			OwnerID: "dev.mlink.binary", Target: service.Paths.Binary, Content: candidateBinary, Mode: 0o700,
+			SemanticDiff: []install.SemanticDiff{{Path: "binary:mlink", Before: "installed schema v2 runtime", After: "verified schema v3 control-plane candidate"}},
+		},
 		{
 			OwnerID: "dev.mlink.config", Target: service.Paths.Config, Content: proposedData, Mode: currentMode,
 			SemanticDiff: []install.SemanticDiff{

@@ -47,6 +47,13 @@ func TestControlPlaneCutoverPreviewIsExactAndDoesNotMigrateMemory(t *testing.T) 
 		t.Fatal("Codex Hook changed during preview")
 	}
 	configOperation := operationForTarget(t, plan, service.Paths.Config)
+	binaryOperation := operationForTarget(t, plan, service.Paths.Binary)
+	if !bytes.Equal(binaryOperation.Content, target.files[service.Paths.SourceExecutable].content) {
+		t.Fatalf("cutover binary content = %q", binaryOperation.Content)
+	}
+	if len(plan.Operations) < 2 || plan.Operations[0].Target != service.Paths.Binary || plan.Operations[1].Target != service.Paths.Config {
+		t.Fatalf("cutover operation order = %#v", plan.Operations)
+	}
 	var proposed config.Config
 	if err := yaml.Unmarshal(configOperation.Content, &proposed); err != nil {
 		t.Fatal(err)
@@ -104,10 +111,13 @@ func TestControlPlaneCutoverApplyActivatesGeneratedIDsAndRestartsServices(t *tes
 	if got.SchemaVersion != 3 || got.Principals["owner"].CanonicalUserID != "usr-owner-generated" || len(got.Spaces) != 0 {
 		t.Fatalf("active config = %#v", got)
 	}
+	if !bytes.Equal(target.files[service.Paths.Binary].content, target.files[service.Paths.SourceExecutable].content) {
+		t.Fatal("installed MLink binary was not updated before restart")
+	}
 	if target.runs != 2 || len(states.marks) != 1 || states.marks[0] != "active" {
 		t.Fatalf("runs/marks = %d/%#v", target.runs, states.marks)
 	}
-	if owned := service.Ledger.(*memoryLedger).owned; len(owned) != 1 || owned[0].Target != service.Paths.Config {
+	if owned := service.Ledger.(*memoryLedger).owned; len(owned) != 2 || owned[0].Target != service.Paths.Binary || owned[1].Target != service.Paths.Config {
 		t.Fatalf("cutover ownership = %#v", owned)
 	}
 	if !bytes.Equal(hermesBefore, target.files["/home/test/.hermes/config.yaml"].content) ||
@@ -119,6 +129,7 @@ func TestControlPlaneCutoverApplyActivatesGeneratedIDsAndRestartsServices(t *tes
 func TestControlPlaneCutoverRestartFailureRestoresV2Config(t *testing.T) {
 	service, target, states, request := newCutoverFixture(t)
 	before := append([]byte(nil), target.files[service.Paths.Config].content...)
+	binaryBefore, binaryExisted := target.files[service.Paths.Binary]
 	target.failAtRun = 2
 	plan, err := service.PlanControlPlaneCutover(context.Background(), request)
 	if err != nil {
@@ -130,6 +141,10 @@ func TestControlPlaneCutoverRestartFailureRestoresV2Config(t *testing.T) {
 	}
 	if !bytes.Equal(before, target.files[service.Paths.Config].content) {
 		t.Fatalf("config was not restored:\n%s", target.files[service.Paths.Config].content)
+	}
+	binaryAfter, binaryExistsAfter := target.files[service.Paths.Binary]
+	if binaryExisted != binaryExistsAfter || binaryExisted && !bytes.Equal(binaryBefore.content, binaryAfter.content) {
+		t.Fatalf("binary rollback = before:%#v after:%#v", binaryBefore, binaryAfter)
 	}
 	if target.runs != 4 || len(states.marks) != 0 {
 		t.Fatalf("rollback runs/marks = %d/%#v", target.runs, states.marks)
