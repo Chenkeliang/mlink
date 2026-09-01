@@ -163,8 +163,8 @@ func newCutoverFixture(t *testing.T) (*Service, *memoryTarget, *cutoverStateStor
 	states := &cutoverStateStore{state: journal.ControlPlaneState{
 		InstallationID: legacy.NamespaceID, InstanceID: "default", OwnerUserID: "usr-owner-generated",
 		OwnerTeamID: "team-owner-generated", OwnerAgentID: "agt-owner-generated",
-		OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", PanelContainer: "mlink-memory-panel",
-		PanelImage: "mlink-memory-panel:a5dcbe6", State: "provisioned",
+		OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", PanelContainer: "tdai-memory-hub",
+		PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}}
 	service.ControlPlaneStates = states
 	return service, target, states, ControlPlaneCutoverRequest{DynamicAgentLimit: 500}

@@ -194,17 +194,20 @@ func (service *Service) removeInstallSecrets(ctx context.Context, configuration 
 func panelUninstallResources(registryPath string) []install.DesiredResource {
 	run := []string{
 		"docker", "run", "-d", "--name", panel.ContainerName, "--restart", "unless-stopped",
-		"--label", "dev.mlink.component=memory-panel", "--add-host", "host.docker.internal:host-gateway",
-		"-p", "127.0.0.1:8125:8123", "-e", "UI_DIST_DIR=./web/dist",
-		"-e", "METADATA_INSTANCES_CONFIG=/app/config/metadata-instances.json", "-e", "KNOWLEDGE_LLM_BINDING_SYNC=false",
+		"--label", "dev.mlink.component=memory-hub", "--add-host", "host.docker.internal:host-gateway",
+		"-p", "127.0.0.1:8125:8125", "-p", "127.0.0.1:8424:8424",
+		"-e", "KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:8424/v3",
+		"-e", "KNOWLEDGE_LLM_PROXY_BASE_URL=http://host.docker.internal:8420",
+		"-e", "LLM_MODE=proxy", "-e", "KNOWLEDGE_LLM_BINDING_SYNC=true",
 		"-e", "LOG_LEVEL=info", "-e", "LOG_FORMAT=json",
-		"-v", registryPath + ":/app/config/metadata-instances.json:ro", panel.ImageName,
+		"-v", panel.VolumeName + ":/data/knowledge",
+		"-v", registryPath + ":/app/panel/config/metadata-instances.json:ro", panel.ImageReference,
 	}
 	return []install.DesiredResource{
 		{
-			OwnerID: "dev.mlink.panel.container", Target: "service:remove:" + panel.ContainerName, Action: install.ActionService,
+			OwnerID: "dev.mlink.hub.container", Target: "service:remove:" + panel.ContainerName, Action: install.ActionService,
 			Command: []string{"docker", "rm", "-f", panel.ContainerName}, RollbackCommand: run,
-			SemanticDiff: []install.SemanticDiff{{Path: "panel:container", Before: "MLink-owned", After: "removed; backend metadata retained"}},
+			SemanticDiff: []install.SemanticDiff{{Path: "hub:container", Before: "MLink-owned", After: "removed; Knowledge volume and backend metadata retained"}},
 		},
 		{
 			OwnerID: "dev.mlink.panel.registry", Target: registryPath, Action: install.ActionRemoveOwned,

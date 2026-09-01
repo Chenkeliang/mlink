@@ -33,16 +33,17 @@ func TestPanelProvisionPreviewComposesRemoteAndPanelPlansWithoutWrites(t *testin
 		},
 		PanelRuntime: panelRuntime,
 		PanelDesired: panel.Desired{
-			SourceRoot: "/src/MemoryPanel", RegistryPath: "/Users/test/.mlink/panel/metadata-instances.json",
-			HostAddress: "127.0.0.1", HostPort: 8125, ContainerPort: 8123, InstanceID: "default",
+			RegistryPath: "/Users/test/.mlink/panel/metadata-instances.json", HostAddress: "127.0.0.1",
+			PanelHostPort: 8125, KnowledgeHostPort: 8424, InstanceID: "default",
 			InstanceName: "MLink Local", GatewayEndpoint: "http://host.docker.internal:8420",
+			KnowledgePublicBaseURL: "http://host.docker.internal:8424/v3", KnowledgeLLMProxyBaseURL: "http://host.docker.internal:8420",
 		},
 	}
 	plan, err := service.PlanPanelProvision(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Operations) != 7 || target.writes != 0 || target.runs != 0 {
+	if len(plan.Operations) != 8 || target.writes != 0 || target.runs != 0 {
 		t.Fatalf("plan/writes/runs = %d/%d/%d", len(plan.Operations), target.writes, target.runs)
 	}
 	rendered, _ := install.RenderJSON(plan)

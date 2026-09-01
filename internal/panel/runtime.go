@@ -43,6 +43,7 @@ type Status struct {
 	PanelHealthy     bool `json:"panel_healthy"`
 	KnowledgeHealthy bool `json:"knowledge_healthy"`
 	InstanceVisible  bool `json:"instance_visible"`
+	Healthy          bool `json:"healthy"`
 }
 
 func (runtime Runtime) Plan(ctx context.Context, desired Desired) (install.ChangeSet, error) {
@@ -171,6 +172,7 @@ func (runtime Runtime) Status(ctx context.Context, desired Desired) (Status, err
 		}
 	}
 	status.KnowledgeHealthy = getOK(ctx, client, "http://"+desired.HostAddress+":"+strconv.Itoa(desired.KnowledgeHostPort)+"/health", nil)
+	status.Healthy = status.PanelHealthy && status.KnowledgeHealthy && status.InstanceVisible
 	return status, nil
 }
 

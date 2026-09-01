@@ -79,7 +79,7 @@ func TestControlPlaneUninstallRemovesOnlyLocalPanelAndKeepsBackendMetadata(t *te
 	state := journal.ControlPlaneState{
 		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
 		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated",
-		PanelContainer: "mlink-memory-panel", PanelImage: "mlink-memory-panel:a5dcbe6", State: "provisioned",
+		PanelContainer: "tdai-memory-hub", PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}
 	store := &identityControlStore{state: state, mappings: map[string]journal.PrincipalAgent{
 		"prn_aaaaaaaaaaaaaaaaaaaaaaaaaa": {
@@ -106,6 +106,15 @@ func TestControlPlaneUninstallRemovesOnlyLocalPanelAndKeepsBackendMetadata(t *te
 		t.Fatal(err)
 	}
 	rendered, _ := install.RenderJSON(plan)
+	if bytes.Contains(rendered, []byte("docker volume rm")) || !bytes.Contains(rendered, []byte("tdai-memory-hub")) {
+		t.Fatalf("Hub uninstall lifecycle is unsafe: %s", rendered)
+	}
+	containerOperation := operationForTarget(t, plan, "service:remove:tdai-memory-hub")
+	rollback := strings.Join(containerOperation.RollbackCommand, " ")
+	if !strings.Contains(rollback, "127.0.0.1:8125:8125") || !strings.Contains(rollback, "127.0.0.1:8424:8424") ||
+		!strings.Contains(rollback, "tdai-panel-data:/data/knowledge") || strings.Contains(rollback, "8096") {
+		t.Fatalf("Hub rollback command = %q", rollback)
+	}
 	for _, forbidden := range []string{"/v3/meta/", "conversation", "atomic", "scenario", "core/read", "delete backend"} {
 		if strings.Contains(strings.ToLower(string(rendered)), forbidden) {
 			t.Fatalf("uninstall touches backend memory %q: %s", forbidden, rendered)

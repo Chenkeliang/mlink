@@ -50,7 +50,7 @@ func TestSaveLoadAndMarkControlPlane(t *testing.T) {
 		InstallationID: "installation-1", InstanceID: "default",
 		OwnerUserID: "usr-owner", OwnerTeamID: "team-owner", OwnerAgentID: "agt-owner",
 		OwnerAssetID:   "chat_memory-team-owner-agt-owner",
-		PanelContainer: "mlink-memory-panel", PanelImage: "mlink-memory-panel:a5dcbe6", State: "provisioned",
+		PanelContainer: "tdai-memory-hub", PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}
 	if err := store.SaveControlPlane(context.Background(), want); err != nil {
 		t.Fatal(err)

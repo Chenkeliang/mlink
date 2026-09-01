@@ -1,12 +1,15 @@
 package controlplane
 
-import "mlink/internal/journal"
+import (
+	"mlink/internal/journal"
+	"mlink/internal/panel"
+)
 
 const (
 	AdminUserKeyAccount = "control/tencentdb/admin-user-key"
 	OwnerUserKeyAccount = "control/tencentdb/owner-user-key"
-	PanelContainerName  = "mlink-memory-panel"
-	PanelImageName      = "mlink-memory-panel:a5dcbe6"
+	PanelContainerName  = panel.ContainerName
+	PanelImageName      = panel.ImageReference
 )
 
 type ProvisionRequest struct {

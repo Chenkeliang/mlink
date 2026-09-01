@@ -541,14 +541,10 @@ func (runtime *runtimeApplication) controlPanelService(ctx context.Context, writ
 		ownerName = strings.TrimPrefix(owner.CanonicalUserID, "usr_owner_")
 	}
 	localTarget := install.LocalTarget{}
-	sourceRoot := environmentDefault("MLINK_MEMORY_PANEL_SOURCE", filepath.Join(filepath.Dir(runtime.paths.Home), "projects", "mlink-lab", "TencentDB-Agent-Memory", "MemoryPanel"))
-	if err := verifyPinnedPanelSource(ctx, localTarget, sourceRoot); err != nil {
-		closeService()
-		return nil, func() {}, err
-	}
 	desired := panel.Desired{
-		SourceRoot: sourceRoot, RegistryPath: runtime.paths.PanelRegistry, HostAddress: "127.0.0.1", HostPort: 8125, ContainerPort: 8123,
+		RegistryPath: runtime.paths.PanelRegistry, HostAddress: "127.0.0.1", PanelHostPort: 8125, KnowledgeHostPort: 8424,
 		InstanceID: "default", InstanceName: "MLink Local", GatewayEndpoint: "http://host.docker.internal:8420",
+		KnowledgePublicBaseURL: "http://host.docker.internal:8424/v3", KnowledgeLLMProxyBaseURL: "http://host.docker.internal:8420",
 	}
 	if configuration.ControlPlane != nil {
 		desired.InstanceID = configuration.ControlPlane.InstanceID
@@ -589,19 +585,6 @@ func runtimeTencentClient(ctx context.Context, configuration config.Config, secr
 	}
 	defer wipeRuntimeSecret(token)
 	return tencentdb.NewClient(tencentdb.Config{BaseURL: baseURL, Token: string(token), ServiceID: serviceID})
-}
-
-func verifyPinnedPanelSource(ctx context.Context, runner install.CommandRunner, sourceRoot string) error {
-	root := filepath.Dir(sourceRoot)
-	revision, err := runner.Run(ctx, []string{"git", "-C", root, "rev-parse", "--short=7", "HEAD"}, nil)
-	if err != nil || strings.TrimSpace(string(revision)) != "a5dcbe6" {
-		return errors.New("official MemoryPanel source is not pinned to a5dcbe6")
-	}
-	status, err := runner.Run(ctx, []string{"git", "-C", root, "status", "--porcelain", "--", "MemoryPanel"}, nil)
-	if err != nil || strings.TrimSpace(string(status)) != "" {
-		return errors.New("official MemoryPanel source has uncommitted changes")
-	}
-	return nil
 }
 
 func (runtime *runtimeApplication) PlanIdentityBind(ctx context.Context, request app.IdentityBindRequest) (install.ChangeSet, error) {

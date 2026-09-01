@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"regexp"
 	"time"
+
+	"mlink/internal/panel"
 )
 
 var (
@@ -223,12 +225,12 @@ func (s *Store) controlPlaneByID(ctx context.Context, installationID string) (Co
 
 func validControlPlane(value ControlPlaneState) bool {
 	for _, item := range []string{value.InstallationID, value.InstanceID, value.OwnerUserID, value.OwnerTeamID,
-		value.OwnerAgentID, value.OwnerAssetID, value.PanelContainer, value.PanelImage} {
+		value.OwnerAgentID, value.OwnerAssetID, value.PanelContainer} {
 		if !journalIDPattern.MatchString(item) {
 			return false
 		}
 	}
-	return validControlPlaneState(value.State)
+	return value.PanelImage == panel.ImageReference && validControlPlaneState(value.State)
 }
 
 func validControlPlaneState(state string) bool {

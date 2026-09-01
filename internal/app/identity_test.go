@@ -98,7 +98,7 @@ func TestIdentityExportV2IncludesGeneratedControlPlaneAndMappings(t *testing.T) 
 	state := journal.ControlPlaneState{
 		InstallationID: "personal", InstanceID: "default", OwnerUserID: "usr-owner-generated", OwnerTeamID: "team-owner-generated",
 		OwnerAgentID: "agt-owner-generated", OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated",
-		PanelContainer: "mlink-memory-panel", PanelImage: "mlink-memory-panel:a5dcbe6", State: "provisioned",
+		PanelContainer: "tdai-memory-hub", PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "provisioned",
 	}
 	store := &identityControlStore{state: state, mappings: map[string]journal.PrincipalAgent{
 		"prn_aaaaaaaaaaaaaaaaaaaaaaaaaa": {

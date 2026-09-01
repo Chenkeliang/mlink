@@ -82,8 +82,8 @@ func TestControlPlaneBundleRoundTripsGeneratedIDsAndMappings(t *testing.T) {
 	bundle.ControlPlane = &BundleControlPlane{
 		InstallationID: "installation-1", InstanceID: "default", OwnerUserID: "usr-owner-generated",
 		OwnerTeamID: "team-owner-generated", OwnerAgentID: "agt-owner-generated",
-		OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", PanelContainer: "mlink-memory-panel",
-		PanelImage: "mlink-memory-panel:a5dcbe6", State: "active",
+		OwnerAssetID: "chat_memory-team-owner-generated-agt-owner-generated", PanelContainer: "tdai-memory-hub",
+		PanelImage: "agentmemory/memory-hub@sha256:7be68305b9ab279407584ffe44300605a5833df57a1730ca5bd41bbbe4b3f104", State: "active",
 	}
 	bundle.AdminUserKey = []byte("admin-key")
 	bundle.OwnerUserKey = []byte("owner-key")
