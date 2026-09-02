@@ -1,47 +1,73 @@
 <div align="center">
 
-<img src="assets/mlink-logo.svg" alt="MLink — One memory plane. Your models stay yours." width="900">
+<img src="assets/mlink-logo.svg" alt="MLink — one memory plane, your models stay yours" width="900">
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Connect Codex, Cursor, Pi, and Hermes Agent to one local memory service—without replacing their model provider, subscription, API key, or authentication flow.
+**A local-first memory integration and control plane for Codex, Cursor, Pi, and Hermes Agent.**
 
-[![Go 1.27](https://img.shields.io/badge/Go-1.27-65D1FF?style=flat-square)](https://go.dev/)
-[![Memory only](https://img.shields.io/badge/scope-memory_only-FFD700?style=flat-square)](#what-mlink-does-not-touch)
-[![Local first](https://img.shields.io/badge/runtime-local_first-35E0A1?style=flat-square)](#architecture)
+MLink connects agents to shared memory without replacing their model provider, subscription, API key, or login flow.
+
+[![Go 1.27](https://img.shields.io/badge/Go-1.27-58D7FF?style=flat-square)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/platform-macOS_arm64-FFD022?style=flat-square)](#requirements)
+[![Latest release](https://img.shields.io/badge/release-v0.1.0--rc.2-C37A1B?style=flat-square)](https://github.com/Chenkeliang/mlink/releases/tag/v0.1.0-rc.2)
+[![Scope](https://img.shields.io/badge/scope-memory_only-35E0A1?style=flat-square)](#what-mlink-does-not-do)
 
 </div>
 
-## Why MLink
+## What MLink is
 
-Every coding agent has its own lifecycle, configuration, and memory surface. MLink gives them a shared memory plane while preserving those boundaries:
+MLink is the layer between an agent and a memory backend.
 
-- **Codex** — lifecycle Hooks for recall and capture.
-- **Cursor Desktop / CLI** — fail-open Hooks for capture and stdio MCP for query-specific recall.
-- **Pi** — native Extension integration.
-- **Hermes Agent** — MemoryProvider bridge with Feishu DM, group, and topic routing.
-- **TencentDB MemoryCore** — the first production Provider, including the official Memory Hub Panel.
+It provides the integration pieces that a memory engine does not provide on its own:
 
-MLink is not an LLM proxy. Your agent continues using the model account and provider it already had.
+- Agent-native Hooks, Extensions, MCP, and MemoryProvider adapters;
+- permanent backend identity before the first memory write;
+- deterministic routing for local users, Feishu DMs, groups, and topics;
+- per-principal isolation instead of one blended group profile;
+- capture deduplication, retry, ambiguous-write audit, and operator recovery;
+- guided install, Doctor, semantic uninstall, credential inventory, and full-machine recovery.
 
-## What MLink actually solves
+MLink does **not** implement a second memory engine. TencentDB MemoryCore currently supplies storage, extraction, retrieval, metadata, ACLs, and the L0–L3 memory model. MLink makes those capabilities usable and operationally safe across different agents.
 
-TencentDB Agent Memory already provides a multi-user and team-aware memory foundation: Users and User Keys, Teams and memberships, Agents and Tasks, asset ownership and ACLs, plus the L0–L3 memory engine. MLink does not replace or reimplement those capabilities.
+## The problems it solves
 
-MLink turns those primitives into one safe, consistent integration layer for heterogeneous agents and chat channels:
+### One memory backend, four incompatible agent surfaces
 
-| Boundary | TencentDB Agent Memory provides | MLink provides |
+Codex, Cursor, Pi, and Hermes do not expose the same extension mechanism. MLink gives each agent a native integration while keeping routing policy in one Broker.
+
+### Stable identity without profile pollution
+
+Display names and chat participants are not safe memory keys. MLink provisions permanent Core IDs, binds the local owner to stable external identity, and maps other DMs and groups to isolated dynamic Agents.
+
+### Memory reliability outside the model context
+
+Retries can duplicate a non-idempotent memory write. MLink records capture state in a SQLite Journal, distinguishes retryable failures from ambiguous writes, and requires audited operator resolution where replay would be unsafe.
+
+### Recovery without changing IDs
+
+A full encrypted backup carries MemoryCore, Knowledge, MLink state, Keychain material, identity mappings, and Agent selection. Restore verifies the original User, Team, Agent, Asset, dynamic mappings, SQLite databases, and canonical volume contents. It never silently creates replacement IDs.
+
+## Supported integrations
+
+### Agents
+
+| Agent | Integration | Recall | Capture | Current status |
+|---|---|---:|---:|---|
+| Codex | lifecycle Hooks | Yes | Yes | Implemented and locally accepted |
+| Cursor Desktop / CLI | fail-open Hooks + stdio MCP | Yes | Yes | Implemented and locally accepted |
+| Pi | native Extension | Yes | Yes | Implemented and locally accepted |
+| Hermes Agent | MemoryProvider plugin + private Broker bridge | Yes | Yes | Implemented; Feishu DM/group/topic routing supported |
+
+### Memory Providers
+
+| Provider | Status | Notes |
 |---|---|---|
-| Memory engine | L0–L3 extraction, storage, and retrieval | Uses the engine through a versioned Provider; does not duplicate it |
-| Backend identity | User, Team, Agent, Task, Asset, User Key, and ACL APIs | Provisions permanent Core IDs before the first write and verifies them on every runtime start |
-| Agent integration | HTTP APIs, SDKs, and an optional LLM Proxy | Codex Hooks, Cursor Hooks/MCP, Pi Extension, and Hermes MemoryProvider without changing model routing |
-| External identity | Requires explicit User / Team / Agent dimensions | Maps stable Feishu identities, groups, and topics to deterministic MLink routes |
-| Session routing | Accepts caller-supplied identity and session dimensions | Derives stable DM, group, topic, and local-Agent sessions |
-| Isolation policy | Stores and retrieves within Core identity dimensions | Gives the Owner L1/L2/L3 while limiting other DMs and groups to their isolated L1 routes |
-| Delivery reliability | Memory capture and recall APIs | SQLite Journal deduplication, retry, ambiguous-write audit, and operator resolution |
-| Operations | MemoryCore and Memory Hub runtimes | Detection, guided installation, exact Plans, backups, upgrades, uninstall, and Doctor |
+| TencentDB MemoryCore | **Implemented** | First production connector; official Core and Memory Hub images are digest-pinned |
+| mem0 | Not implemented | The Provider boundary is designed for it, but no production connector ships today |
+| Other backends | Not implemented | Require a versioned Provider connector and lifecycle driver |
 
-In the current Hermes integration, the Owner is a normal MemoryCore User. Each other Feishu DM principal and each group is mapped to its own dynamic Agent under the Owner Team. This provides isolated multi-principal access without pretending that every Feishu member has been registered as a separate MemoryCore User.
+Provider extensibility is an architecture property, not a claim that every backend is already supported.
 
 ## Architecture
 
@@ -52,45 +78,118 @@ flowchart LR
     P[Pi Extension] --> B
     H[Hermes MemoryProvider] --> B
 
-    B[MLink Broker<br/>Unix Socket + private Hermes bridge]
-    B --> J[(SQLite Journal<br/>dedupe · audit · retry)]
+    B[MLink Broker<br/>Unix socket + private Hermes bridge]
+    B --> J[(SQLite Journal<br/>dedupe · retry · audit)]
     B --> R[Provider Host]
     R --> M[TencentDB MemoryCore]
-    M --> L1[L1 · user memory]
-    M --> L2[L2 · agent scenarios]
-    M --> L3[L3 · agent profile]
+    M --> L0[L0 · conversation]
+    M --> L1[L1 · atomic memory]
+    M --> L2[L2 · scenarios]
+    M --> L3[L3 · profile]
     M --> HUB[Official Memory Hub<br/>Panel + Knowledge]
 ```
 
-The Broker is the single policy boundary. Adapters never receive a MemoryCore token; Provider-specific behavior stays behind the versioned Provider interface.
+The Broker is the runtime policy boundary. Agent-side adapters never receive the MemoryCore Gateway token.
 
-## Memory isolation
+## Identity and memory isolation
 
-| Context | User identity | Session identity | Layers |
+| Context | Backend identity | Session boundary | Layers |
 |---|---|---|---|
-| Local owner: Codex / Cursor / Pi | Core-generated Owner | Agent conversation | L1 + L2 + L3 |
-| Owner in Hermes DM | Stable Feishu binding → Owner | Feishu conversation | L1 + L2 + L3 |
-| Other Hermes DM users | Stable principal → dynamic Agent | Feishu conversation | L1 |
-| Feishu group | Stable group principal → dynamic Agent | Group or topic ID | L1 |
+| Local owner in Codex / Cursor / Pi | Core-generated Owner | Agent conversation | L1 + L2 + L3 |
+| Owner in Hermes DM | stable Feishu binding → Owner | DM conversation | L1 + L2 + L3 |
+| Another Hermes DM user | stable principal → dynamic Agent | DM conversation | isolated L1 |
+| Feishu group | stable group principal → dynamic Agent | group or topic ID | isolated L1 |
 
-Changing a display name does not change identity. Raw Feishu IDs are stored in Keychain-backed bindings or reduced to HMAC fingerprints; they are not used as public backend labels.
+Raw Feishu IDs stay in Keychain-backed bindings or are reduced to HMAC fingerprints. A display-name change does not create a new memory identity.
 
-## Quick start
+## Requirements
 
-### Native binary
+The currently accepted runtime target is intentionally narrow:
 
-Build with Go 1.27 and start the guided TUI:
+- macOS on Apple Silicon (`darwin/arm64`);
+- Docker-compatible local runtime; development and acceptance use OrbStack;
+- official TencentDB MemoryCore and Memory Hub images pinned by digest;
+- an OpenAI-compatible Memory LLM endpoint, accessible model, and API key for MemoryCore extraction;
+- Go 1.27.x when building from source;
+- the agent applications you want to connect.
+
+The Memory LLM is used by MemoryCore for extraction. It does not replace the model used by Codex, Cursor, Pi, or Hermes.
+
+## Installation
+
+### Option 1: public pre-release
+
+The latest published build is [`v0.1.0-rc.2`](https://github.com/Chenkeliang/mlink/releases/tag/v0.1.0-rc.2) for macOS arm64.
 
 ```bash
+curl -LO https://github.com/Chenkeliang/mlink/releases/download/v0.1.0-rc.2/mlink_0.1.0-rc.2_darwin_arm64.tar.gz
+curl -LO https://github.com/Chenkeliang/mlink/releases/download/v0.1.0-rc.2/checksums.txt
+grep 'tar.gz$' checksums.txt | shasum -a 256 -c -
+tar -xzf mlink_0.1.0-rc.2_darwin_arm64.tar.gz
+grep '  mlink$' checksums.txt | shasum -a 256 -c -
+install -m 0755 mlink "$HOME/.local/bin/mlink"
+mlink
+```
+
+`v0.1.0-rc.2` is a pre-release. The current source tree contains newer, unreleased full-backup and restore hardening; build from source if you need the exact behavior documented below.
+
+### Option 2: build the current source
+
+```bash
+git clone https://github.com/Chenkeliang/mlink.git
+cd mlink
 go build -trimpath -o mlink ./cmd/mlink
 ./mlink
 ```
 
-The wizard starts with **New installation**, **Restore encrypted backup**, or **Connect existing MemoryCore**. It also exposes `b` for a full encrypted backup and `c` for controlled Panel credential access. Every file and service operation is previewed and only the exact confirmed Plan can be applied.
+### npm / npx status
+
+The checksum-verifying `@mlink/cli` bootstrap is implemented in this repository, but **it is not published to npm yet**. Do not rely on `npx @mlink/cli setup` until a package version appears in the npm registry.
+
+The bootstrap remains deliberately thin: it downloads a pinned native release, verifies hashes, installs the binary atomically, and starts the TUI. It does not duplicate MLink's configuration logic in JavaScript.
+
+## First-run workflows
+
+Running `mlink` starts the guided TUI.
+
+### New installation
+
+```text
+Detect dependencies
+→ install official local MemoryCore
+→ enter Memory LLM settings
+→ create permanent Core User / Team / Agent / Asset IDs
+→ select Agents
+→ preview exact Plan
+→ apply
+→ Doctor
+→ optional official Memory Hub
+```
+
+Agent capture is not enabled before permanent Core identity exists.
+
+### Connect an existing MemoryCore
+
+Use the TUI or the explicit CLI control-plane flow. Local endpoints may use HTTP; remote endpoints must use HTTPS.
+
+```bash
+mlink provider status --json
+mlink control-plane provision \
+  --dynamic-agent-limit 500 \
+  --endpoint <https-or-loopback-memorycore-url> \
+  --service-id <memorycore-service-id> \
+  --installation-id <stable-installation-id> \
+  --owner <owner-name> \
+  --secrets-stdin \
+  --dry-run --json
+```
+
+Every mutation must be reproduced with its exact Plan ID and `--yes` before it can apply.
 
 ### Move the complete workspace to another Mac
 
 ```bash
+# Source Mac: preview, then apply the exact Plan.
 mlink backup create \
   --output /absolute/path/workspace.mlink-backup \
   --passphrase-stdin --dry-run --json
@@ -99,100 +198,102 @@ mlink backup create \
   --output /absolute/path/workspace.mlink-backup \
   --passphrase-stdin --apply-plan <exact-plan-id> --yes
 
-# On the destination Mac:
-mlink backup inspect /absolute/path/workspace.mlink-backup --passphrase-stdin --json
-mlink backup restore /absolute/path/workspace.mlink-backup --passphrase-stdin --dry-run --json
-mlink backup restore /absolute/path/workspace.mlink-backup --passphrase-stdin --apply-plan <exact-plan-id> --yes
+# Destination Mac: inspect, preview, then restore.
+mlink backup inspect /absolute/path/workspace.mlink-backup \
+  --passphrase-stdin --json
+
+mlink backup restore /absolute/path/workspace.mlink-backup \
+  --passphrase-stdin --dry-run --json
+
+mlink backup restore /absolute/path/workspace.mlink-backup \
+  --passphrase-stdin --apply-plan <exact-plan-id> --yes
 ```
 
-A full workspace backup contains encrypted MemoryCore and Knowledge snapshots, the exact MemoryCore runtime configuration, MLink config and Journal, Core-generated fixed/dynamic IDs, Keychain material, stable identity bindings, and the selected Agent integrations. Restore preserves those IDs; it does not create replacements or migrate memories into a new identity graph.
+Full restore currently targets a clean local macOS arm64 destination. It refuses existing containers, networks, non-empty volumes, local state files, or colliding Keychain accounts.
 
-This is different from:
-
-- `mlink backup list`: automatic per-change rollback artifacts for the current computer;
-- `mlink identity export/import`: identity-only portability without MemoryCore/Knowledge data.
-
-### Existing installation: enable Cursor
-
-```bash
-mlink adapter enable cursor --dry-run --json
-mlink adapter enable cursor --apply-plan <exact-plan-id> --yes
-```
-
-### Verify the installation
-
-```bash
-mlink status --json
-mlink doctor --json
-mlink version --json
-```
-
-## Operational commands
+## Operations
 
 ```text
 mlink                                      Guided TUI
-mlink install ...                          Preview/apply first installation
-mlink status [--json]                      Installed adapters and active plan
-mlink doctor [agent] [--json]              Read-only dependency/runtime checks
+mlink status [--json]                      Installed state and active adapters
+mlink doctor [agent] [--json]              Read-only health and identity checks
+mlink provider status [--json]             Backend detection
 mlink config diff [--json]                 Owned-resource drift
-mlink backup list [--json]                 Automatic rollback backups
-mlink backup create / inspect / restore    Encrypted full-workspace portability
 mlink credentials status [--json]          Redacted Keychain inventory
-mlink credentials copy panel-* --yes       Controlled Panel login key copy
-mlink identity list [--json]               Stable identity bindings
-mlink identity export / import ...         Encrypted identity portability
+mlink credentials copy panel-owner --yes   Copy the Panel Owner login key
+mlink credentials copy panel-admin --yes   Copy the Panel Admin login key
+mlink backup list [--json]                  Automatic install rollback artifacts
+mlink backup create / inspect / restore    Full encrypted workspace portability
+mlink identity list                        Stable external identity bindings
+mlink maintenance journal ...              Resolve ambiguous capture events
+mlink maintenance upgrade ...              Verified atomic native upgrade
+mlink adapter enable cursor ...            Incremental Cursor integration
 mlink panel status | open                  Official Memory Hub Panel
-mlink maintenance journal ...              Audited unresolved-event handling
-mlink maintenance credentials rotate ...  Hermes grant rotation
-mlink maintenance upgrade ...              Versioned atomic binary upgrade
-mlink adapter enable cursor ...            Incremental local Cursor setup
 ```
 
-Every mutation follows the same shape:
+## Safety model
 
-```text
-detect → preview → exact Plan ID → explicit --yes → backup → apply → verify
-                                                         ↘ rollback on failure
-```
+- Secrets are stored in macOS Keychain and are absent from Plan JSON and normal logs.
+- Agent model/provider/authentication fields are protected semantic invariants.
+- Codex and Cursor Hooks fail open: memory downtime does not block the agent.
+- Backup uses authenticated outer encryption plus independently encrypted sections.
+- Restore binds confirmation to the encrypted bundle SHA-256 and uses a private immutable ciphertext copy during Apply.
+- Journal and Provider SQLite databases pass `quick_check`; restored volumes must match canonical content fingerprints.
+- Restore verifies fixed and dynamic backend IDs before Agent integrations are enabled.
+- Ordinary uninstall removes owned integrations and containers but retains MemoryCore and Knowledge data volumes.
+- Full state deletion is blocked while queued or unresolved Journal events exist.
 
-## What MLink does not touch
+## What MLink does not do
 
-MLink does **not**:
+MLink does not:
 
-- change an agent's model, base URL, vendor, API key, subscription, or login session;
-- proxy prompts or completions to an LLM provider;
-- expose MemoryCore credentials to agent Hooks, Extensions, or MCP configuration;
-- merge Feishu users into one personal profile;
-- replay an ambiguous non-replay-safe memory write automatically;
-- delete MemoryCore data or the Knowledge volume during an ordinary uninstall.
+- proxy agent prompts or completions to an LLM provider;
+- change an agent's model URL, vendor, subscription, API key, or login session;
+- expose the MemoryCore Gateway token to an Agent Hook, Extension, or MCP config;
+- blend multiple Feishu principals into one shared personal profile;
+- auto-replay an ambiguous non-idempotent write;
+- automatically migrate HyMemory, mem0, or another backend's existing memories;
+- provide its own Web admin system—the optional UI is TencentDB's official Memory Hub;
+- delete persistent Core or Knowledge volumes during ordinary uninstall.
 
-## Provider boundary
+## Current stage
 
-TencentDB MemoryCore is the first real connector, not a hard-coded product ceiling. A Provider runs as a separately manifested process and implements the versioned health, recall, capture, and shutdown contract. Future connectors such as mem0 belong behind this boundary and do not require rewriting the Agent adapters.
+| Area | Status |
+|---|---|
+| Core Broker, Journal, identity routing | Implemented |
+| Codex, Cursor, Pi, Hermes integrations | Implemented and locally accepted |
+| TencentDB MemoryCore lifecycle | Implemented with official pinned image |
+| Official Memory Hub / Panel / Knowledge | Implemented |
+| Full encrypted backup and ID-preserving restore | Implemented in current source; destructive local acceptance passed |
+| Public GitHub release | `v0.1.0-rc.2` pre-release |
+| npm / npx distribution | Bootstrap implemented; package not published |
+| Homebrew distribution | Not published |
+| mem0 connector | Not implemented |
+| Linux, Windows, Intel macOS | Not accepted or released |
+| HyMemory migration | Not implemented |
 
-## Safety and recovery
+## Known limitations
 
-- Secrets live in macOS Keychain; plans and logs contain fingerprints only.
-- Full backups use authenticated outer encryption plus independently encrypted sections; ciphertext-only staging is mode `0700`, and the final bundle is mode `0600`.
-- Restore creates only empty formal resources, runs SQLite `quick_check`, verifies canonical full-volume content fingerprints, starts the official digest-pinned Core with secrets outside argv, verifies fixed and dynamic IDs, then installs Agent integrations.
-- A non-secret restore sidecar survives interruption before the restored Journal is available; Journal schema v7 records restore phases and verified bundle fingerprints without paths or raw IDs.
-- `mlink doctor` reports `backup.last_verified`, `restore.state`, and `restore.identity_gate`.
-- The Journal separates delivery state from operator resolution and clears payloads after audited resolution.
-- Cursor and Codex Hooks fail open so memory downtime does not block the agent.
-- The Memory Hub image is digest-pinned and its Knowledge volume is persistent.
-- Binary upgrades validate platform and config-schema compatibility, then replace atomically and restart the Broker with rollback.
-- Semantic install/uninstall preserves unrelated JSON, YAML, MCP servers, Hooks, and protected Hermes model/auth fields.
+- The accepted platform is macOS arm64; other platforms fail restore preflight.
+- The first production Provider is TencentDB MemoryCore only.
+- Full volume backup/restore is for a local Docker/OrbStack deployment, not an arbitrary remote service.
+- A compatible and authorized Memory LLM is required for new L1/L2/L3 extraction.
+- Hermes integration requires a reachable Hermes environment; the default detected OrbStack machine is `hermes-agent-env`.
+- Codex or Cursor may report a pending trust/first-turn state until the host accepts and invokes the new integration.
+- Knowledge volume backup preserves existing Knowledge data, but MLink does not yet ingest or schedule private Git repositories by itself.
+- A full backup contains encrypted credentials. Keep the bundle and passphrase separate.
+- The official Memory Hub provides the current Panel; MLink does not yet ship a separate multi-user Web console.
 
-## Development
+## Development and verification
 
 ```bash
-go test ./...
+go test ./... -count=1
 go test ./... -shuffle=on -count=1
+go test -race ./internal/workspacebackup ./internal/provider/tencentdb ./internal/controlplane ./internal/app ./internal/e2e
 go vet ./...
+
+cd packages/cli
+npm test
 ```
 
-The release baseline is Go 1.27.x. See [AGENTS.md](AGENTS.md) for product, security, and distribution constraints, and [docs/testing](docs/testing) for isolated and real-machine acceptance evidence.
-
-## Project status
-
-The local memory lifecycle for Codex, Cursor, Pi, Hermes, TencentDB MemoryCore, and the official Memory Hub is implemented and tested on macOS arm64. Release packaging, signed artifacts, and the npm bootstrap are prepared separately from the native runtime so they cannot duplicate or bypass MLink's safety gates.
+The current source has passed isolated fresh-install acceptance, full local uninstall/recovery acceptance, fixed/dynamic ID verification, real memory capture/recall, and full-workspace restore. See [docs/testing](docs/testing) for detailed evidence and [AGENTS.md](AGENTS.md) for product and security constraints.

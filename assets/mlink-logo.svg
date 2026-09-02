@@ -1,35 +1,84 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="280" viewBox="0 0 1000 280" shape-rendering="crispEdges" role="img" aria-labelledby="title desc">
   <title id="title">MLink</title>
-  <desc id="desc">Pixel chain mark and MLINK wordmark. One memory plane.</desc>
+  <desc id="desc">MLink — One memory plane. Your models stay yours.</desc>
   <rect width="1000" height="280" fill="#0B1017"/>
-  <path fill="#26384A" d="M0 0h1000v4H0zM0 276h1000v4H0z"/>
+  <rect x="0" y="0" width="1000" height="4" fill="#C37A1B"/>
+  <rect x="0" y="276" width="1000" height="4" fill="#C37A1B"/>
 
-  <g transform="translate(68 72)">
-    <path fill="#0A1119" d="M8 0h120v8h8v120h-8v8H8v-8H0V8h8z"/>
-    <path fill="#2A3B4D" d="M8 0h120v4H8zM0 8h4v120H0zM132 8h4v120h-4zM8 132h120v4H8z"/>
-    <g fill="#FFD60A">
-      <rect x="24" y="28" width="48" height="12"/><rect x="16" y="36" width="12" height="40"/>
-      <rect x="24" y="72" width="40" height="12"/><rect x="60" y="60" width="12" height="24"/>
-      <rect x="16" y="16" width="8" height="8"/><rect x="28" y="16" width="8" height="8"/>
-    </g>
-    <g fill="#58D7FF">
-      <rect x="72" y="52" width="40" height="12"/><rect x="108" y="56" width="12" height="44"/>
-      <rect x="64" y="96" width="48" height="12"/><rect x="64" y="76" width="12" height="32"/>
-      <rect x="100" y="112" width="8" height="8"/><rect x="112" y="112" width="8" height="8"/>
-    </g>
-    <g fill="#EDF4FF">
-      <rect x="52" y="52" width="12" height="12"/><rect x="64" y="64" width="12" height="12"/><rect x="76" y="76" width="12" height="12"/>
-    </g>
+  <!-- Faint terminal grid dots on right -->
+  <g fill="#162232">
+    <rect x="680" y="50" width="4" height="4"/><rect x="730" y="50" width="4" height="4"/><rect x="780" y="50" width="4" height="4"/><rect x="830" y="50" width="4" height="4"/><rect x="880" y="50" width="4" height="4"/><rect x="930" y="50" width="4" height="4"/>
+    <rect x="680" y="95" width="4" height="4"/><rect x="730" y="95" width="4" height="4"/><rect x="780" y="95" width="4" height="4"/><rect x="830" y="95" width="4" height="4"/><rect x="880" y="95" width="4" height="4"/><rect x="930" y="95" width="4" height="4"/>
+    <rect x="680" y="140" width="4" height="4"/><rect x="730" y="140" width="4" height="4"/><rect x="780" y="140" width="4" height="4"/><rect x="830" y="140" width="4" height="4"/><rect x="880" y="140" width="4" height="4"/><rect x="930" y="140" width="4" height="4"/>
+    <rect x="680" y="185" width="4" height="4"/><rect x="730" y="185" width="4" height="4"/><rect x="780" y="185" width="4" height="4"/><rect x="830" y="185" width="4" height="4"/><rect x="880" y="185" width="4" height="4"/><rect x="930" y="185" width="4" height="4"/>
+    <rect x="680" y="230" width="4" height="4"/><rect x="730" y="230" width="4" height="4"/><rect x="780" y="230" width="4" height="4"/><rect x="830" y="230" width="4" height="4"/><rect x="880" y="230" width="4" height="4"/><rect x="930" y="230" width="4" height="4"/>
   </g>
 
-  <g transform="translate(266 74) scale(1.75)" fill="#F3F7FC">
-    <path d="M0 0h8v8H0zM40 0h8v8h-8zM0 10h8v8H0zM10 10h8v8h-8zM30 10h8v8h-8zM40 10h8v8h-8zM0 20h8v8H0zM20 20h8v8h-8zM40 20h8v8h-8zM0 30h8v8H0zM20 30h8v8h-8zM40 30h8v8h-8zM0 40h8v8H0zM40 40h8v8h-8zM0 50h8v8H0zM40 50h8v8h-8zM0 60h8v8H0zM40 60h8v8h-8z"/>
-    <path d="M64 0h8v8h-8zM64 10h8v8h-8zM64 20h8v8h-8zM64 30h8v8h-8zM64 40h8v8h-8zM64 50h8v8h-8zM64 60h8v8h-8zM74 60h8v8h-8zM84 60h8v8h-8zM94 60h8v8h-8z"/>
-    <path d="M118 0h8v8h-8zM128 0h8v8h-8zM138 0h8v8h-8zM128 10h8v8h-8zM128 20h8v8h-8zM128 30h8v8h-8zM128 40h8v8h-8zM128 50h8v8h-8zM118 60h8v8h-8zM128 60h8v8h-8zM138 60h8v8h-8z"/>
-    <path d="M162 0h8v8h-8zM202 0h8v8h-8zM162 10h8v8h-8zM172 10h8v8h-8zM202 10h8v8h-8zM162 20h8v8h-8zM172 20h8v8h-8zM202 20h8v8h-8zM162 30h8v8h-8zM182 30h8v8h-8zM202 30h8v8h-8zM162 40h8v8h-8zM192 40h8v8h-8zM202 40h8v8h-8zM162 50h8v8h-8zM192 50h8v8h-8zM202 50h8v8h-8zM162 60h8v8h-8zM202 60h8v8h-8z"/>
-    <path d="M226 0h8v8h-8zM266 0h8v8h-8zM226 10h8v8h-8zM256 10h8v8h-8zM226 20h8v8h-8zM246 20h8v8h-8zM226 30h8v8h-8zM236 30h8v8h-8zM226 40h8v8h-8zM246 40h8v8h-8zM226 50h8v8h-8zM256 50h8v8h-8zM226 60h8v8h-8zM266 60h8v8h-8z"/>
+  <!-- Monogram Icon Mark (Smooth in container) -->
+  <g transform="translate(68, 62)" shape-rendering="geometricPrecision">
+    <rect x="-10" y="-10" width="156" height="156" rx="20" fill="#111824" stroke="#26354A" stroke-width="2.5"/>
+    <!-- Left M arch in TUI Gold -->
+    <path d="M16 104 L16 40 C16 22, 32 16, 48 30 L68 50" stroke="#FFD022" stroke-width="14" stroke-linecap="round"/>
+    <!-- Right L hook connected in TUI Gold -->
+    <path d="M68 50 L88 30 C104 16, 120 22, 120 40 L120 104 L142 104" stroke="#FFD022" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
-  <g fill="#FFD60A"><rect x="268" y="218" width="10" height="10"/><rect x="288" y="218" width="10" height="10"/><rect x="308" y="218" width="10" height="10"/></g>
-  <text x="336" y="229" fill="#FFD60A" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" letter-spacing="3">ONE MEMORY PLANE · YOUR MODELS STAY YOURS</text>
+  <!-- Pixel Wordmark "MLINK" -->
+  <g transform="translate(266, 68)" fill="#FFD022">
+    <!-- Shadow (dark gold) -->
+    <g fill="#8C5305" transform="translate(3, 3)">
+      <!-- M -->
+      <rect x="0" y="0" width="8" height="64"/><rect x="56" y="0" width="8" height="64"/>
+      <rect x="8" y="8" width="8" height="10"/><rect x="48" y="8" width="8" height="10"/>
+      <rect x="16" y="18" width="8" height="10"/><rect x="40" y="18" width="8" height="10"/>
+      <rect x="24" y="28" width="16" height="12"/>
+      <!-- L -->
+      <rect x="80" y="0" width="8" height="64"/><rect x="88" y="56" width="46" height="8"/>
+      <!-- I -->
+      <rect x="148" y="0" width="46" height="8"/><rect x="167" y="8" width="8" height="48"/><rect x="148" y="56" width="46" height="8"/>
+      <!-- N -->
+      <rect x="210" y="0" width="8" height="64"/><rect x="264" y="0" width="8" height="64"/>
+      <rect x="218" y="12" width="10" height="14"/><rect x="228" y="26" width="10" height="14"/>
+      <rect x="238" y="38" width="10" height="14"/><rect x="248" y="50" width="16" height="14"/>
+      <!-- K -->
+      <rect x="288" y="0" width="8" height="64"/>
+      <rect x="330" y="0" width="10" height="16"/><rect x="318" y="14" width="12" height="16"/>
+      <rect x="306" y="26" width="12" height="14"/><rect x="296" y="32" width="10" height="10"/>
+      <rect x="308" y="38" width="12" height="14"/><rect x="322" y="48" width="18" height="16"/>
+    </g>
+
+    <!-- Front (TUI Gold #FFD022) -->
+    <!-- M -->
+    <rect x="0" y="0" width="8" height="64"/><rect x="56" y="0" width="8" height="64"/>
+    <rect x="8" y="8" width="8" height="10"/><rect x="48" y="8" width="8" height="10"/>
+    <rect x="16" y="18" width="8" height="10"/><rect x="40" y="18" width="8" height="10"/>
+    <rect x="24" y="28" width="16" height="12"/>
+    <!-- L -->
+    <rect x="80" y="0" width="8" height="64"/><rect x="88" y="56" width="46" height="8"/>
+    <!-- I -->
+    <rect x="148" y="0" width="46" height="8"/><rect x="167" y="8" width="8" height="48"/><rect x="148" y="56" width="46" height="8"/>
+    <!-- N -->
+    <rect x="210" y="0" width="8" height="64"/><rect x="264" y="0" width="8" height="64"/>
+    <rect x="218" y="12" width="10" height="14"/><rect x="228" y="26" width="10" height="14"/>
+    <rect x="238" y="38" width="10" height="14"/><rect x="248" y="50" width="16" height="14"/>
+    <!-- K -->
+    <rect x="288" y="0" width="8" height="64"/>
+    <rect x="330" y="0" width="10" height="16"/><rect x="318" y="14" width="12" height="16"/>
+    <rect x="306" y="26" width="12" height="14"/><rect x="296" y="32" width="10" height="10"/>
+    <rect x="308" y="38" width="12" height="14"/><rect x="322" y="48" width="18" height="16"/>
+  </g>
+
+  <!-- Tagline & Pixel bullets -->
+  <g fill="#FFD022">
+    <rect x="268" y="172" width="8" height="8"/>
+    <rect x="280" y="172" width="8" height="8"/>
+    <rect x="292" y="172" width="8" height="8"/>
+  </g>
+  <text x="312" y="180" fill="#FFD022" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700" letter-spacing="0.16em">ONE MEMORY PLANE · YOUR MODELS STAY YOURS</text>
+
+  <!-- Cyan status chip -->
+  <g transform="translate(268, 206)" fill="#58D7FF">
+    <rect x="0" y="0" width="6" height="6"/>
+    <text x="14" y="8" fill="#58D7FF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="0.12em">LOCAL-FIRST · FAIL-OPEN · ZERO MODEL PROXY</text>
+  </g>
 </svg>

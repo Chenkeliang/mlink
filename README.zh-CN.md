@@ -1,47 +1,73 @@
 <div align="center">
 
-<img src="assets/mlink-logo.svg" alt="MLink — 一个记忆平面，模型仍归你所有。" width="900">
+<img src="assets/mlink-logo.svg" alt="MLink — 一个记忆平面，模型仍归你所有" width="900">
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-让 Codex、Cursor、Pi 与 Hermes Agent 共享同一套本地记忆服务，同时保留各自原有的模型供应商、订阅账号、API Key 与登录方式。
+**面向 Codex、Cursor、Pi 与 Hermes Agent 的本地优先记忆接入与控制平面。**
 
-[![Go 1.27](https://img.shields.io/badge/Go-1.27-65D1FF?style=flat-square)](https://go.dev/)
-[![仅记忆](https://img.shields.io/badge/scope-memory_only-FFD700?style=flat-square)](#mlink-不会修改什么)
-[![本地优先](https://img.shields.io/badge/runtime-local_first-35E0A1?style=flat-square)](#架构)
+MLink 让不同 Agent 连接同一套记忆，同时保留各自原有的模型供应商、订阅、API Key 与登录方式。
+
+[![Go 1.27](https://img.shields.io/badge/Go-1.27-58D7FF?style=flat-square)](https://go.dev/)
+[![平台](https://img.shields.io/badge/platform-macOS_arm64-FFD022?style=flat-square)](#运行要求)
+[![最新版本](https://img.shields.io/badge/release-v0.1.0--rc.2-C37A1B?style=flat-square)](https://github.com/Chenkeliang/mlink/releases/tag/v0.1.0-rc.2)
+[![边界](https://img.shields.io/badge/scope-memory_only-35E0A1?style=flat-square)](#mlink-不会做什么)
 
 </div>
 
-## 为什么需要 MLink
+## MLink 是什么
 
-每个 Agent 都有自己的生命周期、配置格式和记忆入口。MLink 在不破坏这些边界的前提下，为它们提供统一的记忆平面：
+MLink 位于 Agent 与 Memory Provider 之间。
 
-- **Codex**：通过生命周期 Hooks 召回和写入记忆。
-- **Cursor Desktop / CLI**：通过 fail-open Hooks 写入，并通过 stdio MCP 做面向当前问题的精确召回。
-- **Pi**：通过原生 Extension 接入。
-- **Hermes Agent**：通过 MemoryProvider 桥接，并支持飞书私聊、群聊和话题路由。
-- **TencentDB MemoryCore**：首个生产级 Memory Provider，支持官方 Memory Hub 管理面板。
+它补齐的是记忆引擎本身通常不负责的接入与运维能力：
 
-MLink 不是 LLM Proxy。Agent 仍然使用原有模型账号和供应商，MLink 只负责记忆。
+- 面向 Agent 的原生 Hook、Extension、MCP 与 MemoryProvider；
+- 第一次写记忆前先创建并固定后端正式身份；
+- 本机用户、飞书私聊、群聊与话题的确定性路由；
+- 按用户/群隔离，而不是把多人画像混成一份；
+- 写入防重复、重试、歧义写入审计与人工恢复；
+- TUI 引导安装、Doctor、语义卸载、凭据清单与整机迁移。
 
-## MLink 真正解决什么
+MLink **不重新实现记忆引擎**。当前由 TencentDB MemoryCore 提供存储、抽取、召回、元数据、ACL 与 L0–L3 记忆能力；MLink 负责让这些能力安全、一致地接入不同 Agent。
 
-TencentDB Agent Memory 本身已经提供多用户和团队级记忆基础：User 与 User Key、Team 与成员关系、Agent 与 Task、资产所有权与 ACL，以及 L0–L3 记忆引擎。MLink 不替代、也不重复实现这些能力。
+## 它解决什么问题
 
-MLink 的作用，是把这些基础能力变成适用于不同 Agent 和聊天渠道的一致接入层：
+### 同一个记忆后端，四套不同的 Agent 接口
 
-| 边界 | TencentDB Agent Memory 提供 | MLink 提供 |
+Codex、Cursor、Pi 与 Hermes 的扩展机制完全不同。MLink 为每个 Agent 使用其原生接入方式，同时把身份与路由策略集中在一个 Broker 中。
+
+### 稳定身份与多用户隔离
+
+显示名和聊天参与者不是可靠的记忆主键。MLink 使用 Core 生成的正式 ID 作为权威身份，将本机 Owner 绑定到稳定外部身份，并把其他私聊用户和群聊映射为隔离的动态 Agent。
+
+### 上下文之外的写入可靠性
+
+非幂等记忆写入不能无脑重试。MLink 使用 SQLite Journal 记录写入状态，区分可安全重试、永久失败和结果不明确的写入；无法确认的写入必须经过审计处置。
+
+### 换机恢复但不更换 ID
+
+全量加密包包含 MemoryCore、Knowledge、MLink 状态、Keychain 材料、身份映射和 Agent 选择。恢复时会校验原 User、Team、Agent、Asset、动态映射、SQLite 数据库和整卷内容，不会静默创建一套替代 ID。
+
+## 已支持的接入
+
+### Agent
+
+| Agent | 接入方式 | 召回 | 写入 | 当前状态 |
+|---|---|---:|---:|---|
+| Codex | 生命周期 Hooks | 支持 | 支持 | 已实现并通过本机验收 |
+| Cursor Desktop / CLI | fail-open Hooks + stdio MCP | 支持 | 支持 | 已实现并通过本机验收 |
+| Pi | 原生 Extension | 支持 | 支持 | 已实现并通过本机验收 |
+| Hermes Agent | MemoryProvider 插件 + 私有 Broker Bridge | 支持 | 支持 | 已实现，支持飞书私聊/群聊/话题路由 |
+
+### Memory Provider
+
+| Provider | 状态 | 说明 |
 |---|---|---|
-| 记忆引擎 | L0–L3 提取、存储与检索 | 通过版本化 Provider 使用引擎，不重复实现 |
-| 后端身份 | User、Team、Agent、Task、Asset、User Key 与 ACL API | 第一次写入前创建并固定正式 Core ID；每次启动都校验一致性 |
-| Agent 接入 | HTTP API、SDK，以及可选的 LLM Proxy | Codex Hooks、Cursor Hooks/MCP、Pi Extension、Hermes MemoryProvider，并保持原有模型链路不变 |
-| 外部身份 | 要求调用方提供明确的 User / Team / Agent | 将飞书稳定身份、群聊和话题映射为确定的 MLink 路由 |
-| Session 路由 | 接收调用方提供的身份与 Session 维度 | 自动生成稳定的私聊、群聊、话题和本机 Agent Session |
-| 隔离策略 | 按 Core 身份维度存储和检索 | Owner 使用 L1/L2/L3；其他私聊用户和群聊只访问各自隔离的 L1 路由 |
-| 写入可靠性 | Memory Capture / Recall API | SQLite Journal 防重复、重试、歧义写入审计与人工处置 |
-| 安装运维 | MemoryCore 与 Memory Hub Runtime | 检测、引导安装、精确 Plan、备份、升级、卸载与 Doctor |
+| TencentDB MemoryCore | **已实现** | 当前首个生产连接器；Core 与 Memory Hub 官方镜像均固定 digest |
+| mem0 | 未实现 | 已有可插拔 Provider 边界，但目前没有可用连接器 |
+| 其他后端 | 未实现 | 需要实现版本化 Provider Connector 与生命周期驱动 |
 
-在当前 Hermes 集成中，Owner 是正式的 MemoryCore 普通 User；其他飞书私聊主体和群聊分别映射为 Owner Team 下的独立动态 Agent。MLink 提供的是“多外部主体隔离接入”，不会声称每个飞书成员都已注册为独立的 MemoryCore User。
+“架构可插拔”不等于“已经支持所有记忆产品”。
 
 ## 架构
 
@@ -52,144 +78,102 @@ flowchart LR
     P[Pi Extension] --> B
     H[Hermes MemoryProvider] --> B
 
-    B[MLink Broker<br/>Unix Socket + Hermes 私有桥接]
-    B --> J[(SQLite Journal<br/>防重复 · 审计 · 重试)]
+    B[MLink Broker<br/>Unix Socket + Hermes 私有 Bridge]
+    B --> J[(SQLite Journal<br/>防重复 · 重试 · 审计)]
     B --> R[Provider Host]
     R --> M[TencentDB MemoryCore]
-    M --> L1[L1 · 用户记忆]
-    M --> L2[L2 · Agent 场景]
-    M --> L3[L3 · Agent 画像]
+    M --> L0[L0 · 对话]
+    M --> L1[L1 · 原子记忆]
+    M --> L2[L2 · 场景]
+    M --> L3[L3 · 画像]
     M --> HUB[官方 Memory Hub<br/>Panel + Knowledge]
 ```
 
-Broker 是唯一的策略边界。Agent 侧的 Hook、Extension 和 MCP 都拿不到 MemoryCore Token；不同记忆产品的差异被隔离在版本化 Provider 接口之后。
+Broker 是运行时策略边界。Agent 侧 Hook、Extension 与 MCP 不会拿到 MemoryCore Gateway Token。
 
-## 记忆与多用户隔离
+## 身份与记忆隔离
 
-| 场景 | 用户身份 | Session 身份 | 记忆层级 |
+| 场景 | 后端身份 | Session 边界 | 记忆层级 |
 |---|---|---|---|
-| 本机 Owner：Codex / Cursor / Pi | MemoryCore 生成的 Owner | Agent 会话 | L1 + L2 + L3 |
-| Owner 的 Hermes 飞书私聊 | 稳定飞书绑定 → Owner | 飞书会话 | L1 + L2 + L3 |
-| 其他 Hermes 私聊用户 | 稳定用户指纹 → 动态 Agent | 飞书会话 | L1 |
-| 飞书群聊 | 稳定群指纹 → 动态 Agent | 群 ID 或话题 ID | L1 |
+| 本机 Owner：Codex / Cursor / Pi | Core 生成的 Owner | Agent 会话 | L1 + L2 + L3 |
+| Owner 的 Hermes 私聊 | 稳定飞书绑定 → Owner | 私聊会话 | L1 + L2 + L3 |
+| 其他 Hermes 私聊用户 | 稳定主体 → 动态 Agent | 私聊会话 | 隔离 L1 |
+| 飞书群聊 | 稳定群主体 → 动态 Agent | 群 ID 或话题 ID | 隔离 L1 |
 
-显示名称变化不会导致身份变化。飞书原始 ID 只存在于 Keychain 保护的绑定中，或被转换为 HMAC 指纹；它们不会成为公开的 MemoryCore 标签。
+飞书原始 ID 只保存在 Keychain 保护的 Binding 中，或被转换为 HMAC 指纹。修改显示名称不会创建新的记忆身份。
 
-### 正式 ID 在第一次写入前固定
+## 运行要求
 
-MLink 不会先用自定义 `agent_id` 写记忆，再等 Panel 安装后迁移：
+当前已经验收的运行目标有意保持收敛：
 
-1. 检测或安装 MemoryCore；
-2. 通过 MemoryCore 官方元数据 API 创建 Owner User、Team、Agent 与 Chat Memory Asset；
-3. 将 MemoryCore 返回的正式 ID 写入本地 Journal；
-4. 生成第一份 Schema v3 配置；
-5. 最后才启用 Agent Hook、MCP、Extension 和 Broker。
+- Apple Silicon Mac（`darwin/arm64`）；
+- 本地 Docker 兼容运行时；开发和验收使用 OrbStack；
+- 固定 digest 的官方 TencentDB MemoryCore 与 Memory Hub 镜像；
+- MemoryCore 抽取所需的 OpenAI-compatible LLM 地址、可访问模型与 API Key；
+- 从源码构建时使用 Go 1.27.x；
+- 需要接入的 Agent 应已安装。
 
-如果中途只完成了 MemoryCore 安装，MLink 会停留在“等待正式身份”状态，不会允许 Agent 写入。以后安装 Memory Hub 时只复用这些已有 ID，不会创建第二套身份。
+Memory LLM 只供 MemoryCore 抽取 L1/L2/L3 使用，不会替换 Codex、Cursor、Pi 或 Hermes 自己使用的模型。
 
-## 快速开始
+## 安装
 
-### 方式一：下载预发布版本
+### 方式一：公开预发布版本
 
-当前版本：[v0.1.0-rc.2](https://github.com/Chenkeliang/mlink/releases/tag/v0.1.0-rc.2)
-
-下载对应平台的二进制后运行：
+目前最新公开版本是面向 macOS arm64 的 [`v0.1.0-rc.2`](https://github.com/Chenkeliang/mlink/releases/tag/v0.1.0-rc.2)。
 
 ```bash
-chmod +x mlink
-./mlink
+curl -LO https://github.com/Chenkeliang/mlink/releases/download/v0.1.0-rc.2/mlink_0.1.0-rc.2_darwin_arm64.tar.gz
+curl -LO https://github.com/Chenkeliang/mlink/releases/download/v0.1.0-rc.2/checksums.txt
+grep 'tar.gz$' checksums.txt | shasum -a 256 -c -
+tar -xzf mlink_0.1.0-rc.2_darwin_arm64.tar.gz
+grep '  mlink$' checksums.txt | shasum -a 256 -c -
+install -m 0755 mlink "$HOME/.local/bin/mlink"
+mlink
 ```
 
-### 方式二：使用 Go 1.27 构建
+`v0.1.0-rc.2` 仍是预发布版本。当前源码已经包含更新但尚未发布的全量备份/恢复加固；若需要本文描述的最新行为，请从源码构建。
+
+### 方式二：构建当前源码
 
 ```bash
+git clone https://github.com/Chenkeliang/mlink.git
+cd mlink
 go build -trimpath -o mlink ./cmd/mlink
 ./mlink
 ```
 
-首次运行会进入引导式 TUI。向导会：
+### npm / npx 当前状态
 
-1. 检测 Codex、Cursor、Pi 和 Hermes；
-2. 选择 Memory Provider；
-3. 检测 MemoryCore 是否已存在；
-4. 在“安装官方本地 MemoryCore”和“连接已有 MemoryCore”之间选择；
-5. 选择本机 Owner 对应的飞书稳定身份，也可跳过飞书并禁用 Hermes；
-6. 设置动态 Agent 上限；
-7. 先创建正式 Core 身份，再选择需要安装的 Agent；
-8. 展示完整变更 Plan，确认后才写入；
-9. 运行 Doctor，并可选安装官方 Memory Hub。
+仓库中已经实现带双重 SHA-256 校验的 `@mlink/cli` 薄引导器，但它 **尚未发布到 npm**。在 npm Registry 出现真实版本前，不要依赖 `npx @mlink/cli setup`。
 
-欢迎页直接提供“新安装”“从加密备份恢复”“连接已有 MemoryCore”三条主路径；按 `b` 可创建全量加密备份，按 `c` 可查看脱敏凭据状态并受控复制 Panel 登录 Key。
+这个 npm 包只负责下载固定版本的原生二进制、校验、原子安装并启动 TUI，不会用 JavaScript 复制 MLink 的配置和运维逻辑。
 
-所有文件与服务变更都必须经过同一流程：
+## 首次运行流程
+
+运行 `mlink` 会进入引导式 TUI。
+
+### 全新安装
 
 ```text
-检测 → 预览 → 精确 Plan ID → 明确确认 → 备份 → 应用 → 验证
-                                              ↘ 失败时回滚
+检测依赖
+→ 安装官方本地 MemoryCore
+→ 输入 Memory LLM 配置
+→ 创建永久 Core User / Team / Agent / Asset ID
+→ 选择 Agent
+→ 预览精确 Plan
+→ 应用
+→ Doctor
+→ 可选安装官方 Memory Hub
 ```
 
-### 验证安装
-
-```bash
-mlink status --json
-mlink doctor --json
-mlink version --json
-```
-
-### 已安装 MLink：补充启用 Cursor
-
-```bash
-mlink adapter enable cursor --dry-run --json
-mlink adapter enable cursor --apply-plan <精确-plan-id> --yes
-```
-
-### 把整套记忆迁移到另一台 Mac
-
-```bash
-mlink backup create \
-  --output /绝对路径/workspace.mlink-backup \
-  --passphrase-stdin --dry-run --json
-
-mlink backup create \
-  --output /绝对路径/workspace.mlink-backup \
-  --passphrase-stdin --apply-plan <精确-plan-id> --yes
-
-# 在新电脑上：
-mlink backup inspect /绝对路径/workspace.mlink-backup --passphrase-stdin --json
-mlink backup restore /绝对路径/workspace.mlink-backup --passphrase-stdin --dry-run --json
-mlink backup restore /绝对路径/workspace.mlink-backup --passphrase-stdin --apply-plan <精确-plan-id> --yes
-```
-
-全量工作区备份会加密保存 MemoryCore 与 Knowledge 卷、MemoryCore 原始运行配置、MLink 配置与 Journal、Core 生成的固定/动态 ID、Keychain 材料、稳定身份绑定，以及已选择的 Agent 接入。恢复时保留原 ID，不会创建替代 ID，也不会把记忆“迁移”到另一套身份图。
-
-它与下面两种备份不同：
-
-- `mlink backup list`：只用于当前电脑安装变更的自动回滚；
-- `mlink identity export/import`：只迁移身份，不包含 MemoryCore/Knowledge 数据。
-
-## 后端接入方式
-
-推荐通过 TUI 完成首次接入，避免在 Shell 历史中暴露凭据。
-
-CLI 同样支持两种路径：
-
-### 安装官方本地 MemoryCore
-
-```text
-mlink provider status --json
-mlink provider install tencentdb \
-  --endpoint http://127.0.0.1:8420 \
-  --llm-base-url <memory-llm-url> \
-  --llm-model <memory-llm-model> \
-  --secrets-stdin \
-  --dry-run --json
-```
-
-`--secrets-stdin` 读取受保护 JSON，其中包含 Gateway Token 和 Memory LLM API Key。密钥不会进入 argv、Plan、日志、普通配置或未加密文件；只有明确创建的全量加密包会包含可恢复的密钥段。
+正式 Core 身份创建完成前，Agent Capture 不会启用。
 
 ### 连接已有 MemoryCore
 
-```text
+可以使用 TUI，也可以使用显式 CLI。回环地址允许 HTTP，远程地址必须使用 HTTPS。
+
+```bash
+mlink provider status --json
 mlink control-plane provision \
   --dynamic-agent-limit 500 \
   --endpoint <https-or-loopback-memorycore-url> \
@@ -200,77 +184,116 @@ mlink control-plane provision \
   --dry-run --json
 ```
 
-远程 MemoryCore 必须使用 HTTPS，本机回环地址可以使用 HTTP。应用时仍需重新生成同一个 Plan，并同时提供 `--apply-plan <id> --yes`。
+所有写操作都必须使用重新生成且完全一致的 Plan ID，并显式提供 `--yes`。
 
-## 常用命令
+### 把完整工作区迁移到另一台 Mac
+
+```bash
+# 源 Mac：先预览，再应用精确 Plan。
+mlink backup create \
+  --output /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --dry-run --json
+
+mlink backup create \
+  --output /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --apply-plan <精确-plan-id> --yes
+
+# 目标 Mac：先检查，再预览和恢复。
+mlink backup inspect /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --json
+
+mlink backup restore /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --dry-run --json
+
+mlink backup restore /绝对路径/workspace.mlink-backup \
+  --passphrase-stdin --apply-plan <精确-plan-id> --yes
+```
+
+当前全量恢复面向干净的本地 macOS arm64 目标机。只要发现已有容器、网络、非空卷、本地状态文件或 Keychain 凭据冲突，就会拒绝覆盖。
+
+## 常用运维命令
 
 ```text
 mlink                                      引导式 TUI
-mlink provider status ...                  检测 Memory Provider 后端
-mlink provider install tencentdb ...       安装或启动官方 MemoryCore
-mlink control-plane provision ...          创建并固定正式 Core 身份
-mlink install ...                          预览/应用 Agent 首次安装
-mlink status [--json]                      查看已安装 Agent 与当前连接
-mlink doctor [agent] [--json]              只读检查依赖、身份和运行状态
-mlink config diff [--json]                 检查 MLink 所有资源是否漂移
-mlink backup list [--json]                 查看自动回滚备份
-mlink backup create / inspect / restore    全量加密备份、检查与换机恢复
+mlink status [--json]                      当前安装状态与 Agent
+mlink doctor [agent] [--json]              只读健康与身份检查
+mlink provider status [--json]             检测 Memory Provider
+mlink config diff [--json]                 检查所有权资源漂移
 mlink credentials status [--json]          查看脱敏 Keychain 凭据清单
-mlink credentials copy panel-* --yes       受控复制 Panel 登录 Key
-mlink identity list [--json]               查看稳定身份绑定
-mlink identity export / import ...         加密导出与迁移身份
-mlink panel status | open                  管理官方 Memory Hub
-mlink maintenance journal ...              审计并处理未决事件
-mlink maintenance credentials rotate ...  轮换 Hermes Grant
-mlink maintenance upgrade ...              原子升级本机二进制
+mlink credentials copy panel-owner --yes   复制 Panel Owner 登录 Key
+mlink credentials copy panel-admin --yes   复制 Panel Admin 登录 Key
+mlink backup list [--json]                 查看安装变更自动回滚备份
+mlink backup create / inspect / restore    全量加密备份与换机恢复
+mlink identity list                        查看稳定外部身份 Binding
+mlink maintenance journal ...              处置歧义 Capture 事件
+mlink maintenance upgrade ...              校验后原子升级原生二进制
 mlink adapter enable cursor ...            增量启用 Cursor
+mlink panel status | open                  官方 Memory Hub Panel
 ```
 
-## MLink 不会修改什么
+## 安全机制
+
+- 密钥保存在 macOS Keychain，不进入 Plan JSON 与普通日志。
+- Agent 的模型、Provider 与认证字段是受保护的语义不变量。
+- Codex 与 Cursor Hook 采用 fail-open，记忆故障不会阻塞 Agent。
+- 全量包采用“外层认证加密 + 分段独立加密”。
+- 恢复确认绑定加密包 SHA-256；Apply 全程只使用私有不可变密文副本。
+- Journal 与 Provider SQLite 必须通过 `quick_check`，恢复卷必须匹配规范化内容指纹。
+- 固定 ID 与动态 Agent/Asset ID 验证完成后才启用 Agent 接入。
+- 普通卸载删除所有权明确的接入与容器，但保留 Core 和 Knowledge 数据卷。
+- Journal 中仍有排队或未决事件时，禁止完整删除状态。
+
+## MLink 不会做什么
 
 MLink 不会：
 
-- 修改 Agent 的模型、Base URL、模型厂商、API Key、订阅或登录状态；
-- 代理 Agent 与 LLM 之间的 Prompt 或 Completion；
-- 把 MemoryCore 凭据写入 Agent Hook、Extension 或 MCP 配置；
-- 把多个飞书用户合并成一个个人画像；
-- 自动重放结果不明确且不具备安全重试条件的记忆写入；
-- 在普通卸载时删除 MemoryCore 记忆数据卷或 Knowledge 数据卷。
+- 代理 Agent 发给 LLM 的 Prompt 或 Completion；
+- 修改 Agent 的模型地址、厂商、订阅、API Key 或登录状态；
+- 把 MemoryCore Gateway Token 写进 Hook、Extension 或 MCP 配置；
+- 把多个飞书主体合并成一个个人画像；
+- 自动重放结果不明确的非幂等写入；
+- 自动迁移 HyMemory、mem0 或其他后端已有记忆；
+- 自建另一套 Web 管理后台——当前可选 UI 是腾讯官方 Memory Hub；
+- 在普通卸载时删除持久化 Core 或 Knowledge 数据卷。
 
-## 可插拔 Provider 边界
+## 当前阶段
 
-TencentDB MemoryCore 是首个真实 Provider，但不是硬编码的能力上限。Provider 以独立清单进程运行，实现版本化的 Health、Recall、Capture 与 Shutdown 协议。
+| 能力 | 状态 |
+|---|---|
+| Broker、Journal、身份与路由 | 已实现 |
+| Codex、Cursor、Pi、Hermes 接入 | 已实现并通过本机验收 |
+| TencentDB MemoryCore 生命周期 | 已实现，使用官方固定镜像 |
+| 官方 Memory Hub / Panel / Knowledge | 已实现 |
+| 全量加密备份与保 ID 恢复 | 当前源码已实现，真实卸载/恢复验收通过 |
+| GitHub 公共版本 | `v0.1.0-rc.2` 预发布 |
+| npm / npx 分发 | Bootstrap 已实现，包未发布 |
+| Homebrew 分发 | 未发布 |
+| mem0 Connector | 未实现 |
+| Linux、Windows、Intel Mac | 未验收、未发布 |
+| HyMemory 迁移 | 未实现 |
 
-未来接入 mem0 等记忆产品时，只需实现 Provider Connector 和后端生命周期，不需要重写 Codex、Cursor、Pi、Hermes 或 Broker。
+## 已知限制
 
-## 安全与恢复
-
-- 密钥保存在 macOS Keychain，Plan 和日志只包含指纹或存在性标记。
-- 全量备份采用“外层认证加密 + 分段独立加密”；暂存目录只出现密文且权限为 `0700`，最终包权限为 `0600`。
-- 恢复只创建空的正式资源，先执行 SQLite `quick_check` 并核对规范化整卷内容指纹，再使用官方 digest 固定镜像启动 Core；密钥不进入 argv，固定 ID 与动态 Agent/Asset ID 验证一致后才安装 Agent 接入。
-- 主 Journal 尚未恢复时，由不含路径、密钥和原始 ID 的 sidecar 记录中断阶段；Journal schema v7 保存恢复阶段与已验证包指纹。
-- `mlink doctor` 会显示 `backup.last_verified`、`restore.state` 与 `restore.identity_gate`。
-- SQLite Journal 负责防重复、投递状态、审计与安全重试。
-- Codex 和 Cursor Hooks 采用 fail-open；记忆不可用时不会阻塞 Agent。
-- 官方 MemoryCore 与 Memory Hub 镜像固定到明确 digest。
-- Doctor 会逐项核对配置中的 User、Team、Agent、Asset 是否与 Journal 中 MemoryCore 返回的正式 ID 一致。
-- 普通卸载只删除所有权验证通过的容器与配置，并保留记忆数据卷。
-- 二进制升级会校验平台与配置 Schema，再原子替换并支持回滚。
-- JSON、YAML、MCP Server、Hook 和 Hermes 模型/认证配置均采用语义合并，只修改 MLink 所有字段。
+- 当前正式验收平台只有 macOS arm64，其他平台会在恢复预检阶段拒绝。
+- 当前唯一生产级 Provider 是 TencentDB MemoryCore。
+- 全量卷备份/恢复面向本地 Docker/OrbStack，不支持对任意远程服务做卷快照。
+- 新的 L1/L2/L3 抽取依赖 Memory LLM 的 Key 确实有权调用配置模型。
+- Hermes 接入要求 Hermes 环境可达，默认检测的 OrbStack 机器名是 `hermes-agent-env`。
+- Codex 或 Cursor 可能在宿主首次信任/首次调用前显示 pending 状态。
+- Knowledge 卷会完整备份，但 MLink 尚不会自动导入或定时同步私有 Git 仓库。
+- 全量包包含加密后的凭据，请把包与口令分开保存。
+- 当前 Panel 来自官方 Memory Hub，MLink 尚未提供独立的多用户 Web 控制台。
 
 ## 开发与验证
 
 ```bash
-go test ./...
+go test ./... -count=1
 go test ./... -shuffle=on -count=1
-go test -race ./internal/provider/tencentdb ./internal/controlplane ./internal/app ./internal/e2e
+go test -race ./internal/workspacebackup ./internal/provider/tencentdb ./internal/controlplane ./internal/app ./internal/e2e
 go vet ./...
+
+cd packages/cli
+npm test
 ```
 
-发布基线为 Go 1.27.x。产品、安全与分发约束见 [AGENTS.md](AGENTS.md)，隔离测试和真实机器验收记录见 [docs/testing](docs/testing)。
-
-## 当前状态
-
-macOS arm64 上的 Codex、Cursor、Pi、Hermes、TencentDB MemoryCore 与官方 Memory Hub 本地记忆生命周期已经完成实现与验证。
-
-当前预发布版本为 `v0.1.0-rc.2`。GitHub Release、校验和与构建溯源已发布；npm/npx Bootstrap 尚未发布，需完成 npm 账号登录并确认可用 scope。
+当前源码已经通过隔离全新安装、真实整机卸载/恢复、固定与动态 ID 校验、真实记忆写入/召回以及完整工作区恢复。详细证据见 [docs/testing](docs/testing)，产品与安全约束见 [AGENTS.md](AGENTS.md)。
