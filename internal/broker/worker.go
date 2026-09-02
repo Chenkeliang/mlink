@@ -11,12 +11,15 @@ import (
 )
 
 type Worker struct {
-	Journal  Journal
-	Provider Provider
-	Clock    func() time.Time
+	Journal       Journal
+	Provider      Provider
+	Clock         func() time.Time
+	lastReconcile time.Time
 }
 
-func (w Worker) DrainOne(ctx context.Context) error {
+const fragmentReconcileInterval = 30 * time.Second
+
+func (w *Worker) DrainOne(ctx context.Context) error {
 	if w.Journal == nil || w.Provider == nil {
 		return errors.New("worker Journal and Provider are required")
 	}
@@ -25,8 +28,22 @@ func (w Worker) DrainOne(ctx context.Context) error {
 		now = w.Clock().UTC()
 	}
 	events, err := w.Journal.ClaimReady(ctx, now, 1)
-	if err != nil || len(events) == 0 {
+	if err != nil {
 		return err
+	}
+	if len(events) == 0 {
+		if !w.lastReconcile.IsZero() && now.Before(w.lastReconcile.Add(fragmentReconcileInterval)) {
+			return nil
+		}
+		w.lastReconcile = now
+		reconciled, err := w.Journal.ReconcileCompleteFragments(ctx, 1)
+		if err != nil || reconciled == 0 {
+			return err
+		}
+		events, err = w.Journal.ClaimReady(ctx, now, 1)
+		if err != nil || len(events) == 0 {
+			return err
+		}
 	}
 	event := events[0]
 	receipt, captureErr := w.Provider.CaptureTurn(ctx, event.Route, host.CallMeta{IdempotencyKey: event.IdempotencyKey}, event.Turn)

@@ -207,6 +207,128 @@ func (s *Store) fragmentPair(ctx context.Context, fragment Fragment) (Envelope, 
 	}, true, nil
 }
 
+func (s *Store) ReconcileCompleteFragments(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	reconciled := 0
+	var cursor completeFragmentCandidate
+	for reconciled < limit {
+		fragments, err := s.completeFragmentPage(ctx, cursor, 32)
+		if err != nil {
+			return reconciled, err
+		}
+		if len(fragments) == 0 {
+			break
+		}
+		cursor = fragments[len(fragments)-1]
+		for _, candidate := range fragments {
+			pair, complete, err := s.fragmentPair(ctx, candidate.Fragment)
+			if err != nil {
+				if errors.Is(err, ErrTurnConflict) {
+					continue
+				}
+				return reconciled, err
+			}
+			if !complete {
+				continue
+			}
+			if _, _, err := s.EnqueueTurn(ctx, pair); err != nil {
+				if errors.Is(err, ErrTurnConflict) {
+					continue
+				}
+				return reconciled, err
+			}
+			fragment := candidate.Fragment
+			if _, err := s.db.ExecContext(ctx, `
+				DELETE FROM turn_fragments
+				WHERE adapter_id = ? AND connection_id = ? AND tenant_id = ? AND agent_id = ?
+				  AND user_id = ? AND session_id = ? AND turn_id = ?`,
+				fragment.AdapterID,
+				fragment.Route.ConnectionID,
+				fragment.Identity.TenantID,
+				fragment.Identity.AgentID,
+				fragment.Identity.UserID,
+				fragment.Identity.SessionID,
+				fragment.Identity.TurnID,
+			); err != nil {
+				return reconciled, fmt.Errorf("clear reconciled turn fragments: %w", err)
+			}
+			reconciled++
+			if reconciled == limit {
+				break
+			}
+		}
+	}
+	return reconciled, nil
+}
+
+type completeFragmentCandidate struct {
+	Fragment
+	FirstOccurredAt string
+}
+
+func (s *Store) completeFragmentPage(ctx context.Context, cursor completeFragmentCandidate, limit int) ([]completeFragmentCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+		       provider_id, provider_version, config_revision, actor_digest, min(occurred_at)
+		FROM turn_fragments
+		GROUP BY adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+		         provider_id, provider_version, config_revision, actor_digest
+		HAVING sum(CASE WHEN role = 'user' THEN 1 ELSE 0 END) > 0
+		   AND sum(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) > 0
+		   AND (min(occurred_at), adapter_id, connection_id, tenant_id, agent_id, user_id,
+		        session_id, turn_id, provider_id, provider_version, config_revision, actor_digest)
+		       > (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ORDER BY min(occurred_at), adapter_id, connection_id, tenant_id, agent_id, user_id,
+		         session_id, turn_id, provider_id, provider_version, config_revision, actor_digest
+		LIMIT ?`,
+		cursor.FirstOccurredAt,
+		cursor.AdapterID,
+		cursor.Route.ConnectionID,
+		cursor.Identity.TenantID,
+		cursor.Identity.AgentID,
+		cursor.Identity.UserID,
+		cursor.Identity.SessionID,
+		cursor.Identity.TurnID,
+		cursor.Route.ProviderID,
+		cursor.Route.ProviderVersion,
+		cursor.Route.ConfigRevision,
+		cursor.ActorDigest,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list complete turn fragments: %w", err)
+	}
+	defer rows.Close()
+	fragments := make([]completeFragmentCandidate, 0, limit)
+	for rows.Next() {
+		var candidate completeFragmentCandidate
+		if err := rows.Scan(
+			&candidate.AdapterID,
+			&candidate.Route.ConnectionID,
+			&candidate.Identity.TenantID,
+			&candidate.Identity.AgentID,
+			&candidate.Identity.UserID,
+			&candidate.Identity.SessionID,
+			&candidate.Identity.TurnID,
+			&candidate.Route.ProviderID,
+			&candidate.Route.ProviderVersion,
+			&candidate.Route.ConfigRevision,
+			&candidate.ActorDigest,
+			&candidate.FirstOccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan complete turn fragments: %w", err)
+		}
+		candidate.Identity.ConnectionID = candidate.Route.ConnectionID
+		fragments = append(fragments, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read complete turn fragments: %w", err)
+	}
+	return fragments, nil
+}
+
 func (s *Store) EnqueueTurn(ctx context.Context, envelope Envelope) (Event, bool, error) {
 	if strings.TrimSpace(envelope.AdapterID) == "" {
 		return Event{}, false, errors.New("adapter_id is required")

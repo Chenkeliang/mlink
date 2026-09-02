@@ -18,6 +18,7 @@ type Provider interface {
 
 type Journal interface {
 	RecordFragment(context.Context, journal.Fragment) error
+	ReconcileCompleteFragments(context.Context, int) (int, error)
 	EnqueueTurn(context.Context, journal.Envelope) (journal.Event, bool, error)
 	ClaimReady(context.Context, time.Time, int) ([]journal.Event, error)
 	MarkAccepted(context.Context, string, model.WriteReceipt) error

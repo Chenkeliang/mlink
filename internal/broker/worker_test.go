@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,9 +18,11 @@ type recordingProvider struct {
 	route      connection.RouteKey
 	captureErr error
 	receipt    model.WriteReceipt
+	calls      int
 }
 
 func (p *recordingProvider) CaptureTurn(_ context.Context, route connection.RouteKey, _ host.CallMeta, _ model.Turn) (model.WriteReceipt, error) {
+	p.calls++
 	p.route = route
 	return p.receipt, p.captureErr
 }
@@ -30,12 +33,19 @@ func (p *recordingProvider) Recall(context.Context, connection.RouteKey, host.Ca
 
 func brokerTestStore(t *testing.T) *journal.Store {
 	t.Helper()
-	store, err := journal.Open(context.Background(), filepath.Join(t.TempDir(), "journal.db"))
+	store, _ := brokerTestStoreAt(t)
+	return store
+}
+
+func brokerTestStoreAt(t *testing.T) (*journal.Store, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "journal.db")
+	store, err := journal.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return store
+	return store, path
 }
 
 func brokerEnvelope(turnID, revision string) journal.Envelope {
@@ -46,6 +56,30 @@ func brokerEnvelope(turnID, revision string) journal.Envelope {
 			Identity: model.IdentityScope{ConnectionID: "local", TenantID: "personal", AgentID: "codex", UserID: "usr_a", SessionID: "session", TurnID: turnID},
 			Messages: []model.Message{{Role: "user", Content: "remember", OccurredAt: time.Now().UTC()}},
 		},
+	}
+}
+
+func insertStrandedPair(t *testing.T, path string, envelope journal.Envelope) {
+	t.Helper()
+	identity := envelope.Turn.Identity
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, role := range []string{"user", "assistant"} {
+		if _, err := db.Exec(`
+			INSERT INTO turn_fragments(
+				adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+				role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			envelope.AdapterID, envelope.Route.ConnectionID, identity.TenantID, identity.AgentID,
+			identity.UserID, identity.SessionID, identity.TurnID, role, []byte(role), "hash-"+role,
+			"2026-09-02T04:16:00Z", envelope.Route.ProviderID, envelope.Route.ProviderVersion,
+			envelope.Route.ConfigRevision, "",
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -136,5 +170,43 @@ func TestWorkerRetriesDefinitelyNotSentDeadline(t *testing.T) {
 	}
 	if got.State != journal.StateRetryableFailed {
 		t.Fatalf("state = %q", got.State)
+	}
+}
+
+func TestWorkerReconcilesAndDeliversStrandedCompleteTurn(t *testing.T) {
+	store, path := brokerTestStoreAt(t)
+	envelope := brokerEnvelope("turn-stranded", "rev-1")
+	insertStrandedPair(t, path, envelope)
+	provider := &recordingProvider{receipt: model.WriteReceipt{ReceiptID: "receipt", State: model.WriteAccepted}}
+	worker := Worker{Journal: store, Provider: provider}
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("capture calls = %d, want 1", provider.calls)
+	}
+}
+
+func TestWorkerReconcilesAtBoundedIntervalWhenIdle(t *testing.T) {
+	store, path := brokerTestStoreAt(t)
+	now := time.Date(2026, 9, 2, 4, 0, 0, 0, time.UTC)
+	provider := &recordingProvider{receipt: model.WriteReceipt{ReceiptID: "receipt", State: model.WriteAccepted}}
+	worker := Worker{Journal: store, Provider: provider, Clock: func() time.Time { return now }}
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	insertStrandedPair(t, path, brokerEnvelope("turn-after-idle-scan", "rev-1"))
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("capture calls before interval = %d, want 0", provider.calls)
+	}
+	now = now.Add(30 * time.Second)
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("capture calls after interval = %d, want 1", provider.calls)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -267,6 +268,210 @@ func TestRecordFragmentPairsOutOfOrderAndEnqueuesTurn(t *testing.T) {
 	}
 	if fragments != 0 {
 		t.Fatalf("fragments retained after enqueue = %d", fragments)
+	}
+}
+
+func TestReconcileCompleteFragmentsEnqueuesStrandedTurn(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	envelope := fixtureEnvelope("usr_a", "turn-stranded", "prompt")
+	identity := envelope.Turn.Identity
+	for _, message := range []model.Message{
+		{Role: "user", Content: "prompt", OccurredAt: time.Date(2026, 9, 2, 4, 13, 0, 0, time.UTC)},
+		{Role: "assistant", Content: "answer", OccurredAt: time.Date(2026, 9, 2, 4, 16, 0, 0, time.UTC)},
+	} {
+		if _, err := store.db.ExecContext(ctx, `
+			INSERT INTO turn_fragments(
+				adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+				role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			envelope.AdapterID, envelope.Route.ConnectionID, identity.TenantID, identity.AgentID,
+			identity.UserID, identity.SessionID, identity.TurnID, message.Role, []byte(message.Content),
+			hashBytes([]byte(message.Content)), formatTime(message.OccurredAt), envelope.Route.ProviderID,
+			envelope.Route.ProviderVersion, envelope.Route.ConfigRevision, "",
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reconciled, err := store.ReconcileCompleteFragments(ctx, 1)
+	if err != nil || reconciled != 1 {
+		t.Fatalf("reconciled/error = %d/%v", reconciled, err)
+	}
+	var events, fragments int
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM journal_events WHERE turn_id = ?`, identity.TurnID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id = ?`, identity.TurnID).Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || fragments != 0 {
+		t.Fatalf("events/fragments = %d/%d", events, fragments)
+	}
+}
+
+func TestReconcileCompleteFragmentsLeavesSingleRoleTurnUntouched(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	envelope := fixtureEnvelope("usr_a", "turn-incomplete", "prompt")
+	identity := envelope.Turn.Identity
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO turn_fragments(
+			adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+			role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+		) VALUES(?, ?, ?, ?, ?, ?, ?, 'user', 'prompt', 'hash-user', ?, ?, ?, ?, '')`,
+		envelope.AdapterID, envelope.Route.ConnectionID, identity.TenantID, identity.AgentID,
+		identity.UserID, identity.SessionID, identity.TurnID, "2026-09-02T04:13:00Z",
+		envelope.Route.ProviderID, envelope.Route.ProviderVersion, envelope.Route.ConfigRevision,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciled, err := store.ReconcileCompleteFragments(ctx, 10)
+	if err != nil || reconciled != 0 {
+		t.Fatalf("reconciled/error = %d/%v", reconciled, err)
+	}
+	var fragments int
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id = ?`, identity.TurnID).Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if fragments != 1 {
+		t.Fatalf("fragments = %d, want 1", fragments)
+	}
+}
+
+func TestReconcileCompleteFragmentsDoesNotMergeDifferentIdentities(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	envelope := fixtureEnvelope("usr_a", "turn-split", "prompt")
+	for _, row := range []struct {
+		userID  string
+		agentID string
+		role    string
+	}{
+		{userID: "usr_legacy", agentID: "agent_legacy", role: "user"},
+		{userID: "usr_formal", agentID: "agent_formal", role: "assistant"},
+	} {
+		if _, err := store.db.ExecContext(ctx, `
+			INSERT INTO turn_fragments(
+				adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+				role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+			) VALUES(?, ?, 'personal', ?, ?, 'session-split', ?, ?, ?, ?, '2026-09-02T04:13:00Z', ?, ?, ?, '')`,
+			envelope.AdapterID, envelope.Route.ConnectionID, row.agentID, row.userID, envelope.Turn.Identity.TurnID,
+			row.role, []byte(row.role), "hash-"+row.role, envelope.Route.ProviderID,
+			envelope.Route.ProviderVersion, envelope.Route.ConfigRevision,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reconciled, err := store.ReconcileCompleteFragments(ctx, 10)
+	if err != nil || reconciled != 0 {
+		t.Fatalf("reconciled/error = %d/%v", reconciled, err)
+	}
+	var events, fragments int
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM journal_events WHERE turn_id = ?`, envelope.Turn.Identity.TurnID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id = ?`, envelope.Turn.Identity.TurnID).Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 || fragments != 2 {
+		t.Fatalf("events/fragments = %d/%d", events, fragments)
+	}
+}
+
+func TestReconcileCompleteFragmentsClearsResidualPairWithoutDuplicateEvent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	envelope := fixtureEnvelope("usr_a", "turn-existing", "prompt")
+	envelope.Turn.Messages = []model.Message{
+		{Role: "user", Content: "prompt", OccurredAt: time.Date(2026, 9, 2, 4, 13, 0, 0, time.UTC)},
+		{Role: "assistant", Content: "answer", OccurredAt: time.Date(2026, 9, 2, 4, 16, 0, 0, time.UTC)},
+	}
+	if _, inserted, err := store.EnqueueTurn(ctx, envelope); err != nil || !inserted {
+		t.Fatalf("enqueue inserted/error = %t/%v", inserted, err)
+	}
+	identity := envelope.Turn.Identity
+	for _, message := range envelope.Turn.Messages {
+		if _, err := store.db.ExecContext(ctx, `
+			INSERT INTO turn_fragments(
+				adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+				role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`,
+			envelope.AdapterID, envelope.Route.ConnectionID, identity.TenantID, identity.AgentID,
+			identity.UserID, identity.SessionID, identity.TurnID, message.Role, []byte(message.Content),
+			hashBytes([]byte(message.Content)), formatTime(message.OccurredAt), envelope.Route.ProviderID,
+			envelope.Route.ProviderVersion, envelope.Route.ConfigRevision,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reconciled, err := store.ReconcileCompleteFragments(ctx, 10)
+	if err != nil || reconciled != 1 {
+		t.Fatalf("reconciled/error = %d/%v", reconciled, err)
+	}
+	var events, fragments int
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM journal_events WHERE turn_id = ?`, identity.TurnID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id = ?`, identity.TurnID).Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || fragments != 0 {
+		t.Fatalf("events/fragments = %d/%d", events, fragments)
+	}
+}
+
+func TestReconcileCompleteFragmentsSkipsConflictPageAndRecoversLaterTurn(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	valid := fixtureEnvelope("usr_a", "turn-valid", "valid")
+	insertPair := func(envelope Envelope, occurredAt time.Time, prefix string) {
+		t.Helper()
+		identity := envelope.Turn.Identity
+		for _, role := range []string{"user", "assistant"} {
+			content := prefix + "-" + role
+			if _, err := store.db.ExecContext(ctx, `
+				INSERT INTO turn_fragments(
+					adapter_id, connection_id, tenant_id, agent_id, user_id, session_id, turn_id,
+					role, content, content_hash, occurred_at, provider_id, provider_version, config_revision, actor_digest
+				) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`,
+				envelope.AdapterID, envelope.Route.ConnectionID, identity.TenantID, identity.AgentID,
+				identity.UserID, identity.SessionID, identity.TurnID, role, []byte(content),
+				hashBytes([]byte(content)), formatTime(occurredAt), envelope.Route.ProviderID,
+				envelope.Route.ProviderVersion, envelope.Route.ConfigRevision,
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for index := range 40 {
+		conflict := fixtureEnvelope("usr_a", fmt.Sprintf("turn-conflict-%02d", index), "original")
+		if _, inserted, err := store.EnqueueTurn(ctx, conflict); err != nil || !inserted {
+			t.Fatalf("enqueue conflict %d inserted/error = %t/%v", index, inserted, err)
+		}
+		insertPair(conflict, time.Date(2026, 9, 2, 4, 0, index, 0, time.UTC), "changed")
+	}
+	insertPair(valid, time.Date(2026, 9, 2, 4, 1, 0, 0, time.UTC), "valid")
+
+	reconciled, err := store.ReconcileCompleteFragments(ctx, 1)
+	if err != nil || reconciled != 1 {
+		t.Fatalf("reconciled/error = %d/%v", reconciled, err)
+	}
+	var validEvents, conflictFragments, validFragments int
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM journal_events WHERE turn_id = ?`, valid.Turn.Identity.TurnID).Scan(&validEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id LIKE 'turn-conflict-%'`).Scan(&conflictFragments); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM turn_fragments WHERE turn_id = ?`, valid.Turn.Identity.TurnID).Scan(&validFragments); err != nil {
+		t.Fatal(err)
+	}
+	if validEvents != 1 || conflictFragments != 80 || validFragments != 0 {
+		t.Fatalf("valid events/conflict fragments/valid fragments = %d/%d/%d", validEvents, conflictFragments, validFragments)
 	}
 }
 
