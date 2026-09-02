@@ -49,7 +49,13 @@ func TestLiveOfficialProviderOnboarding(t *testing.T) {
 		t.Fatal("live acceptance refuses production MemoryCore resources")
 	}
 	cleanupIsolatedProvider(t, layoutSpec)
-	defer cleanupIsolatedProvider(t, layoutSpec)
+	defer func() {
+		if os.Getenv("MLINK_TEST_KEEP_FAILED") == "1" && t.Failed() {
+			t.Logf("retained isolated resources for diagnosis: container=%s volume=%s network=%s", layoutSpec.ContainerName, layoutSpec.VolumeName, layoutSpec.NetworkName)
+			return
+		}
+		cleanupIsolatedProvider(t, layoutSpec)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -152,15 +158,15 @@ func TestLiveOfficialProviderOnboarding(t *testing.T) {
 		TenantID: controlResult.OwnerTeamID, AgentID: controlResult.OwnerAgentID, UserID: controlResult.OwnerUserID,
 		SessionID: runID + "-session", TurnID: runID + "-turn",
 	}
-	messages := make([]model.Message, 0, 10)
-	for range 5 {
-		messages = append(messages,
+	for index := 0; index < 5; index++ {
+		identityScope.TurnID = fmt.Sprintf("%s-turn-%d", runID, index)
+		messages := []model.Message{
 			model.Message{Role: "user", Content: "我的长期测试代号是 " + canary + "。"},
 			model.Message{Role: "assistant", Content: "已记录长期测试代号 " + canary + "。"},
-		)
-	}
-	if _, err := provider.CaptureTurn(ctx, model.Turn{Identity: identityScope, Messages: messages}); err != nil {
-		t.Fatal(err)
+		}
+		if _, err := provider.CaptureTurn(ctx, model.Turn{Identity: identityScope, Messages: messages}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if !eventuallyRecallGeneratedID(ctx, provider, identityScope, canary) {
 		t.Fatal("memory captured under Core-generated IDs was not recalled")

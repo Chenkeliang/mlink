@@ -157,6 +157,7 @@ func (ledger *restoreMemoryLedger) RecordOwned(_ context.Context, resource insta
 type runtimeRestoreAgents struct {
 	runtime      *runtimeApplication
 	plan         install.ChangeSet
+	target       install.Target
 	applied      bool
 	panelStarted bool
 }
@@ -287,7 +288,7 @@ func (lifecycle *runtimeRestoreAgents) Apply(ctx context.Context, selected []app
 	if err := service.ApplyInstall(ctx, plan.PlanID, request); err != nil {
 		return err
 	}
-	lifecycle.plan, lifecycle.applied = plan, true
+	lifecycle.plan, lifecycle.target, lifecycle.applied = plan, service.Target, true
 	return nil
 }
 
@@ -300,14 +301,21 @@ func (lifecycle *runtimeRestoreAgents) Verify(ctx context.Context, selected []ap
 		return err
 	}
 	lifecycle.panelStarted = true
-	report, err := lifecycle.runtime.Doctor(ctx, selected)
-	if err != nil {
-		return err
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		report, err := lifecycle.runtime.Doctor(ctx, selected)
+		if err == nil && report.ExitCode() != 1 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("restored Agent integration verification failed")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
-	if report.ExitCode() == 1 {
-		return errors.New("restored Agent integration verification failed")
-	}
-	return nil
 }
 
 func (lifecycle *runtimeRestoreAgents) Rollback(ctx context.Context) error {
@@ -329,7 +337,11 @@ func (lifecycle *runtimeRestoreAgents) Rollback(ctx context.Context) error {
 		return errors.Join(append(rollbackErrors, err)...)
 	}
 	defer store.Close()
-	err = install.NewTransaction(install.LocalTarget{}, ledger).Rollback(ctx, lifecycle.plan)
+	target := lifecycle.target
+	if target == nil {
+		target = install.LocalTarget{}
+	}
+	err = install.NewTransaction(target, ledger).Rollback(ctx, lifecycle.plan)
 	lifecycle.applied = false
 	return errors.Join(append(rollbackErrors, err)...)
 }
