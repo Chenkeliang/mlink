@@ -15,6 +15,9 @@ const (
 	defaultSkillIdleArchiveAfter = 10 * time.Minute
 	maximumSkillRecallItems      = 2
 	skillArchiveTimeout          = 30 * time.Second
+	skillIdleArchiveReason       = "MLink archived the remaining conversation after session inactivity"
+	skillShutdownArchiveReason   = "MLink archived the remaining conversation before Provider shutdown"
+	skillSessionEndArchiveReason = "MLink archived the conversation after the agent session ended"
 )
 
 type skillLifecycle struct {
@@ -53,6 +56,19 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return p.skills.shutdown(ctx)
+}
+
+func (p *Provider) ArchiveSession(ctx context.Context, identity model.IdentityScope) error {
+	if p == nil || p.skills == nil {
+		return errors.New("MemoryCore Skill lifecycle is unavailable")
+	}
+	if err := identity.ValidateForRecall(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(identity.SessionID) == "" {
+		return errors.New("Skill archive requires session_id")
+	}
+	return p.skills.archiveSession(ctx, identity)
 }
 
 func (s *skillLifecycle) captureTurn(ctx context.Context, identity model.IdentityScope, messages []memoryCoreMessage) error {
@@ -174,7 +190,7 @@ func (s *skillLifecycle) archiveOnTimer(key string, identity model.IdentityScope
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), skillArchiveTimeout)
-	err := s.forceArchive(ctx, identity)
+	err := s.forceArchive(ctx, identity, skillIdleArchiveReason)
 	cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -204,13 +220,35 @@ func (s *skillLifecycle) forget(identity model.IdentityScope) {
 	delete(s.versions, key)
 }
 
-func (s *skillLifecycle) forceArchive(ctx context.Context, identity model.IdentityScope) error {
+func (s *skillLifecycle) archiveSession(ctx context.Context, identity model.IdentityScope) error {
+	key := skillSessionKey(identity)
+	s.mu.Lock()
+	version := s.versions[key]
+	s.mu.Unlock()
+	if err := s.forceArchive(ctx, identity, skillSessionEndArchiveReason); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.versions[key] != version {
+		return nil
+	}
+	if timer := s.timers[key]; timer != nil {
+		timer.Stop()
+	}
+	delete(s.timers, key)
+	delete(s.sessions, key)
+	delete(s.versions, key)
+	return nil
+}
+
+func (s *skillLifecycle) forceArchive(ctx context.Context, identity model.IdentityScope, reason string) error {
 	request := map[string]any{
 		"team_id":    identity.TenantID,
 		"agent_id":   identity.AgentID,
 		"user_id":    identity.UserID,
 		"session_id": identity.SessionID,
-		"reason":     "MLink archived the remaining conversation after session inactivity",
+		"reason":     reason,
 	}
 	var response struct {
 		Status string `json:"status"`
@@ -239,7 +277,7 @@ func (s *skillLifecycle) shutdown(ctx context.Context) error {
 
 	var archiveErrors []error
 	for _, identity := range sessions {
-		if err := s.forceArchive(ctx, identity); err != nil {
+		if err := s.forceArchive(ctx, identity, skillShutdownArchiveReason); err != nil {
 			archiveErrors = append(archiveErrors, err)
 		}
 	}

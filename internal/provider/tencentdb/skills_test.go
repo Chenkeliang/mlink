@@ -146,6 +146,82 @@ func TestSkillLifecycleShutdownArchivesPendingSession(t *testing.T) {
 	}
 }
 
+func TestSkillLifecycleArchivesExplicitSessionAndCancelsIdleTimer(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/v3/skill/conversation/force-archive" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	provider.enableSkills(time.Hour)
+	identity := model.IdentityScope{
+		TenantID: "team-a", UserID: "user-a", AgentID: "agent-a", SessionID: "session-a",
+	}
+	provider.skills.schedule(identity)
+	if err := provider.ArchiveSession(context.Background(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if body["session_id"] != "session-a" || body["reason"] != "MLink archived the conversation after the agent session ended" {
+		t.Fatalf("archive body = %#v", body)
+	}
+	key := skillSessionKey(identity)
+	provider.skills.mu.Lock()
+	defer provider.skills.mu.Unlock()
+	if provider.skills.timers[key] != nil {
+		t.Fatal("explicit archive retained idle timer")
+	}
+	if _, exists := provider.skills.sessions[key]; exists {
+		t.Fatal("explicit archive retained session state")
+	}
+}
+
+func TestSkillLifecycleExplicitArchivePreservesNewerSessionActivity(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/skill/conversation/force-archive" {
+			http.NotFound(w, r)
+			return
+		}
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	provider.enableSkills(time.Hour)
+	identity := model.IdentityScope{
+		TenantID: "team-a", UserID: "user-a", AgentID: "agent-a", SessionID: "session-a",
+	}
+	provider.skills.schedule(identity)
+	done := make(chan error, 1)
+	go func() { done <- provider.ArchiveSession(context.Background(), identity) }()
+	<-started
+	provider.skills.schedule(identity)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	key := skillSessionKey(identity)
+	provider.skills.mu.Lock()
+	defer provider.skills.mu.Unlock()
+	if provider.skills.timers[key] == nil || provider.skills.versions[key] < 2 {
+		t.Fatal("explicit archive discarded newer session activity")
+	}
+	provider.skills.timers[key].Stop()
+}
+
 func TestSkillLifecycleIgnoresSupersededIdleTimer(t *testing.T) {
 	var archiveCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

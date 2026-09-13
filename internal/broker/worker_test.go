@@ -21,6 +21,21 @@ type recordingProvider struct {
 	calls      int
 }
 
+type archivingProvider struct {
+	recordingProvider
+	archiveErr   error
+	archiveCalls int
+	archiveRoute connection.RouteKey
+	identity     model.IdentityScope
+}
+
+func (p *archivingProvider) ArchiveSession(_ context.Context, route connection.RouteKey, _ host.CallMeta, identity model.IdentityScope) error {
+	p.archiveCalls++
+	p.archiveRoute = route
+	p.identity = identity
+	return p.archiveErr
+}
+
 func (p *recordingProvider) CaptureTurn(_ context.Context, route connection.RouteKey, _ host.CallMeta, _ model.Turn) (model.WriteReceipt, error) {
 	p.calls++
 	p.route = route
@@ -208,5 +223,84 @@ func TestWorkerReconcilesAtBoundedIntervalWhenIdle(t *testing.T) {
 	}
 	if provider.calls != 1 {
 		t.Fatalf("capture calls after interval = %d, want 1", provider.calls)
+	}
+}
+
+func TestWorkerArchivesAfterLastTurnIsAccepted(t *testing.T) {
+	store := brokerTestStore(t)
+	envelope := brokerEnvelope("turn-final", "rev-1")
+	event, _, err := store.EnqueueTurn(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := journal.FinalizationRequest{AdapterID: envelope.AdapterID, Route: envelope.Route, Identity: envelope.Turn.Identity}
+	request.Identity.TurnID = ""
+	finalization, _, _, err := store.RequestFinalization(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &archivingProvider{recordingProvider: recordingProvider{
+		receipt: model.WriteReceipt{ReceiptID: "receipt", State: model.WriteAccepted},
+	}}
+	worker := Worker{Journal: store, Provider: provider, Clock: func() time.Time { return time.Now().UTC() }}
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gotEvent, err := store.Event(context.Background(), event.ID)
+	if err != nil || gotEvent.State != journal.StateAccepted {
+		t.Fatalf("event = %#v %v", gotEvent, err)
+	}
+	gotFinalization, err := store.Finalization(context.Background(), finalization.ID)
+	if err != nil || gotFinalization.State != journal.StateCompleted || provider.archiveCalls != 1 {
+		t.Fatalf("finalization/provider = %#v calls:%d error:%v", gotFinalization, provider.archiveCalls, err)
+	}
+	if provider.archiveRoute != request.Route || provider.identity != request.Identity {
+		t.Fatalf("archive route/identity = %#v/%#v", provider.archiveRoute, provider.identity)
+	}
+}
+
+func TestWorkerCompletesFinalizationForProviderWithoutArchiveCapability(t *testing.T) {
+	store := brokerTestStore(t)
+	request := journal.FinalizationRequest{
+		AdapterID: "codex", Route: brokerEnvelope("turn", "rev-1").Route,
+		Identity: brokerEnvelope("turn", "rev-1").Turn.Identity,
+	}
+	request.Identity.TurnID = ""
+	finalization, _, _, err := store.RequestFinalization(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := Worker{Journal: store, Provider: &recordingProvider{}, Clock: func() time.Time { return time.Now().UTC() }}
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Finalization(context.Background(), finalization.ID)
+	if err != nil || got.State != journal.StateCompleted {
+		t.Fatalf("finalization = %#v %v", got, err)
+	}
+}
+
+func TestWorkerRetriesReplaySafeFinalizationFailure(t *testing.T) {
+	store := brokerTestStore(t)
+	request := journal.FinalizationRequest{
+		AdapterID: "codex", Route: brokerEnvelope("turn", "rev-1").Route,
+		Identity: brokerEnvelope("turn", "rev-1").Turn.Identity,
+	}
+	request.Identity.TurnID = ""
+	finalization, _, _, err := store.RequestFinalization(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	provider := &archivingProvider{archiveErr: &host.CallError{
+		Delivery: host.DeliveryMaybeSent, ReplaySafe: true, Code: protocol.ErrorTemporarilyUnavailable,
+	}}
+	worker := Worker{Journal: store, Provider: provider, Clock: func() time.Time { return now }}
+	if err := worker.DrainOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Finalization(context.Background(), finalization.ID)
+	if err != nil || got.State != journal.StateRetryableFailed || got.NextAttemptAt == nil || !got.NextAttemptAt.After(now) {
+		t.Fatalf("finalization = %#v %v", got, err)
 	}
 }

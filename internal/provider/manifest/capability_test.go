@@ -73,3 +73,30 @@ func TestValidateRuntimeRejectsCapabilityEscalation(t *testing.T) {
 		t.Fatal("ValidateRuntime() accepted undeclared capability")
 	}
 }
+
+func TestArchiveSessionCapabilityMustBeReplaySafeAndSessionOrdered(t *testing.T) {
+	valid := CapabilityDescriptor{
+		Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 2,
+		ReplaySafe: true, Ordering: "session",
+	}
+	if _, err := ValidateRuntime(
+		map[string]CapabilityDescriptor{"archive_session": valid},
+		map[string]CapabilityDescriptor{"archive_session": valid},
+	); err != nil {
+		t.Fatalf("ValidateRuntime() error = %v", err)
+	}
+	for name, descriptor := range map[string]CapabilityDescriptor{
+		"not replay safe": {Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 2, Ordering: "session"},
+		"wrong ordering":  {Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 2, ReplaySafe: true, Ordering: "turn"},
+		"no size limit":   {Version: 1, MaxInFlight: 2, ReplaySafe: true, Ordering: "session"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ValidateRuntime(
+				map[string]CapabilityDescriptor{"archive_session": descriptor},
+				map[string]CapabilityDescriptor{"archive_session": descriptor},
+			); err == nil {
+				t.Fatal("ValidateRuntime() accepted an unsafe archive_session capability")
+			}
+		})
+	}
+}

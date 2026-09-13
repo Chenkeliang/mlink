@@ -87,6 +87,10 @@ func normalizeCapabilities(source map[string]CapabilityDescriptor) (map[string]C
 			if len(descriptor.Scopes) == 0 || descriptor.MaxRequestBytes <= 0 || descriptor.MaxResultItems <= 0 {
 				return nil, errors.New("recall requires scopes, max_request_bytes, and max_result_items")
 			}
+		case "archive_session":
+			if descriptor.MaxRequestBytes <= 0 || !descriptor.ReplaySafe || descriptor.Ordering != "session" {
+				return nil, errors.New("archive_session requires max_request_bytes, replay_safe, and session ordering")
+			}
 		case "health":
 		default:
 			return nil, fmt.Errorf("unknown capability %q", name)

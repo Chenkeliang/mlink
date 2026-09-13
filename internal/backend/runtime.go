@@ -13,6 +13,7 @@ import (
 	"mlink/internal/model"
 	"mlink/internal/provider/host"
 	"mlink/internal/provider/manifest"
+	"mlink/internal/provider/protocol"
 	"mlink/internal/secret"
 )
 
@@ -116,6 +117,24 @@ func (r *Runtime) Recall(ctx context.Context, route connection.RouteKey, meta ho
 		return model.ContextBundle{}, ErrConnectionUnavailable
 	}
 	return session.Recall(ctx, meta, request)
+}
+
+func (r *Runtime) ArchiveSession(ctx context.Context, route connection.RouteKey, meta host.CallMeta, identity model.IdentityScope) error {
+	session, ok := r.Session(route)
+	if !ok {
+		return &host.CallError{
+			Code: protocol.ErrorTemporarilyUnavailable, IdempotencyKey: meta.IdempotencyKey,
+			Delivery: host.DeliveryNotSent, ReplaySafe: true, Message: "provider session is unavailable",
+		}
+	}
+	if _, supported := session.Capabilities()["archive_session"]; !supported {
+		return host.ErrCapabilityUnavailable
+	}
+	archiver, ok := session.(host.SessionArchiver)
+	if !ok {
+		return host.ErrCapabilityUnavailable
+	}
+	return archiver.ArchiveSession(ctx, meta, identity)
 }
 
 func (r *Runtime) Shutdown(ctx context.Context) error {

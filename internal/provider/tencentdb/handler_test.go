@@ -14,7 +14,7 @@ import (
 )
 
 func TestServerHandlerLifecycle(t *testing.T) {
-	var healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls int
+	var healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls, archiveCalls int
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer memory-token" || r.Header.Get("x-tdai-service-id") != "service-a" {
 			t.Errorf("backend auth headers are missing")
@@ -35,6 +35,9 @@ func TestServerHandlerLifecycle(t *testing.T) {
 		case "/v3/skill/search":
 			skillRecallCalls++
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[]}}`))
+		case "/v3/skill/conversation/force-archive":
+			archiveCalls++
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
 		case "/v3/atomic/search":
 			recallCalls++
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"id":"memory-a","type":"instruction","content":"先给结论"}]}}`))
@@ -59,6 +62,9 @@ func TestServerHandlerLifecycle(t *testing.T) {
 	if initialized.Capabilities["capture_turn"].ReplaySafe {
 		t.Fatal("TencentDB capture_turn must not claim replay safety")
 	}
+	if !initialized.Capabilities["archive_session"].ReplaySafe || initialized.Capabilities["archive_session"].Ordering != "session" {
+		t.Fatalf("archive_session capability = %#v", initialized.Capabilities["archive_session"])
+	}
 
 	health, err := handler.Health(context.Background(), protocol.HealthParams{})
 	if err != nil || health.Process != "ready" || health.Config != "valid" || health.Backend != "available" {
@@ -80,11 +86,17 @@ func TestServerHandlerLifecycle(t *testing.T) {
 	if err != nil || len(bundle.Items) != 1 || bundle.Items[0].Text != "先给结论" {
 		t.Fatalf("Recall() = %#v, %v", bundle, err)
 	}
+	archived, err := handler.ArchiveSession(context.Background(), protocol.ArchiveSessionParams{Identity: model.IdentityScope{
+		TenantID: "team-a", UserID: "user-a", AgentID: "agent-a", SessionID: "session-a",
+	}})
+	if err != nil || !archived.Archived {
+		t.Fatalf("ArchiveSession() = %#v, %v", archived, err)
+	}
 	if err := handler.Shutdown(context.Background(), protocol.ShutdownParams{}); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if healthCalls != 1 || captureCalls != 1 || recallCalls != 1 || skillCaptureCalls != 1 || skillRecallCalls != 1 {
-		t.Fatalf("backend calls health/capture/recall/skill-capture/skill-recall = %d/%d/%d/%d/%d", healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls)
+	if healthCalls != 1 || captureCalls != 1 || recallCalls != 1 || skillCaptureCalls != 1 || skillRecallCalls != 1 || archiveCalls != 1 {
+		t.Fatalf("backend calls health/capture/recall/skill-capture/skill-recall/archive = %d/%d/%d/%d/%d/%d", healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls, archiveCalls)
 	}
 }
 

@@ -33,6 +33,20 @@ type fakeSession struct {
 	captured int
 }
 
+type archivingFakeSession struct {
+	fakeSession
+	archived model.IdentityScope
+}
+
+func (s *archivingFakeSession) Capabilities() map[string]manifest.CapabilityDescriptor {
+	return map[string]manifest.CapabilityDescriptor{"archive_session": {Version: 1}}
+}
+
+func (s *archivingFakeSession) ArchiveSession(_ context.Context, _ host.CallMeta, identity model.IdentityScope) error {
+	s.archived = identity
+	return nil
+}
+
 func (s *fakeSession) RouteKey() connection.RouteKey                          { return s.route }
 func (s *fakeSession) Capabilities() map[string]manifest.CapabilityDescriptor { return nil }
 func (s *fakeSession) Health(context.Context) (protocol.HealthResult, error) {
@@ -84,5 +98,39 @@ func TestRuntimeStartsPinnedConnectionWithKeychainSecrets(t *testing.T) {
 		ConnectionID: "local", ProviderID: "dev.mlink.tencentdb", ProviderVersion: "0.1.0", ConfigRevision: "rev-other",
 	}, host.CallMeta{IdempotencyKey: "event"}, model.Turn{}); !errors.Is(err, ErrConnectionUnavailable) {
 		t.Fatalf("CaptureTurn() error = %v", err)
+	}
+}
+
+func TestRuntimeRoutesOptionalArchiveSession(t *testing.T) {
+	route := connection.RouteKey{
+		ConnectionID: "local", ProviderID: "dev.mlink.tencentdb",
+		ProviderVersion: "0.1.0", ConfigRevision: "rev-1",
+	}
+	session := &archivingFakeSession{fakeSession: fakeSession{route: route}}
+	runtime := &Runtime{sessions: map[string]host.Session{routeKey(route): session}}
+	identity := model.IdentityScope{
+		ConnectionID: "local", TenantID: "team-a", AgentID: "agent-a",
+		UserID: "user-a", SessionID: "session-a",
+	}
+	if err := runtime.ArchiveSession(context.Background(), route, host.CallMeta{IdempotencyKey: "fin-a"}, identity); err != nil {
+		t.Fatal(err)
+	}
+	if session.archived != identity {
+		t.Fatalf("archived identity = %#v", session.archived)
+	}
+}
+
+func TestRuntimeReportsUnsupportedArchiveSession(t *testing.T) {
+	route := connection.RouteKey{
+		ConnectionID: "local", ProviderID: "dev.mlink.fixture",
+		ProviderVersion: "0.1.0", ConfigRevision: "rev-1",
+	}
+	runtime := &Runtime{sessions: map[string]host.Session{routeKey(route): &fakeSession{route: route}}}
+	err := runtime.ArchiveSession(context.Background(), route, host.CallMeta{IdempotencyKey: "fin-a"}, model.IdentityScope{
+		ConnectionID: "local", TenantID: "team-a", AgentID: "agent-a",
+		UserID: "user-a", SessionID: "session-a",
+	})
+	if !errors.Is(err, host.ErrCapabilityUnavailable) {
+		t.Fatalf("ArchiveSession() error = %v", err)
 	}
 }

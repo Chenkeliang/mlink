@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"mlink/internal/connection"
@@ -9,6 +10,8 @@ import (
 	"mlink/internal/provider/manifest"
 	"mlink/internal/provider/protocol"
 )
+
+var ErrCapabilityUnavailable = errors.New("provider capability is unavailable")
 
 type State string
 
@@ -67,6 +70,10 @@ type Session interface {
 	State() State
 	Done() <-chan struct{}
 	ExitEvent() (ExitEvent, bool)
+}
+
+type SessionArchiver interface {
+	ArchiveSession(context.Context, CallMeta, model.IdentityScope) error
 }
 
 type revisionPaths struct {

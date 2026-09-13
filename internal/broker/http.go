@@ -225,12 +225,23 @@ func (s Server) handleFlush(local bool) http.HandlerFunc {
 			s.writeAuthorizationError(response, err)
 			return
 		}
-		pending, err := s.Service.Flush(request.Context(), input.AdapterID, authorization.Identity.SessionID)
+		pending, err := s.Service.FinalizeSession(request.Context(), journal.FinalizationRequest{
+			AdapterID: input.AdapterID,
+			Route:     authorization.Route,
+			Identity: model.IdentityScope{
+				ConnectionID: authorization.Route.ConnectionID,
+				TenantID:     authorization.Identity.TenantID,
+				AgentID:      authorization.Identity.AgentID,
+				UserID:       authorization.Identity.UserID,
+				SessionID:    authorization.Identity.SessionID,
+			},
+			ActorDigest: authorization.Identity.ActorDigest,
+		})
 		if err != nil {
 			writeAPIError(response, http.StatusServiceUnavailable, "journal_unavailable")
 			return
 		}
-		writeJSON(response, http.StatusOK, map[string]any{"pending": pending})
+		writeJSON(response, http.StatusOK, map[string]any{"pending": pending, "finalization_queued": true})
 	}
 }
 

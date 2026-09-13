@@ -113,6 +113,17 @@ func (h *ServerHandler) Recall(ctx context.Context, params protocol.RecallParams
 	return bundle, nil
 }
 
+func (h *ServerHandler) ArchiveSession(ctx context.Context, params protocol.ArchiveSessionParams) (protocol.ArchiveSessionResult, error) {
+	_, provider, err := h.current()
+	if err != nil {
+		return protocol.ArchiveSessionResult{}, err
+	}
+	if err := provider.ArchiveSession(ctx, params.Identity); err != nil {
+		return protocol.ArchiveSessionResult{}, mapProviderError(err)
+	}
+	return protocol.ArchiveSessionResult{Archived: true}, nil
+}
+
 func (h *ServerHandler) Shutdown(ctx context.Context, _ protocol.ShutdownParams) error {
 	h.mu.Lock()
 	provider := h.provider
@@ -163,6 +174,10 @@ func tencentDBCapabilities() map[string]manifest.CapabilityDescriptor {
 		"recall": {
 			Version: 1, Scopes: []string{"user", "agent"}, MaxRequestBytes: 256 << 10,
 			MaxResultItems: 20, MaxInFlight: 4,
+		},
+		"archive_session": {
+			Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 4,
+			ReplaySafe: true, Ordering: "session",
 		},
 	}
 }

@@ -27,6 +27,7 @@ const (
 	healthTimeout          = 2 * time.Second
 	recallTimeout          = 2 * time.Second
 	captureTimeout         = 5 * time.Second
+	archiveTimeout         = 5 * time.Second
 	shutdownTimeout        = 2 * time.Second
 	writeTimeout           = 2 * time.Second
 	terminateGrace         = 250 * time.Millisecond
@@ -392,6 +393,76 @@ func (s *processSession) Recall(ctx context.Context, _ CallMeta, request model.R
 	return result, nil
 }
 
+func (s *processSession) ArchiveSession(ctx context.Context, meta CallMeta, identity model.IdentityScope) error {
+	descriptor, err := s.requireReadyCapability("archive_session")
+	if err != nil {
+		return err
+	}
+	if !descriptor.ReplaySafe {
+		return errors.New("archive_session capability is not replay safe")
+	}
+	if identity.ConnectionID != s.route.ConnectionID {
+		return errors.New("archive identity uses another connection")
+	}
+	if err := identity.ValidateForRecall(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(identity.SessionID) == "" || strings.TrimSpace(identity.TurnID) != "" {
+		return errors.New("archive identity requires session_id without turn_id")
+	}
+	if strings.TrimSpace(meta.IdempotencyKey) == "" {
+		return errors.New("archive requires idempotency key")
+	}
+	callCtx, cancel := withDefaultDeadline(ctx, archiveTimeout)
+	defer cancel()
+	release, err := s.acquireBusiness(callCtx)
+	if err != nil {
+		code := protocol.ErrorTemporarilyUnavailable
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			code = protocol.ErrorDeadlineExceeded
+		}
+		return &CallError{
+			Code: code, IdempotencyKey: meta.IdempotencyKey,
+			Delivery: DeliveryNotSent, ReplaySafe: true, Message: "archive_session request could not start",
+		}
+	}
+	defer release()
+	var requestValidationErr error
+	message, _, err := s.callRPC(callCtx, meta.IdempotencyKey, "archive_session", false, func(requestMeta protocol.RequestMeta) (any, error) {
+		params := protocol.ArchiveSessionParams{Meta: requestMeta, Identity: identity}
+		if err := validateRequestSize(params, descriptor.MaxRequestBytes); err != nil {
+			requestValidationErr = err
+			return nil, err
+		}
+		return params, nil
+	})
+	if requestValidationErr != nil {
+		return requestValidationErr
+	}
+	if err != nil {
+		var callErr *CallError
+		if errors.As(err, &callErr) {
+			copy := *callErr
+			copy.ReplaySafe = true
+			return &copy
+		}
+		code := protocol.ErrorTemporarilyUnavailable
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			code = protocol.ErrorDeadlineExceeded
+		}
+		return &CallError{
+			Code: code, IdempotencyKey: meta.IdempotencyKey,
+			Delivery: DeliveryMaybeSent, ReplaySafe: true, Message: "archive_session request failed",
+		}
+	}
+	var result protocol.ArchiveSessionResult
+	if err := protocol.DecodeParams(message.Result, &result); err != nil || !result.Archived {
+		s.fault(protocol.ErrorProtocol)
+		return errors.New("provider returned an invalid archive_session result")
+	}
+	return nil
+}
+
 func (s *processSession) Shutdown(ctx context.Context) error {
 	s.stateMu.Lock()
 	if s.state == StateStopped {
@@ -745,7 +816,7 @@ func (s *processSession) requireReadyCapability(name string) (manifest.Capabilit
 	}
 	descriptor, exists := s.capabilities[name]
 	if !exists {
-		return manifest.CapabilityDescriptor{}, errors.New("provider capability is unavailable")
+		return manifest.CapabilityDescriptor{}, ErrCapabilityUnavailable
 	}
 	return descriptor, nil
 }
