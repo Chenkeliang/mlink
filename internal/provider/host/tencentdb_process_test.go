@@ -41,6 +41,10 @@ func TestBundledTencentDBProviderProcess(t *testing.T) {
 				t.Errorf("decode capture request: %v", err)
 			}
 			_, _ = w.Write([]byte(`{"code":0,"data":{"accepted_ids":["bundled-ref"]}}`))
+		case "/v3/skill/conversation/add":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
+		case "/v3/skill/search":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[]}}`))
 		case "/v3/atomic/search":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"id":"bundled-memory","type":"instruction","content":"MLink bundled process"}]}}`))
 		default:
@@ -108,7 +112,7 @@ func TestBundledTencentDBProviderProcess(t *testing.T) {
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
-	wantPaths := []string{"GET /health", "POST /v3/conversation/add", "POST /v3/atomic/search"}
+	wantPaths := []string{"GET /health", "POST /v3/conversation/add", "POST /v3/skill/conversation/add", "POST /v3/skill/search", "POST /v3/atomic/search"}
 	if len(gotPaths) != len(wantPaths) {
 		t.Fatalf("backend paths = %#v, want %#v", gotPaths, wantPaths)
 	}

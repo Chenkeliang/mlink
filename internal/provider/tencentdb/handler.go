@@ -65,6 +65,7 @@ func (h *ServerHandler) Initialize(_ context.Context, params protocol.Initialize
 	h.mu.Lock()
 	h.client = client
 	h.provider = NewProvider(client)
+	h.provider.enableSkills(defaultSkillIdleArchiveAfter)
 	h.mu.Unlock()
 	return protocol.InitializeResult{
 		ProviderID: providerID, ProviderVersion: providerVersion, ProtocolVersion: protocol.Version,
@@ -112,12 +113,16 @@ func (h *ServerHandler) Recall(ctx context.Context, params protocol.RecallParams
 	return bundle, nil
 }
 
-func (h *ServerHandler) Shutdown(context.Context, protocol.ShutdownParams) error {
+func (h *ServerHandler) Shutdown(ctx context.Context, _ protocol.ShutdownParams) error {
 	h.mu.Lock()
+	provider := h.provider
 	h.client = nil
 	h.provider = nil
 	h.mu.Unlock()
-	return nil
+	if provider == nil {
+		return nil
+	}
+	return provider.Shutdown(ctx)
 }
 
 func (h *ServerHandler) current() (*Client, *Provider, error) {

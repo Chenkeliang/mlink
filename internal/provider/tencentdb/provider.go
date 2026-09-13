@@ -13,6 +13,13 @@ import (
 
 type Provider struct {
 	client *Client
+	skills *skillLifecycle
+}
+
+type memoryCoreMessage struct {
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 const (
@@ -36,12 +43,7 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 		return model.WriteReceipt{}, errors.New("capture turn requires at least one message")
 	}
 
-	type requestMessage struct {
-		Role      string `json:"role"`
-		Content   string `json:"content"`
-		Timestamp string `json:"timestamp,omitempty"`
-	}
-	messages := make([]requestMessage, 0, len(turn.Messages))
+	messages := make([]memoryCoreMessage, 0, len(turn.Messages))
 	for i, message := range turn.Messages {
 		if message.Role != "user" && message.Role != "assistant" {
 			return model.WriteReceipt{}, fmt.Errorf("message %d has unsupported role %q", i, message.Role)
@@ -50,7 +52,7 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 			return model.WriteReceipt{}, fmt.Errorf("message %d has empty content", i)
 		}
 		for _, content := range splitByUTF16Units(message.Content, officialConversationContentUnits) {
-			converted := requestMessage{Role: message.Role, Content: content}
+			converted := memoryCoreMessage{Role: message.Role, Content: content}
 			if !message.OccurredAt.IsZero() {
 				converted.Timestamp = message.OccurredAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
 			}
@@ -62,11 +64,11 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 	}
 
 	request := struct {
-		TeamID    string           `json:"team_id"`
-		AgentID   string           `json:"agent_id"`
-		UserID    string           `json:"user_id"`
-		SessionID string           `json:"session_id"`
-		Messages  []requestMessage `json:"messages"`
+		TeamID    string              `json:"team_id"`
+		AgentID   string              `json:"agent_id"`
+		UserID    string              `json:"user_id"`
+		SessionID string              `json:"session_id"`
+		Messages  []memoryCoreMessage `json:"messages"`
 	}{
 		TeamID:    turn.Identity.TenantID,
 		AgentID:   turn.Identity.AgentID,
@@ -80,11 +82,17 @@ func (p *Provider) CaptureTurn(ctx context.Context, turn model.Turn) (model.Writ
 	if err := p.client.post(ctx, "/v3/conversation/add", request, &response); err != nil {
 		return model.WriteReceipt{}, err
 	}
-	return model.WriteReceipt{
+	receipt := model.WriteReceipt{
 		State:        model.WriteAccepted,
 		ProviderRefs: response.AcceptedIDs,
 		ReplaySafe:   false,
-	}, nil
+	}
+	if p.skills != nil {
+		if err := p.skills.captureTurn(ctx, turn.Identity, messages); err != nil {
+			receipt.Warnings = append(receipt.Warnings, "MemoryCore Skill capture unavailable")
+		}
+	}
+	return receipt, nil
 }
 
 func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (model.ContextBundle, error) {
@@ -106,13 +114,39 @@ func (p *Provider) Recall(ctx context.Context, request model.RecallRequest) (mod
 		limit = 20
 	}
 
-	l1Items, err := p.recallL1(ctx, request, limit)
-	if err != nil {
-		return model.ContextBundle{}, err
+	type recallResult struct {
+		items []model.ContextItem
+		err   error
+	}
+	l1Results := make(chan recallResult, 1)
+	go func() {
+		items, err := p.recallL1(ctx, request, limit)
+		l1Results <- recallResult{items: items, err: err}
+	}()
+	var skillResults chan recallResult
+	if p.skills != nil {
+		skillResults = make(chan recallResult, 1)
+		go func() {
+			items, err := p.skills.recall(ctx, request, min(limit, maximumSkillRecallItems))
+			skillResults <- recallResult{items: items, err: err}
+		}()
+	}
+	l1 := <-l1Results
+	if l1.err != nil {
+		return model.ContextBundle{}, l1.err
+	}
+	var skills recallResult
+	if skillResults != nil {
+		skills = <-skillResults
 	}
 	bundle := model.ContextBundle{}
 	seen := make(map[string]struct{}, limit)
-	appendUniqueItems(&bundle, seen, l1Items, limit)
+	appendUniqueItems(&bundle, seen, skills.items, limit)
+	appendUniqueItems(&bundle, seen, l1.items, limit)
+	if skills.err != nil {
+		bundle.Partial = true
+		bundle.Warnings = append(bundle.Warnings, "Skill recall unavailable")
+	}
 	if !request.IncludeAgentShared || len(bundle.Items) >= limit {
 		return bundle, nil
 	}

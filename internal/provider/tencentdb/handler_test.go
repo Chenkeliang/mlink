@@ -14,7 +14,7 @@ import (
 )
 
 func TestServerHandlerLifecycle(t *testing.T) {
-	var healthCalls, captureCalls, recallCalls int
+	var healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls int
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer memory-token" || r.Header.Get("x-tdai-service-id") != "service-a" {
 			t.Errorf("backend auth headers are missing")
@@ -29,6 +29,12 @@ func TestServerHandlerLifecycle(t *testing.T) {
 		case "/v3/conversation/add":
 			captureCalls++
 			_, _ = w.Write([]byte(`{"code":0,"data":{"accepted_ids":["memory-a"]}}`))
+		case "/v3/skill/conversation/add":
+			skillCaptureCalls++
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
+		case "/v3/skill/search":
+			skillRecallCalls++
+			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[]}}`))
 		case "/v3/atomic/search":
 			recallCalls++
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"id":"memory-a","type":"instruction","content":"先给结论"}]}}`))
@@ -77,8 +83,8 @@ func TestServerHandlerLifecycle(t *testing.T) {
 	if err := handler.Shutdown(context.Background(), protocol.ShutdownParams{}); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if healthCalls != 1 || captureCalls != 1 || recallCalls != 1 {
-		t.Fatalf("backend calls health/capture/recall = %d/%d/%d", healthCalls, captureCalls, recallCalls)
+	if healthCalls != 1 || captureCalls != 1 || recallCalls != 1 || skillCaptureCalls != 1 || skillRecallCalls != 1 {
+		t.Fatalf("backend calls health/capture/recall/skill-capture/skill-recall = %d/%d/%d/%d/%d", healthCalls, captureCalls, recallCalls, skillCaptureCalls, skillRecallCalls)
 	}
 }
 
