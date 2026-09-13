@@ -170,7 +170,7 @@ func TestSkillLifecycleArchivesExplicitSessionAndCancelsIdleTimer(t *testing.T) 
 	if err := provider.ArchiveSession(context.Background(), identity); err != nil {
 		t.Fatal(err)
 	}
-	if body["session_id"] != "session-a" || body["reason"] != "MLink archived the conversation after the agent session ended" {
+	if body["space_id"] != "service-a" || body["session_id"] != "session-a" || body["reason"] != "MLink archived the conversation after the agent session ended" {
 		t.Fatalf("archive body = %#v", body)
 	}
 	key := skillSessionKey(identity)

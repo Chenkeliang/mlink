@@ -244,6 +244,7 @@ func (s *skillLifecycle) archiveSession(ctx context.Context, identity model.Iden
 
 func (s *skillLifecycle) forceArchive(ctx context.Context, identity model.IdentityScope, reason string) error {
 	request := map[string]any{
+		"space_id":   s.client.serviceID,
 		"team_id":    identity.TenantID,
 		"agent_id":   identity.AgentID,
 		"user_id":    identity.UserID,
