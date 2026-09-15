@@ -36,6 +36,7 @@ type Runtime struct {
 	sessions  map[string]host.Session
 	snapshots map[string]connection.ConnectionSnapshot
 	closed    bool
+	observed  map[string]map[string]model.UserTurn
 }
 
 func NewRuntime(cfg RuntimeConfig) *Runtime {
@@ -99,6 +100,14 @@ func (r *Runtime) startSnapshotLocked(ctx context.Context, snapshot connection.C
 		_ = session.Shutdown(context.Background())
 		return nil, errors.New("Provider Session returned a different route")
 	}
+	if observer, ok := session.(host.UserTurnObserver); ok {
+		for _, turn := range r.observed[key] {
+			if _, err := observer.ObserveUserTurn(ctx, host.CallMeta{IdempotencyKey: activityKey(turn.Identity)}, turn); err != nil {
+				_ = session.Shutdown(context.Background())
+				return nil, err
+			}
+		}
+	}
 	r.sessions[key] = session
 	r.snapshots[key] = snapshot
 	return session, nil
@@ -141,7 +150,11 @@ func (r *Runtime) CaptureTurn(ctx context.Context, route connection.RouteKey, me
 	if err != nil {
 		return model.WriteReceipt{}, err
 	}
-	return session.CaptureTurn(ctx, meta, turn)
+	receipt, err := session.CaptureTurn(ctx, meta, turn)
+	if err == nil {
+		r.finishObserved(route, turn.Identity, false)
+	}
+	return receipt, err
 }
 
 func (r *Runtime) Recall(ctx context.Context, route connection.RouteKey, meta host.CallMeta, request model.RecallRequest) (model.ContextBundle, error) {
@@ -170,7 +183,11 @@ func (r *Runtime) ArchiveSession(ctx context.Context, route connection.RouteKey,
 	if !ok {
 		return host.ErrCapabilityUnavailable
 	}
-	return archiver.ArchiveSession(ctx, meta, identity)
+	err = archiver.ArchiveSession(ctx, meta, identity)
+	if err == nil {
+		r.finishObserved(route, identity, true)
+	}
+	return err
 }
 
 func (r *Runtime) Shutdown(ctx context.Context) error {
@@ -185,6 +202,7 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 	r.sessions = make(map[string]host.Session)
 	r.snapshots = make(map[string]connection.ConnectionSnapshot)
 	r.closed = true
+	r.observed = nil
 	r.mu.Unlock()
 	var shutdownErrors []error
 	for _, session := range sessions {

@@ -89,6 +89,14 @@ func (c Client) Status(ctx context.Context) error {
 	return nil
 }
 
+func (c Client) EndTurn(ctx context.Context, input broker.TurnInput) error {
+	input.AdapterID = c.AdapterID
+	requestCtx, cancel := c.captureContext(ctx)
+	defer cancel()
+	var response map[string]any
+	return c.postJSON(requestCtx, "/v1/turns/end", input, &response)
+}
+
 func (c Client) SubmitTurn(ctx context.Context, input broker.TurnInput) (broker.SubmitReceipt, error) {
 	input.AdapterID = c.AdapterID
 	requestCtx, cancel := c.captureContext(ctx)

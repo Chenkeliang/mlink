@@ -175,6 +175,7 @@ func tencentDBCapabilities() map[string]manifest.CapabilityDescriptor {
 			Version: 1, Scopes: []string{"user", "agent"}, MaxRequestBytes: 256 << 10,
 			MaxResultItems: 20, MaxInFlight: 4,
 		},
+		"observe_user_turn": {Version: 1, MaxRequestBytes: 256 << 10, MaxInFlight: 4, ReplaySafe: false, Ordering: "turn"},
 		"archive_session": {
 			Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 4,
 			ReplaySafe: true, Ordering: "session",

@@ -110,6 +110,10 @@ export default function mlink(pi: ExtensionAPI): void {
       prompt: event.prompt,
       assistant: "",
     };
+    await brokerRequest({ path: "/v1/turn-fragments", body: {
+      adapter_id: "pi", session_id: pending.sessionId, turn_id: pending.turnId,
+      role: "user", content: pending.prompt, occurred_at: new Date().toISOString(),
+    } }, 2000);
     const bundle = await brokerRequest<MemoryBundle>(
       { path: "/v1/recall", body: { adapter_id: "pi", query: event.prompt, max_items: 8 } },
       800,
@@ -127,7 +131,11 @@ export default function mlink(pi: ExtensionAPI): void {
   pi.on("agent_settled", async () => {
     const finalTurn = pending;
     pending = null;
-    if (!finalTurn || !finalTurn.assistant) return;
+    if (!finalTurn) return;
+    if (!finalTurn.assistant) {
+      await brokerRequest({path:"/v1/turns/end",body:{adapter_id:"pi",session_id:finalTurn.sessionId,turn_id:finalTurn.turnId}},1000);
+      return;
+    }
     const occurredAt = new Date().toISOString();
     await brokerRequest(
       {

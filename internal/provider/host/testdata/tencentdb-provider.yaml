@@ -26,6 +26,12 @@ declared_capabilities:
     max_request_bytes: 262144
     max_result_items: 20
     max_in_flight: 4
+  observe_user_turn:
+    version: 1
+    max_request_bytes: 262144
+    max_in_flight: 4
+    replay_safe: false
+    ordering: turn
   archive_session:
     version: 1
     max_request_bytes: 16384

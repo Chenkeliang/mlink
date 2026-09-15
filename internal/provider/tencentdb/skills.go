@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultSkillIdleArchiveAfter = 10 * time.Minute
+	defaultSkillIdleArchiveAfter = time.Hour
 	maximumSkillRecallItems      = 2
 	skillArchiveTimeout          = 30 * time.Second
 	skillIdleArchiveReason       = "MLink archived the remaining conversation after session inactivity"
@@ -29,6 +29,7 @@ type skillLifecycle struct {
 	sessions map[string]model.IdentityScope
 	timers   map[string]*time.Timer
 	versions map[string]uint64
+	active   map[string]map[string]bool
 }
 
 func newSkillLifecycle(client *Client, idleAfter time.Duration) *skillLifecycle {
@@ -41,6 +42,7 @@ func newSkillLifecycle(client *Client, idleAfter time.Duration) *skillLifecycle 
 		sessions:  make(map[string]model.IdentityScope),
 		timers:    make(map[string]*time.Timer),
 		versions:  make(map[string]uint64),
+		active:    make(map[string]map[string]bool),
 	}
 }
 
@@ -91,6 +93,9 @@ func (s *skillLifecycle) captureTurn(ctx context.Context, identity model.Identit
 	if err := s.client.post(ctx, "/v3/skill/conversation/add", request, &response); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	delete(s.active[skillSessionKey(identity)], identity.TurnID)
+	s.mu.Unlock()
 	if response.Status == "archived" {
 		s.forget(identity)
 		return nil
@@ -172,7 +177,9 @@ func (s *skillLifecycle) schedule(identity model.IdentityScope) {
 		timer.Stop()
 	}
 	s.sessions[key] = identity
-	s.scheduleLocked(key, identity)
+	if len(s.active[key]) == 0 {
+		s.scheduleLocked(key, identity)
+	}
 }
 
 func (s *skillLifecycle) scheduleLocked(key string, identity model.IdentityScope) {
@@ -183,7 +190,7 @@ func (s *skillLifecycle) scheduleLocked(key string, identity model.IdentityScope
 
 func (s *skillLifecycle) archiveOnTimer(key string, identity model.IdentityScope, version uint64) {
 	s.mu.Lock()
-	if s.closed || s.versions[key] != version {
+	if s.closed || len(s.active[key]) > 0 || s.versions[key] != version {
 		s.mu.Unlock()
 		return
 	}
@@ -200,10 +207,10 @@ func (s *skillLifecycle) archiveOnTimer(key string, identity model.IdentityScope
 	if err == nil {
 		delete(s.sessions, key)
 		delete(s.timers, key)
-		delete(s.versions, key)
+		s.versions[key]++
 		return
 	}
-	if !s.closed {
+	if !s.closed && len(s.active[key]) == 0 {
 		s.scheduleLocked(key, identity)
 	}
 }
@@ -216,8 +223,10 @@ func (s *skillLifecycle) forget(identity model.IdentityScope) {
 		timer.Stop()
 	}
 	delete(s.timers, key)
-	delete(s.sessions, key)
-	delete(s.versions, key)
+	if len(s.active[key]) == 0 {
+		delete(s.sessions, key)
+	}
+	s.versions[key]++
 }
 
 func (s *skillLifecycle) archiveSession(ctx context.Context, identity model.IdentityScope) error {
@@ -238,7 +247,8 @@ func (s *skillLifecycle) archiveSession(ctx context.Context, identity model.Iden
 	}
 	delete(s.timers, key)
 	delete(s.sessions, key)
-	delete(s.versions, key)
+	delete(s.active, key)
+	s.versions[key]++
 	return nil
 }
 
@@ -266,7 +276,9 @@ func (s *skillLifecycle) shutdown(ctx context.Context) error {
 	s.closed = true
 	sessions := make([]model.IdentityScope, 0, len(s.sessions))
 	for key, identity := range s.sessions {
-		sessions = append(sessions, identity)
+		if len(s.active[key]) == 0 {
+			sessions = append(sessions, identity)
+		}
 		if timer := s.timers[key]; timer != nil {
 			timer.Stop()
 		}

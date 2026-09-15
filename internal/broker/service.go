@@ -57,6 +57,11 @@ func (s Service) SubmitTurn(ctx context.Context, envelope journal.Envelope) (Sub
 	if err != nil {
 		return SubmitReceipt{}, err
 	}
+	if j, ok := s.Journal.(observationJournal); ok {
+		if err := j.CompleteObservation(ctx, envelope.AdapterID, envelope.Turn.Identity, envelope.Turn.Messages); err != nil {
+			return SubmitReceipt{}, err
+		}
+	}
 	return SubmitReceipt{EventID: event.ID, Queued: inserted}, nil
 }
 
@@ -64,7 +69,10 @@ func (s Service) SubmitFragment(ctx context.Context, fragment journal.Fragment) 
 	if s.Journal == nil {
 		return errors.New("journal is unavailable")
 	}
-	return s.Journal.RecordFragment(ctx, fragment)
+	if err := s.Journal.RecordFragment(ctx, fragment); err != nil {
+		return err
+	}
+	return s.observeFragment(ctx, fragment)
 }
 
 func (s Service) Recall(ctx context.Context, route connection.RouteKey, idempotencyKey string, request model.RecallRequest) (model.ContextBundle, error) {
@@ -86,5 +94,10 @@ func (s Service) FinalizeSession(ctx context.Context, request journal.Finalizati
 		return 0, errors.New("journal is unavailable")
 	}
 	_, _, pending, err := s.Journal.RequestFinalization(ctx, request)
+	if err == nil {
+		if j, ok := s.Journal.(observationJournal); ok {
+			err = j.EndSessionObservations(ctx, request.AdapterID, request.Identity)
+		}
+	}
 	return pending, err
 }

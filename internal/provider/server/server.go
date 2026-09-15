@@ -344,6 +344,24 @@ func (s *Server) prepareCall(
 			result, err := s.handler.Recall(callCtx, params)
 			return resultPayload(id, result, err)
 		}, nil
+	case "observe_user_turn":
+		var params protocol.ObserveUserTurnParams
+		if err := protocol.DecodeParams(message.Params, &params); err != nil {
+			return nil, nil, nil, err
+		}
+		requestCtx, cancel, err := contextForMeta(ctx, params.Meta)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		observer, ok := s.handler.(UserTurnHandler)
+		if !ok {
+			cancel()
+			return nil, nil, nil, errors.New("observe_user_turn unavailable")
+		}
+		return requestCtx, cancel, func(callCtx context.Context, id string) json.RawMessage {
+			result, err := observer.ObserveUserTurn(callCtx, params)
+			return resultPayload(id, result, err)
+		}, nil
 	case "archive_session":
 		var params protocol.ArchiveSessionParams
 		if err := protocol.DecodeParams(message.Params, &params); err != nil {

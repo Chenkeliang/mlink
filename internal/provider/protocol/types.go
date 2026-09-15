@@ -151,12 +151,13 @@ type wireErrorData struct {
 }
 
 var knownRequestMethods = map[string]struct{}{
-	"initialize":      {},
-	"health":          {},
-	"capture_turn":    {},
-	"recall":          {},
-	"archive_session": {},
-	"shutdown":        {},
+	"initialize":        {},
+	"health":            {},
+	"capture_turn":      {},
+	"recall":            {},
+	"archive_session":   {},
+	"observe_user_turn": {},
+	"shutdown":          {},
 }
 
 func ParseMessage(raw []byte) (Message, error) {

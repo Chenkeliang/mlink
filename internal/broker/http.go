@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -90,6 +91,7 @@ func (s Server) Handler(local bool) http.Handler {
 	mux.HandleFunc("POST /v1/recall", s.handleRecall(local))
 	mux.HandleFunc("POST /v1/turn-fragments", s.handleFragment(local))
 	mux.HandleFunc("POST /v1/turns", s.handleTurn(local))
+	mux.HandleFunc("POST /v1/turns/end", s.handleEndTurn(local))
 	mux.HandleFunc("POST /v1/sessions/{session_id}/flush", s.handleFlush(local))
 	return mux
 }
@@ -186,7 +188,7 @@ func (s Server) handleFragment(local bool) http.HandlerFunc {
 			s.writeAuthorizationError(response, err)
 			return
 		}
-		err = s.Service.SubmitFragment(request.Context(), journal.Fragment{
+		fragment := journal.Fragment{
 			AdapterID: input.AdapterID,
 			Route:     authorization.Route,
 			Identity: model.IdentityScope{
@@ -201,7 +203,8 @@ func (s Server) handleFragment(local bool) http.HandlerFunc {
 			Role:        input.Role,
 			Content:     input.Content,
 			OccurredAt:  input.OccurredAt,
-		})
+		}
+		err = s.Service.SubmitFragment(request.Context(), fragment)
 		if err != nil {
 			if errors.Is(err, journal.ErrTurnConflict) {
 				writeAPIError(response, http.StatusConflict, "turn_conflict")
@@ -210,7 +213,15 @@ func (s Server) handleFragment(local bool) http.HandlerFunc {
 			writeAPIError(response, http.StatusServiceUnavailable, "journal_unavailable")
 			return
 		}
-		writeJSON(response, http.StatusAccepted, map[string]any{"queued": true})
+		reply := map[string]any{"queued": true}
+		if j, ok := s.Service.Journal.(interface {
+			ObservationReceipt(context.Context, string, model.IdentityScope) (model.ObservationReceipt, error)
+		}); ok {
+			if receipt, err := j.ObservationReceipt(request.Context(), input.AdapterID, fragment.Identity); err == nil {
+				reply["observation"] = receipt
+			}
+		}
+		writeJSON(response, http.StatusAccepted, reply)
 	}
 }
 
