@@ -812,7 +812,10 @@ func (s *processSession) requireReadyCapability(name string) (manifest.Capabilit
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	if s.state != StateReady {
-		return manifest.CapabilityDescriptor{}, fmt.Errorf("provider session is not ready: %s", s.state)
+		return manifest.CapabilityDescriptor{}, &CallError{
+			Code: protocol.ErrorTemporarilyUnavailable, Delivery: DeliveryNotSent,
+			Message: fmt.Sprintf("provider session is not ready: %s", s.state),
+		}
 	}
 	descriptor, exists := s.capabilities[name]
 	if !exists {

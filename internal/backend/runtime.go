@@ -31,16 +31,18 @@ type RuntimeConfig struct {
 }
 
 type Runtime struct {
-	mu       sync.RWMutex
-	config   RuntimeConfig
-	sessions map[string]host.Session
+	mu        sync.RWMutex
+	config    RuntimeConfig
+	sessions  map[string]host.Session
+	snapshots map[string]connection.ConnectionSnapshot
+	closed    bool
 }
 
 func NewRuntime(cfg RuntimeConfig) *Runtime {
 	if cfg.StartProvider == nil {
 		cfg.StartProvider = host.Start
 	}
-	return &Runtime{config: cfg, sessions: make(map[string]host.Session)}
+	return &Runtime{config: cfg, sessions: make(map[string]host.Session), snapshots: make(map[string]connection.ConnectionSnapshot)}
 }
 
 func (r *Runtime) Start(ctx context.Context, connectionConfig config.Connection) (host.Session, error) {
@@ -64,13 +66,21 @@ func (r *Runtime) Start(ctx context.Context, connectionConfig config.Connection)
 	if err != nil {
 		return nil, err
 	}
-	key := routeKey(snapshot.RouteKey())
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.startSnapshotLocked(ctx, snapshot)
+}
+
+// Recovery uses the original immutable route/config, resolving secret references afresh.
+func (r *Runtime) startSnapshotLocked(ctx context.Context, snapshot connection.ConnectionSnapshot) (host.Session, error) {
+	if r.closed {
+		return nil, ErrConnectionUnavailable
+	}
+	key := routeKey(snapshot.RouteKey())
 	if session := r.sessions[key]; session != nil && session.State() == host.StateReady {
 		return session, nil
 	}
-	secrets, err := r.resolveSecrets(ctx, connectionConfig.SecretRefs)
+	secrets, err := r.resolveSecrets(ctx, snapshot.SecretRefs())
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +100,29 @@ func (r *Runtime) Start(ctx context.Context, connectionConfig config.Connection)
 		return nil, errors.New("Provider Session returned a different route")
 	}
 	r.sessions[key] = session
+	r.snapshots[key] = snapshot
+	return session, nil
+}
+
+func (r *Runtime) sessionForCall(ctx context.Context, route connection.RouteKey) (host.Session, error) {
+	if r == nil {
+		return nil, ErrConnectionUnavailable
+	}
+	if session, ok := r.Session(route); ok {
+		return session, nil
+	}
+	// Concurrent callers share one replacement; no business request is replayed here.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snapshot, ok := r.snapshots[routeKey(route)]
+	if !ok || r.closed {
+		return nil, ErrConnectionUnavailable
+	}
+	session, err := r.startSnapshotLocked(ctx, snapshot)
+	if err != nil {
+		// No business request was sent. The journal's existing backoff is safe.
+		return nil, &host.CallError{Code: protocol.ErrorTemporarilyUnavailable, Delivery: host.DeliveryNotSent, Message: "provider restart failed"}
+	}
 	return session, nil
 }
 
@@ -104,28 +137,31 @@ func (r *Runtime) Session(route connection.RouteKey) (host.Session, bool) {
 }
 
 func (r *Runtime) CaptureTurn(ctx context.Context, route connection.RouteKey, meta host.CallMeta, turn model.Turn) (model.WriteReceipt, error) {
-	session, ok := r.Session(route)
-	if !ok {
-		return model.WriteReceipt{}, ErrConnectionUnavailable
+	session, err := r.sessionForCall(ctx, route)
+	if err != nil {
+		return model.WriteReceipt{}, err
 	}
 	return session.CaptureTurn(ctx, meta, turn)
 }
 
 func (r *Runtime) Recall(ctx context.Context, route connection.RouteKey, meta host.CallMeta, request model.RecallRequest) (model.ContextBundle, error) {
-	session, ok := r.Session(route)
-	if !ok {
-		return model.ContextBundle{}, ErrConnectionUnavailable
+	session, err := r.sessionForCall(ctx, route)
+	if err != nil {
+		return model.ContextBundle{}, err
 	}
 	return session.Recall(ctx, meta, request)
 }
 
 func (r *Runtime) ArchiveSession(ctx context.Context, route connection.RouteKey, meta host.CallMeta, identity model.IdentityScope) error {
-	session, ok := r.Session(route)
-	if !ok {
+	session, err := r.sessionForCall(ctx, route)
+	if errors.Is(err, ErrConnectionUnavailable) {
 		return &host.CallError{
 			Code: protocol.ErrorTemporarilyUnavailable, IdempotencyKey: meta.IdempotencyKey,
 			Delivery: host.DeliveryNotSent, ReplaySafe: true, Message: "provider session is unavailable",
 		}
+	}
+	if err != nil {
+		return err
 	}
 	if _, supported := session.Capabilities()["archive_session"]; !supported {
 		return host.ErrCapabilityUnavailable
@@ -147,6 +183,8 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 		sessions = append(sessions, session)
 	}
 	r.sessions = make(map[string]host.Session)
+	r.snapshots = make(map[string]connection.ConnectionSnapshot)
+	r.closed = true
 	r.mu.Unlock()
 	var shutdownErrors []error
 	for _, session := range sessions {
