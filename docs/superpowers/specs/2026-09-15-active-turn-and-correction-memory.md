@@ -23,9 +23,10 @@ to potentially superseded Skills. Keep model/API/auth settings untouched.
   turns keep the session paused. Provider shutdown must not archive active
   sessions. SessionEnd remains an explicit finalization boundary.
 - Explicit correction detection is conservative, based on the direct user
-  message, not recalled text or tool output. Corrections use `/v3/skill/extract`
+  message, not recalled text or tool output. Corrections append to the original Skill buffer and immediately force-archive it
   with prior messages, verbatim correction and relevant Skill ID/version
-  references. Native Skill updates retain version lineage. The API submission
+  references. Native Skill updates retain version lineage. This consumes the stale buffer together with the correction, preventing a later
+  idle archive from reapplying the old conclusions. The API submission
   is immediate; model extraction remains asynchronous and is reported as such.
 - Failure to submit a correction is recorded, not represented as success.
   The completed turn still reaches the ordinary Skill path. Unknown-result

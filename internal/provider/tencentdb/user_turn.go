@@ -84,11 +84,19 @@ func (s *skillLifecycle) observe(ctx context.Context, turn model.UserTurn) (mode
 	var result struct {
 		TaskID string `json:"task_id"`
 	}
-	err = s.client.post(ctx, "/v3/skill/extract", map[string]any{
-		"space_id": s.client.serviceID, "team_id": turn.Identity.TenantID, "agent_id": turn.Identity.AgentID, "user_id": turn.Identity.UserID,
-		"session_id": turn.Identity.SessionID, "task_id": turn.Identity.TurnID, "messages": messages,
-		"reason": "Explicit user correction: prioritize the newest user statement over earlier assistant conclusions; update the matching existing Skill when applicable and retain the source turn and superseded Skill/version linkage. Unrelated Skills must remain unchanged.",
+	// Put the correction into the original buffer before consuming it. Otherwise
+	// a later idle archive could re-extract the stale buffer after the correction.
+	err = s.client.post(ctx, "/v3/skill/conversation/add", map[string]any{
+		"team_id": turn.Identity.TenantID, "agent_id": turn.Identity.AgentID, "user_id": turn.Identity.UserID,
+		"session_id": turn.Identity.SessionID, "messages": messages,
 	}, &result)
+	if err == nil && result.TaskID == "" {
+		err = s.client.post(ctx, "/v3/skill/conversation/force-archive", map[string]any{
+			"space_id": s.client.serviceID, "team_id": turn.Identity.TenantID, "agent_id": turn.Identity.AgentID, "user_id": turn.Identity.UserID,
+			"session_id": turn.Identity.SessionID,
+			"reason":     "Explicit user correction (source turn " + turn.Identity.TurnID + "): prioritize the latest user statement over earlier assistant conclusions; update only matching Skills and retain superseded Skill/version linkage.",
+		}, &result)
+	}
 	if err != nil || result.TaskID == "" {
 		receipt.CorrectionStatus = "failed"
 		receipt.Error = "correction_submission_failed"

@@ -22,7 +22,9 @@ func TestBundledProcessObservesCorrectionWithoutCompletedTurn(t *testing.T) {
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"skill_id":"old-rule","version":2}]}}`))
 		case "/v3/skill/get":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"content":"old rule"}}`))
-		case "/v3/skill/extract":
+		case "/v3/skill/conversation/add":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"buffered"}}`))
+		case "/v3/skill/conversation/force-archive":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"task_id":"immediate-correction"}}`))
 		default:
 			t.Errorf("unexpected request before turn completion: %s", r.URL.Path)

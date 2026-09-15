@@ -73,9 +73,11 @@ func TestExplicitCorrectionSubmitsBeforeTurnCompletionWithProvenance(t *testing.
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"skill_id":"skl-old","version":2}]}}`))
 		case "/v3/skill/get":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"content":"Historical rule: never use /ops/exec"}}`))
-		case "/v3/skill/extract":
-			extracts.Add(1)
+		case "/v3/skill/conversation/add":
 			_ = json.NewDecoder(r.Body).Decode(&submitted)
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"buffered"}}`))
+		case "/v3/skill/conversation/force-archive":
+			extracts.Add(1)
 			_, _ = w.Write([]byte(`{"code":0,"data":{"task_id":"priority-task"}}`))
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
