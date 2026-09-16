@@ -96,6 +96,7 @@ Claude Code 会在用户改动任意无关设置时重写 `settings.json`（键�
 - 不变量在 Plan 中为 preserved；`Verify` 拒绝被篡改的受保护设置。
 - 卸载后 owned 条目消失、用户 Hook 与其他设置仍在、空 `hooks` 键被移除。
 - CLI `hook claude <Event>` 与 `adapter enable claude` 分发。
+- 卸载时若仍有适配器在配置中启用（例如只卸 codex/pi/hermes/cursor 而保留 claude），不得判定为完整卸载：共享密钥、控制面状态与 Broker 必须保留，未选中的 Hook 也不得被删除。
 
 实机验收（另开 `docs/testing/mlink-claude-code-live.md`）：
 

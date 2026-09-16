@@ -59,7 +59,10 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 	if err != nil {
 		return install.ChangeSet{}, err
 	}
-	full := isFullAgentSet(agents)
+	full, activeConfiguration, err := service.isFullUninstall(ctx, agents)
+	if err != nil {
+		return install.ChangeSet{}, err
+	}
 	resources := make([]install.DesiredResource, 0, len(backups)+1)
 	if agentSelected(agents, Cursor) {
 		cursorResources, err := service.cursorUninstallResources(ctx, backups)
@@ -74,13 +77,6 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 			return install.ChangeSet{}, err
 		}
 		resources = append(resources, claudeResources...)
-	}
-	var activeConfiguration config.Config
-	if full {
-		activeConfiguration, err = service.activeConfiguration(ctx)
-		if err != nil {
-			return install.ChangeSet{}, err
-		}
 	}
 	if full && containsLaunchAgentBackup(backups) {
 		unload, err := launchagent.PlanUnload(service.Paths, service.UID)
@@ -130,12 +126,12 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 	if err != nil {
 		return err
 	}
+	full, configuration, err := service.isFullUninstall(ctx, agents)
+	if err != nil {
+		return err
+	}
 	var removedSecrets []managedSecret
-	if isFullAgentSet(agents) && service.Secrets != nil {
-		configuration, err := service.activeConfiguration(ctx)
-		if err != nil {
-			return err
-		}
+	if full && service.Secrets != nil {
 		removedSecrets, err = service.removeInstallSecrets(ctx, configuration)
 		if err != nil {
 			return err
@@ -148,7 +144,7 @@ func (service *Service) ApplyUninstall(ctx context.Context, planID string, reque
 		}
 		return err
 	}
-	if isFullAgentSet(agents) {
+	if full {
 		if service.ControlPlaneStates != nil {
 			if err := service.ControlPlaneStates.MarkControlPlaneState(ctx, "inactive"); err != nil {
 				return err
@@ -245,6 +241,27 @@ func panelUninstallResources(registryPath string) []install.DesiredResource {
 			SemanticDiff: []install.SemanticDiff{{Path: "panel:registry", Before: "protected local credential registry", After: "removed"}},
 		},
 	}
+}
+
+// isFullUninstall reports whether the selection tears MLink down completely.
+// A selection that leaves an adapter enabled in the active config must not
+// remove the shared secrets, control-plane state and Broker its Hooks still
+// depend on, however many Agents it names.
+func (service *Service) isFullUninstall(ctx context.Context, agents []Agent) (bool, config.Config, error) {
+	if !isFullAgentSet(agents) {
+		return false, config.Config{}, nil
+	}
+	configuration, err := service.activeConfiguration(ctx)
+	if err != nil {
+		return false, config.Config{}, err
+	}
+	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor, Claude} {
+		adapter, exists := configuration.Adapters[string(agent)]
+		if exists && adapter.Enabled && !agentSelected(agents, agent) {
+			return false, config.Config{}, nil
+		}
+	}
+	return true, configuration, nil
 }
 
 func isFullAgentSet(agents []Agent) bool {

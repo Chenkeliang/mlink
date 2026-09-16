@@ -289,3 +289,34 @@ func TestUninstallRemovesOnlyOwnedClaudeHooks(t *testing.T) {
 		t.Fatalf("unrelated Claude Code settings were removed: %s", settings)
 	}
 }
+
+func TestUninstallLeavingClaudeEnabledIsNotAFullTeardown(t *testing.T) {
+	service, target, secrets := newInstallFixture(t)
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: []byte(`{"model":"opus[1m]"}`), mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installRequest.Agents = []Agent{Codex, Pi, Hermes, Cursor, Claude}
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Cursor}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := target.files[service.Paths.Binary]; !exists {
+		t.Fatal("partial uninstall removed the MLink binary Claude Code Hooks still call")
+	}
+	if _, exists := secrets.values["identity/hmac-key"]; !exists {
+		t.Fatal("partial uninstall deleted shared install secrets")
+	}
+	if settings := string(target.files["/Users/test/.claude/settings.json"].content); !strings.Contains(settings, "hook claude Stop") {
+		t.Fatalf("unselected Claude Code Hooks were removed: %s", settings)
+	}
+}
