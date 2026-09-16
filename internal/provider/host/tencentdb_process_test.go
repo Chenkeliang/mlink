@@ -41,6 +41,12 @@ func TestBundledTencentDBProviderProcess(t *testing.T) {
 				t.Errorf("decode capture request: %v", err)
 			}
 			_, _ = w.Write([]byte(`{"code":0,"data":{"accepted_ids":["bundled-ref"]}}`))
+		case "/v3/skill/conversation/add":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
+		case "/v3/skill/search":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[]}}`))
+		case "/v3/skill/conversation/force-archive":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"status":"archived"}}`))
 		case "/v3/atomic/search":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"id":"bundled-memory","type":"instruction","content":"MLink bundled process"}]}}`))
 		default:
@@ -92,8 +98,12 @@ func TestBundledTencentDBProviderProcess(t *testing.T) {
 	if err != nil || receipt.ReceiptID == "" || receipt.ProviderRefs[0] != "bundled-ref" || receipt.ReplaySafe {
 		t.Fatalf("CaptureTurn() = %#v, %v", receipt, err)
 	}
-	identity.SessionID = ""
+	var archiver SessionArchiver = session
 	identity.TurnID = ""
+	if err := archiver.ArchiveSession(context.Background(), CallMeta{IdempotencyKey: "bundled-archive"}, identity); err != nil {
+		t.Fatalf("ArchiveSession() error = %v", err)
+	}
+	identity.SessionID = ""
 	bundle, err := session.Recall(context.Background(), CallMeta{}, model.RecallRequest{
 		Identity: identity, Query: "MLink", MaxItems: 5,
 	})
@@ -108,13 +118,20 @@ func TestBundledTencentDBProviderProcess(t *testing.T) {
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
-	wantPaths := []string{"GET /health", "POST /v3/conversation/add", "POST /v3/atomic/search"}
+	wantPaths := []string{"GET /health", "POST /v3/conversation/add", "POST /v3/skill/conversation/add", "POST /v3/skill/conversation/force-archive", "POST /v3/skill/search", "POST /v3/atomic/search"}
 	if len(gotPaths) != len(wantPaths) {
 		t.Fatalf("backend paths = %#v, want %#v", gotPaths, wantPaths)
 	}
-	for index := range wantPaths {
-		if gotPaths[index] != wantPaths[index] {
-			t.Fatalf("backend path[%d] = %q, want %q", index, gotPaths[index], wantPaths[index])
+	wantCounts := make(map[string]int, len(wantPaths))
+	for _, path := range wantPaths {
+		wantCounts[path]++
+	}
+	for _, path := range gotPaths {
+		wantCounts[path]--
+	}
+	for path, remaining := range wantCounts {
+		if remaining != 0 {
+			t.Fatalf("backend path count for %q = %d in %#v", path, remaining, gotPaths)
 		}
 	}
 }

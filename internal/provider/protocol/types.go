@@ -84,6 +84,15 @@ type RecallParams struct {
 	Request model.RecallRequest `json:"request"`
 }
 
+type ArchiveSessionParams struct {
+	Meta     RequestMeta         `json:"meta"`
+	Identity model.IdentityScope `json:"identity"`
+}
+
+type ArchiveSessionResult struct {
+	Archived bool `json:"archived"`
+}
+
 type ShutdownParams struct {
 	Meta RequestMeta `json:"meta"`
 }
@@ -142,11 +151,13 @@ type wireErrorData struct {
 }
 
 var knownRequestMethods = map[string]struct{}{
-	"initialize":   {},
-	"health":       {},
-	"capture_turn": {},
-	"recall":       {},
-	"shutdown":     {},
+	"initialize":        {},
+	"health":            {},
+	"capture_turn":      {},
+	"recall":            {},
+	"archive_session":   {},
+	"observe_user_turn": {},
+	"shutdown":          {},
 }
 
 func ParseMessage(raw []byte) (Message, error) {

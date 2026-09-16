@@ -65,6 +65,7 @@ func (h *ServerHandler) Initialize(_ context.Context, params protocol.Initialize
 	h.mu.Lock()
 	h.client = client
 	h.provider = NewProvider(client)
+	h.provider.enableSkills(defaultSkillIdleArchiveAfter)
 	h.mu.Unlock()
 	return protocol.InitializeResult{
 		ProviderID: providerID, ProviderVersion: providerVersion, ProtocolVersion: protocol.Version,
@@ -112,12 +113,27 @@ func (h *ServerHandler) Recall(ctx context.Context, params protocol.RecallParams
 	return bundle, nil
 }
 
-func (h *ServerHandler) Shutdown(context.Context, protocol.ShutdownParams) error {
+func (h *ServerHandler) ArchiveSession(ctx context.Context, params protocol.ArchiveSessionParams) (protocol.ArchiveSessionResult, error) {
+	_, provider, err := h.current()
+	if err != nil {
+		return protocol.ArchiveSessionResult{}, err
+	}
+	if err := provider.ArchiveSession(ctx, params.Identity); err != nil {
+		return protocol.ArchiveSessionResult{}, mapProviderError(err)
+	}
+	return protocol.ArchiveSessionResult{Archived: true}, nil
+}
+
+func (h *ServerHandler) Shutdown(ctx context.Context, _ protocol.ShutdownParams) error {
 	h.mu.Lock()
+	provider := h.provider
 	h.client = nil
 	h.provider = nil
 	h.mu.Unlock()
-	return nil
+	if provider == nil {
+		return nil
+	}
+	return provider.Shutdown(ctx)
 }
 
 func (h *ServerHandler) current() (*Client, *Provider, error) {
@@ -158,6 +174,11 @@ func tencentDBCapabilities() map[string]manifest.CapabilityDescriptor {
 		"recall": {
 			Version: 1, Scopes: []string{"user", "agent"}, MaxRequestBytes: 256 << 10,
 			MaxResultItems: 20, MaxInFlight: 4,
+		},
+		"observe_user_turn": {Version: 1, MaxRequestBytes: 256 << 10, MaxInFlight: 4, ReplaySafe: false, Ordering: "turn"},
+		"archive_session": {
+			Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 4,
+			ReplaySafe: true, Ordering: "session",
 		},
 	}
 }

@@ -75,6 +75,11 @@ func Handle(ctx context.Context, eventName string, stdin io.Reader, stdout io.Wr
 				OccurredAt: time.Now().UTC(),
 			})
 		}
+		if ender, ok := client.(interface {
+			EndTurn(context.Context, broker.TurnInput) error
+		}); ok {
+			_ = ender.EndTurn(ctx, broker.TurnInput{SessionID: input.SessionID, TurnID: input.TurnID})
+		}
 		return json.NewEncoder(stdout).Encode(map[string]any{})
 	case "SessionEnd":
 		if client != nil {

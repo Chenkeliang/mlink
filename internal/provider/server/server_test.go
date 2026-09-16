@@ -77,6 +77,33 @@ func TestServerDispatchesLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerDispatchesOptionalArchiveSession(t *testing.T) {
+	handler := &testHandler{capabilities: map[string]manifest.CapabilityDescriptor{
+		"archive_session": {
+			Version: 1, MaxRequestBytes: 16 << 10, MaxInFlight: 1,
+			ReplaySafe: true, Ordering: "session",
+		},
+	}}
+	harness := newHarness(t, handler)
+	harness.initialize(t)
+	harness.sendRequest(t, "2", "archive_session", protocol.ArchiveSessionParams{
+		Meta: futureMeta("archive-2"),
+		Identity: model.IdentityScope{
+			ConnectionID: "local", TenantID: "team-a", AgentID: "agent-a",
+			UserID: "user-a", SessionID: "session-a",
+		},
+	})
+	response := harness.readResponse(t)
+	var result protocol.ArchiveSessionResult
+	if response.Error != nil || protocol.DecodeParams(response.Result, &result) != nil || !result.Archived {
+		t.Fatalf("archive response = %#v", response)
+	}
+	harness.shutdown(t, "3")
+	if got := handler.callNames(); len(got) != 3 || got[1] != "archive" {
+		t.Fatalf("handler calls = %#v", got)
+	}
+}
+
 func TestServerCancelRequestCancelsHandlerContext(t *testing.T) {
 	started := make(chan struct{})
 	handler := &testHandler{health: func(ctx context.Context, _ protocol.HealthParams) (protocol.HealthResult, error) {
@@ -374,6 +401,11 @@ func (h *testHandler) CaptureTurn(context.Context, protocol.CaptureParams) (mode
 func (h *testHandler) Recall(context.Context, protocol.RecallParams) (model.ContextBundle, error) {
 	h.record("recall")
 	return model.ContextBundle{}, nil
+}
+
+func (h *testHandler) ArchiveSession(context.Context, protocol.ArchiveSessionParams) (protocol.ArchiveSessionResult, error) {
+	h.record("archive")
+	return protocol.ArchiveSessionResult{Archived: true}, nil
 }
 
 func (h *testHandler) Shutdown(context.Context, protocol.ShutdownParams) error {

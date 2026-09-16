@@ -35,6 +35,12 @@ var controlPlaneCapacityMigration string
 //go:embed migrations/007_restore_operations.sql
 var restoreOperationsMigration string
 
+//go:embed migrations/008_session_finalizations.sql
+var sessionFinalizationsMigration string
+
+//go:embed migrations/009_user_turn_observations.sql
+var userTurnObservationsMigration string
+
 type Store struct {
 	db *sql.DB
 }
@@ -117,6 +123,8 @@ func (s *Store) initialize(ctx context.Context) error {
 		{version: 5, sql: eventResolutionMigration},
 		{version: 6, sql: controlPlaneCapacityMigration},
 		{version: 7, sql: restoreOperationsMigration},
+		{version: 8, sql: sessionFinalizationsMigration},
+		{version: 9, sql: userTurnObservationsMigration},
 	}
 	for _, migration := range migrations {
 		var applied int

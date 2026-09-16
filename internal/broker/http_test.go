@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"mlink/internal/config"
 	"mlink/internal/connection"
@@ -249,6 +250,39 @@ func TestBrokerRejectsUnknownJSONFields(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d", response.StatusCode)
+	}
+}
+
+func TestSessionFlushPersistsResolvedFinalization(t *testing.T) {
+	store := brokerTestStore(t)
+	route := connection.RouteKey{
+		ConnectionID: "local", ProviderID: "dev.mlink.tencentdb",
+		ProviderVersion: "0.1.0", ConfigRevision: "rev-1",
+	}
+	server := httptest.NewServer((Server{
+		Service: Service{Journal: store},
+		Authorizer: Authorizer{
+			Resolver: identity.Resolver{NamespaceID: "personal", Key: bytes.Repeat([]byte{0x2a}, 32)},
+			Grants: []Grant{{
+				AdapterID: "codex", Mode: IdentityFixed, Route: route,
+				TenantID: "personal", AgentID: "codex", UserID: "usr-codex",
+			}},
+		},
+	}).Handler(true))
+	defer server.Close()
+	response := postBrokerJSON(t, server.URL+"/v1/sessions/session-final/flush", "", map[string]any{
+		"adapter_id": "codex",
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	claimed, err := store.ClaimReadyFinalizations(context.Background(), time.Now().UTC(), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed = %#v %v", claimed, err)
+	}
+	if claimed[0].Route != route || claimed[0].Identity.UserID != "usr-codex" || claimed[0].Identity.SessionID != "session-final" {
+		t.Fatalf("finalization = %#v", claimed[0])
 	}
 }
 

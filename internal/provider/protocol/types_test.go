@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"mlink/internal/model"
 )
 
 func TestParseMessagePreservesLargeDecimalStringID(t *testing.T) {
@@ -97,6 +99,23 @@ func TestEncodeAndParseResponseResultOrError(t *testing.T) {
 	}
 	if !json.Valid(failure.Result) && len(failure.Result) != 0 {
 		t.Fatalf("unexpected result = %s", failure.Result)
+	}
+}
+
+func TestEncodeArchiveSessionRequest(t *testing.T) {
+	raw, err := EncodeRequest("4", "archive_session", ArchiveSessionParams{
+		Meta: RequestMeta{RequestID: "archive-4"},
+		Identity: model.IdentityScope{
+			ConnectionID: "local", TenantID: "team-a", AgentID: "agent-a",
+			UserID: "user-a", SessionID: "session-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	message, err := ParseMessage(raw)
+	if err != nil || message.Method != "archive_session" || message.ID != "4" {
+		t.Fatalf("message = %#v, %v", message, err)
 	}
 }
 

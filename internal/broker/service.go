@@ -16,6 +16,10 @@ type Provider interface {
 	Recall(context.Context, connection.RouteKey, host.CallMeta, model.RecallRequest) (model.ContextBundle, error)
 }
 
+type SessionArchiver interface {
+	ArchiveSession(context.Context, connection.RouteKey, host.CallMeta, model.IdentityScope) error
+}
+
 type Journal interface {
 	RecordFragment(context.Context, journal.Fragment) error
 	ReconcileCompleteFragments(context.Context, int) (int, error)
@@ -27,6 +31,12 @@ type Journal interface {
 	MarkPermanent(context.Context, string, string) error
 	MarkAmbiguous(context.Context, string, string) error
 	FlushSession(context.Context, string, string) (int, error)
+	RequestFinalization(context.Context, journal.FinalizationRequest) (journal.Finalization, bool, int, error)
+	ClaimReadyFinalizations(context.Context, time.Time, int) ([]journal.Finalization, error)
+	MarkFinalizationCompleted(context.Context, string) error
+	MarkFinalizationRetryable(context.Context, string, string, time.Time) error
+	MarkFinalizationPermanent(context.Context, string, string) error
+	MarkFinalizationAmbiguous(context.Context, string, string) error
 }
 
 type SubmitReceipt struct {
@@ -47,6 +57,11 @@ func (s Service) SubmitTurn(ctx context.Context, envelope journal.Envelope) (Sub
 	if err != nil {
 		return SubmitReceipt{}, err
 	}
+	if j, ok := s.Journal.(observationJournal); ok {
+		if err := j.CompleteObservation(ctx, envelope.AdapterID, envelope.Turn.Identity, envelope.Turn.Messages); err != nil {
+			return SubmitReceipt{}, err
+		}
+	}
 	return SubmitReceipt{EventID: event.ID, Queued: inserted}, nil
 }
 
@@ -54,7 +69,10 @@ func (s Service) SubmitFragment(ctx context.Context, fragment journal.Fragment) 
 	if s.Journal == nil {
 		return errors.New("journal is unavailable")
 	}
-	return s.Journal.RecordFragment(ctx, fragment)
+	if err := s.Journal.RecordFragment(ctx, fragment); err != nil {
+		return err
+	}
+	return s.observeFragment(ctx, fragment)
 }
 
 func (s Service) Recall(ctx context.Context, route connection.RouteKey, idempotencyKey string, request model.RecallRequest) (model.ContextBundle, error) {
@@ -69,4 +87,17 @@ func (s Service) Flush(ctx context.Context, adapterID, sessionID string) (int, e
 		return 0, errors.New("journal is unavailable")
 	}
 	return s.Journal.FlushSession(ctx, adapterID, sessionID)
+}
+
+func (s Service) FinalizeSession(ctx context.Context, request journal.FinalizationRequest) (int, error) {
+	if s.Journal == nil {
+		return 0, errors.New("journal is unavailable")
+	}
+	_, _, pending, err := s.Journal.RequestFinalization(ctx, request)
+	if err == nil {
+		if j, ok := s.Journal.(observationJournal); ok {
+			err = j.EndSessionObservations(ctx, request.AdapterID, request.Identity)
+		}
+	}
+	return pending, err
 }

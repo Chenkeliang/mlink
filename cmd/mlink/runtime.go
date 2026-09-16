@@ -45,6 +45,7 @@ import (
 	"mlink/internal/mcpserver"
 	"mlink/internal/model"
 	"mlink/internal/panel"
+	"mlink/internal/provider/host"
 	"mlink/internal/provider/lifecycle"
 	"mlink/internal/provider/tencentdb"
 	"mlink/internal/secret"
@@ -308,6 +309,15 @@ func (runtime *runtimeApplication) ServeBroker(ctx context.Context) error {
 		defer cancel()
 		_ = providerRuntime.Shutdown(shutdownCtx)
 	}()
+	active, err := journalStore.ActiveObservations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, observation := range active {
+		if _, err := providerRuntime.ObserveUserTurn(ctx, observation.Route, host.CallMeta{IdempotencyKey: observation.Turn.Identity.TurnID}, observation.Turn); err != nil {
+			return fmt.Errorf("restore active memory turn: %w", err)
+		}
+	}
 	server := broker.Server{
 		Service:    broker.Service{Journal: journalStore, Provider: providerRuntime},
 		Authorizer: authorizer,

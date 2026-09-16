@@ -68,6 +68,18 @@ flowchart LR
 
 Broker 是该切片不可省略的公共胶水，不是第二个记忆后端。它只负责规范化事件、身份授权、路由、预算和可靠传输。
 
+### 3.1 TencentDB Skill 生命周期
+
+MLink 保留普通 `/v3/conversation/add` 记忆链路，并在 TencentDB Provider 内复用 MemoryCore 官方 Skill API：
+
+- 完整 Turn 被普通记忆接受后，同步提交 `/v3/skill/conversation/add`；Skill 写入失败只写入 receipt warning，不回滚已经接受的普通记忆。
+- Skill buffer 按 `(team, user, agent, session)` 隔离。每次成功追加后重置十分钟空闲计时器；空闲到期调用 `/v3/skill/conversation/force-archive`。新 Turn 到达后，旧计时器不得归档新 buffer。
+- Provider 正常退出时，停止计时器并尽力归档仍在跟踪的 session。Agent 的 SessionEnd 仍只负责 Broker journal flush，不作为 Skill 唯一触发点。
+- Recall 最多先取两个当前 Agent 拥有的相关 Skill，通过 `/v3/skill/search` 定位、`/v3/skill/get` 读取全文，再用剩余预算追加 L1/L2/L3。
+- Skill API 不可用时，capture 与 recall 都 fail open，普通记忆继续工作，并返回不包含后端细节的 warning。
+
+当前 Agent Hook 只提供 user/assistant 最终文本，所以 Skill 首版按这两类角色积累。后续只有在各 Agent 提供稳定的 tool_call/tool_result 生命周期接口后，才扩展工具证据采集；禁止读取未承诺稳定的内部 transcript。
+
 ## 4. 安装事务
 
 ### 4.1 不可绕过的顺序

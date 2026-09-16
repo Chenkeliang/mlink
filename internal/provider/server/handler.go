@@ -15,6 +15,10 @@ type Handler interface {
 	Shutdown(context.Context, protocol.ShutdownParams) error
 }
 
+type ArchiveSessionHandler interface {
+	ArchiveSession(context.Context, protocol.ArchiveSessionParams) (protocol.ArchiveSessionResult, error)
+}
+
 type HandlerError struct {
 	Code    protocol.ErrorCode
 	Message string

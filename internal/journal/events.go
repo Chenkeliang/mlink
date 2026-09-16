@@ -31,6 +31,7 @@ const (
 	StateRetryableFailed State = "retryable_failed"
 	StatePermanentFailed State = "permanent_failed"
 	StateAmbiguous       State = "ambiguous"
+	StateCompleted       State = "completed"
 )
 
 type Envelope struct {
