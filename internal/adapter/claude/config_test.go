@@ -132,3 +132,25 @@ func TestPlanHooksRejectsRelativeBinary(t *testing.T) {
 		t.Fatal("PlanHooks() error = nil")
 	}
 }
+
+func TestHasOwnedHooksDistinguishesUntouchedSettings(t *testing.T) {
+	existing := readFixture(t, "existing-settings.json")
+	owned, err := HasOwnedHooks(existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned {
+		t.Fatal("settings MLink never touched reported as owned")
+	}
+	planned, err := PlanHooks(existing, "/Users/test/.local/bin/mlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err = HasOwnedHooks(planned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !owned {
+		t.Fatal("installed MLink Hooks not reported as owned")
+	}
+}

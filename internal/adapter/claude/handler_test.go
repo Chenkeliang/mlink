@@ -139,3 +139,17 @@ func readFixture(t *testing.T, name string) []byte {
 	}
 	return data
 }
+
+func TestEmptyPromptFailsOpenInsteadOfShowingAHookError(t *testing.T) {
+	client := &fakeClient{bundle: model.ContextBundle{Items: []model.ContextItem{{ID: "m1", Text: "prefers concise output"}}}}
+	output := new(bytes.Buffer)
+	if err := Handle(context.Background(), "UserPromptSubmit", bytes.NewReader(readFixture(t, "user-prompt-empty.json")), output, client); err != nil {
+		t.Fatalf("attachment-only submit must not fail the turn, got %v", err)
+	}
+	if got := output.String(); got != "{}\n" {
+		t.Fatalf("output = %q", got)
+	}
+	if len(client.fragments) != 0 {
+		t.Fatalf("empty prompt captured: %#v", client.fragments)
+	}
+}

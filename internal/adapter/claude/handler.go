@@ -52,7 +52,10 @@ func Handle(ctx context.Context, eventName string, stdin io.Reader, stdout io.Wr
 		return writeContextOutput(stdout, eventName, bundle)
 	case "UserPromptSubmit":
 		if strings.TrimSpace(input.Prompt) == "" {
-			return errors.New("UserPromptSubmit requires prompt")
+			// An attachment-only submit carries no prompt text. There is
+			// nothing to capture and nothing to query, so stay silent
+			// instead of failing the turn.
+			return json.NewEncoder(stdout).Encode(map[string]any{})
 		}
 		captureFailOpen(ctx, client, input, "user", input.Prompt)
 		bundle := recallFailOpen(ctx, client, broker.RecallInput{Query: input.Prompt})

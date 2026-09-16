@@ -372,6 +372,13 @@ func (service *Service) claudeUninstallResources(ctx context.Context, backups []
 	if err != nil {
 		return nil, err
 	}
+	owned, err := claudeadapter.HasOwnedHooks(current)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, nil
+	}
 	content, err := claudeadapter.RemoveOwnedHooks(current)
 	if err != nil {
 		return nil, err

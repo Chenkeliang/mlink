@@ -64,6 +64,22 @@ func PlanHooks(existing []byte, binaryPath string) ([]byte, error) {
 	return encodeSettingsDocument(document, hooks)
 }
 
+// HasOwnedHooks reports whether the document carries any MLink entry. Removal
+// re-serializes the whole document, so a file MLink never touched must not be
+// rewritten just to normalize it.
+func HasOwnedHooks(existing []byte) (bool, error) {
+	_, hooks, err := parseSettingsDocument(existing)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range claudeEvents {
+		if countOwnedHooks(hooks[event], event) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func RemoveOwnedHooks(existing []byte) ([]byte, error) {
 	document, hooks, err := parseSettingsDocument(existing)
 	if err != nil {
