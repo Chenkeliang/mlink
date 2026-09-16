@@ -408,7 +408,7 @@ func workspacePrincipalManifests(values []journal.PrincipalAgent) []workspacebac
 
 func enabledAgentIDs(configuration config.Config) []string {
 	var result []string
-	for _, agent := range []Agent{Codex, Cursor, Pi, Hermes} {
+	for _, agent := range []Agent{Codex, Cursor, Claude, Pi, Hermes} {
 		if adapter, exists := configuration.Adapters[string(agent)]; exists && adapter.Enabled {
 			result = append(result, string(agent))
 		}

@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	claudeadapter "mlink/internal/adapter/claude"
 	"mlink/internal/adapter/codex"
 	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/adapter/hermes"
@@ -165,6 +166,17 @@ func (service *Service) PlanInstall(ctx context.Context, request InstallRequest)
 				return install.ChangeSet{}, err
 			}
 			resource, err = cursoradapter.DesiredMCPResource(existing, mcpTarget, service.Paths.Binary)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resources = append(resources, resource)
+		case Claude:
+			target := filepath.Join(home, ".claude", "settings.json")
+			existing, err := readOptional(ctx, service.Target, target)
+			if err != nil {
+				return install.ChangeSet{}, err
+			}
+			resource, err := claudeadapter.DesiredHooksResource(existing, target, service.Paths.Binary)
 			if err != nil {
 				return install.ChangeSet{}, err
 			}
@@ -426,14 +438,14 @@ func normalizeAgents(input []Agent) ([]Agent, error) {
 	seen := make(map[Agent]bool, len(input))
 	for _, agent := range input {
 		switch agent {
-		case Codex, Pi, Hermes, Cursor:
+		case Codex, Pi, Hermes, Cursor, Claude:
 			seen[agent] = true
 		default:
 			return nil, fmt.Errorf("unsupported Agent %q", agent)
 		}
 	}
 	result := make([]Agent, 0, len(seen))
-	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor} {
+	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor, Claude} {
 		if seen[agent] {
 			result = append(result, agent)
 		}

@@ -257,3 +257,35 @@ func TestFullUninstallPropagatesUnownedBackendRefusal(t *testing.T) {
 		t.Fatalf("PlanUninstall() error = %v", err)
 	}
 }
+
+func TestUninstallRemovesOnlyOwnedClaudeHooks(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: []byte(`{"model":"opus[1m]","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/Users/test/bin/check","timeout":5}]}]}}`), mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installRequest.Agents = []Agent{Codex, Pi, Hermes, Cursor, Claude}
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	if settings := string(target.files["/Users/test/.claude/settings.json"].content); !strings.Contains(settings, "hook claude Stop") {
+		t.Fatalf("install did not add MLink Hooks: %s", settings)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Cursor, Claude}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	settings := string(target.files["/Users/test/.claude/settings.json"].content)
+	if strings.Contains(settings, "hook claude") {
+		t.Fatalf("owned Claude Code Hooks survived uninstall: %s", settings)
+	}
+	if !strings.Contains(settings, "/Users/test/bin/check") || !strings.Contains(settings, "opus[1m]") {
+		t.Fatalf("unrelated Claude Code settings were removed: %s", settings)
+	}
+}

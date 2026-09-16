@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	claudeadapter "mlink/internal/adapter/claude"
 	cursoradapter "mlink/internal/adapter/cursor"
 	"mlink/internal/config"
 	"mlink/internal/controlplane"
@@ -66,6 +67,13 @@ func (service *Service) PlanUninstall(ctx context.Context, request UninstallRequ
 			return install.ChangeSet{}, err
 		}
 		resources = append(resources, cursorResources...)
+	}
+	if agentSelected(agents, Claude) {
+		claudeResources, err := service.claudeUninstallResources(ctx, backups)
+		if err != nil {
+			return install.ChangeSet{}, err
+		}
+		resources = append(resources, claudeResources...)
 	}
 	var activeConfiguration config.Config
 	if full {
@@ -240,7 +248,16 @@ func panelUninstallResources(registryPath string) []install.DesiredResource {
 }
 
 func isFullAgentSet(agents []Agent) bool {
-	return (len(agents) == 3 || len(agents) == 4) && agents[0] == Codex && agents[1] == Pi && agents[2] == Hermes && (len(agents) == 3 || agents[3] == Cursor)
+	ordered := []Agent{Codex, Pi, Hermes, Cursor, Claude}
+	if len(agents) < 3 || len(agents) > len(ordered) {
+		return false
+	}
+	for index, agent := range agents {
+		if agent != ordered[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (service *Service) cursorUninstallResources(ctx context.Context, backups []install.Backup) ([]install.DesiredResource, error) {
@@ -306,6 +323,10 @@ func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {
 			if isCursorHooksPath(clean) {
 				return true
 			}
+		case Claude:
+			if isClaudeSettingsPath(clean) {
+				return true
+			}
 		}
 	}
 	return full
@@ -314,6 +335,48 @@ func uninstallIncludesTarget(agents []Agent, full bool, target string) bool {
 func isCursorHooksPath(path string) bool {
 	base := filepath.Base(path)
 	return (base == "hooks.json" || base == "mcp.json") && filepath.Base(filepath.Dir(path)) == ".cursor"
+}
+
+func isClaudeSettingsPath(path string) bool {
+	return filepath.Base(path) == "settings.json" && filepath.Base(filepath.Dir(path)) == ".claude"
+}
+
+// claudeUninstallResources strips only MLink-owned Hook entries from
+// ~/.claude/settings.json; every other Claude Code setting stays byte-for-byte.
+func (service *Service) claudeUninstallResources(ctx context.Context, backups []install.Backup) ([]install.DesiredResource, error) {
+	path := filepath.Join(filepath.Dir(service.Paths.Home), ".claude", "settings.json")
+	if containsBackupTarget(backups, path) {
+		return nil, nil
+	}
+	current, mode, err := service.Target.Read(ctx, path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	content, err := claudeadapter.RemoveOwnedHooks(current)
+	if err != nil {
+		return nil, err
+	}
+	protected, err := claudeadapter.ProtectedSettingsHash(current)
+	if err != nil {
+		return nil, err
+	}
+	return []install.DesiredResource{{
+		OwnerID: "dev.mlink.adapter.claude", Target: path, Content: content, Mode: mode,
+		SemanticDiff: []install.SemanticDiff{{Path: "hooks", Before: "MLink-owned entry present", After: "MLink-owned entry removed; unrelated entries preserved"}},
+		Verify: func(written []byte) error {
+			hash, hashErr := claudeadapter.ProtectedSettingsHash(written)
+			if hashErr != nil {
+				return hashErr
+			}
+			if hash != protected {
+				return errors.New("Claude Code settings outside hooks changed")
+			}
+			return nil
+		},
+	}}, nil
 }
 
 func (service *Service) activeConfiguration(ctx context.Context) (config.Config, error) {

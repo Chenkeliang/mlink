@@ -184,12 +184,12 @@ func parseMutationOptions(args []string, allowToken bool) (mutationOptions, erro
 
 func parseAgents(values []string) ([]app.Agent, error) {
 	if len(values) == 0 {
-		return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor}, nil
+		return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor, app.Claude}, nil
 	}
 	agents := make([]app.Agent, 0, len(values))
 	for _, value := range values {
 		switch app.Agent(value) {
-		case app.Codex, app.Pi, app.Hermes, app.Cursor:
+		case app.Codex, app.Pi, app.Hermes, app.Cursor, app.Claude:
 			agents = append(agents, app.Agent(value))
 		default:
 			return nil, fmt.Errorf("unknown Agent %q", value)

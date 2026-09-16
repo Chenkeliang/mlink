@@ -21,6 +21,7 @@ func (service *Service) Detect(ctx context.Context) (Detection, error) {
 		Pi:     filepath.Join(home, ".pi", "agent", "extensions"),
 		Hermes: filepath.Join(home, ".hermes", "config.yaml"),
 		Cursor: filepath.Join(home, ".cursor", "hooks.json"),
+		Claude: filepath.Join(home, ".claude", "settings.json"),
 	}
 	result := Detection{Agents: make(map[Agent]bool, len(paths))}
 	for agent, path := range paths {
