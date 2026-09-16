@@ -257,3 +257,96 @@ func TestFullUninstallPropagatesUnownedBackendRefusal(t *testing.T) {
 		t.Fatalf("PlanUninstall() error = %v", err)
 	}
 }
+
+func TestUninstallRemovesOnlyOwnedClaudeHooks(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: []byte(`{"model":"opus[1m]","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/Users/test/bin/check","timeout":5}]}]}}`), mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installRequest.Agents = []Agent{Codex, Pi, Hermes, Cursor, Claude}
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	if settings := string(target.files["/Users/test/.claude/settings.json"].content); !strings.Contains(settings, "hook claude Stop") {
+		t.Fatalf("install did not add MLink Hooks: %s", settings)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Cursor, Claude}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	settings := string(target.files["/Users/test/.claude/settings.json"].content)
+	if strings.Contains(settings, "hook claude") {
+		t.Fatalf("owned Claude Code Hooks survived uninstall: %s", settings)
+	}
+	if !strings.Contains(settings, "/Users/test/bin/check") || !strings.Contains(settings, "opus[1m]") {
+		t.Fatalf("unrelated Claude Code settings were removed: %s", settings)
+	}
+}
+
+func TestUninstallLeavingClaudeEnabledIsNotAFullTeardown(t *testing.T) {
+	service, target, secrets := newInstallFixture(t)
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: []byte(`{"model":"opus[1m]"}`), mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installRequest.Agents = []Agent{Codex, Pi, Hermes, Cursor, Claude}
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Cursor}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := target.files[service.Paths.Binary]; !exists {
+		t.Fatal("partial uninstall removed the MLink binary Claude Code Hooks still call")
+	}
+	if _, exists := secrets.values["identity/hmac-key"]; !exists {
+		t.Fatal("partial uninstall deleted shared install secrets")
+	}
+	if settings := string(target.files["/Users/test/.claude/settings.json"].content); !strings.Contains(settings, "hook claude Stop") {
+		t.Fatalf("unselected Claude Code Hooks were removed: %s", settings)
+	}
+}
+
+func TestUninstallLeavesUntouchedClaudeSettingsByteIdentical(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	original := []byte("{\n    \"theme\": \"dark\",\n    \"model\": \"opus[1m]\"\n}\n")
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: original, mode: 0o600}
+	installRequest := fixtureInstallRequest()
+	installPlan, err := service.PlanInstall(context.Background(), installRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ApplyInstall(context.Background(), installPlan.PlanID, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	request := UninstallRequest{Agents: []Agent{Codex, Pi, Hermes, Claude}}
+	plan, err := service.PlanUninstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range plan.Operations {
+		if operation.Target == "/Users/test/.claude/settings.json" {
+			t.Fatalf("uninstall rewrites settings MLink never touched: %s", operation.Content)
+		}
+	}
+	if err := service.ApplyUninstall(context.Background(), plan.PlanID, request); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.files["/Users/test/.claude/settings.json"].content; !bytes.Equal(got, original) {
+		t.Fatalf("settings changed:\nwant %q\ngot  %q", original, got)
+	}
+}

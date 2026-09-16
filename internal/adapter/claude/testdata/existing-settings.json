@@ -1,0 +1,24 @@
+{
+  "model": "opus[1m]",
+  "theme": "dark",
+  "env": {"SOME_TOKEN": "must-not-move"},
+  "permissions": {"allow": ["Bash(git status)"]},
+  "enabledPlugins": {"rust-analyzer-lsp@claude-plugins-official": true},
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "/Users/test/bin/check-command", "timeout": 5}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/Users/test/bin/existing-prompt-hook", "timeout": 2}
+        ]
+      }
+    ]
+  }
+}

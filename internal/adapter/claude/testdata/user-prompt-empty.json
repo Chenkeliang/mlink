@@ -1,0 +1,9 @@
+{
+  "session_id": "4717ccee-d454-4ee9-b10f-f6b352369c5e",
+  "transcript_path": "/path/that/must/not/be/read.jsonl",
+  "cwd": "/workspace",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt_id": "0198f0a1-7c31-7b10-9f44-6d2b9c1e5a77",
+  "prompt": ""
+}

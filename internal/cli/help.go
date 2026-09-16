@@ -45,7 +45,7 @@ Commands:
 
 Run "mlink help <command>" for command-specific usage.
 `,
-		"install": `Usage: mlink install [codex] [pi] [hermes] [cursor] [options]
+		"install": `Usage: mlink install [codex] [pi] [hermes] [cursor] [claude] [options]
 
 Options:
   --dry-run             Render an exact zero-write Plan
@@ -65,7 +65,7 @@ Areas:
 
 All maintenance mutations require an exact Plan ID and --yes.
 `,
-		"doctor": `Usage: mlink doctor [codex|pi|hermes|cursor] [--json]
+		"doctor": `Usage: mlink doctor [codex|pi|hermes|cursor|claude] [--json]
 
 Doctor is read-only. It checks identity, runtime, dependencies, Provider,
 Agent adapters, Memory Hub and Journal state.

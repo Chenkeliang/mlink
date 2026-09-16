@@ -25,6 +25,7 @@ const (
 	Pi     Agent = "pi"
 	Hermes Agent = "hermes"
 	Cursor Agent = "cursor"
+	Claude Agent = "claude"
 )
 
 const (

@@ -550,3 +550,46 @@ func assertPlanTargets(t *testing.T, plan install.ChangeSet, want []string) {
 		t.Fatalf("targets =\n%s\nwant =\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestPlanInstallClaudeOwnsOnlyHooksInsideSettings(t *testing.T) {
+	service, target, _ := newInstallFixture(t)
+	target.files["/Users/test/.claude/settings.json"] = memoryFile{content: []byte(`{"model":"opus[1m]","env":{"KEEP":"me"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/Users/test/bin/check","timeout":5}]}]}}`), mode: 0o600}
+	request := fixtureInstallRequest()
+	request.Agents = []Agent{Claude}
+	request.OwnerBindingSlot = config.BindingRef{}
+	delete(request.SecretInputs, OwnerBindingSecret)
+	plan, err := service.PlanInstall(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings, configuration []byte
+	var invariants int
+	for _, operation := range plan.Operations {
+		switch operation.Target {
+		case "/Users/test/.claude/settings.json":
+			settings = operation.Content
+			invariants = len(operation.ProtectedInvariants)
+			for _, invariant := range operation.ProtectedInvariants {
+				if !invariant.Preserved {
+					t.Fatalf("invariant %q not preserved", invariant.Name)
+				}
+			}
+		case service.Paths.Config:
+			configuration = operation.Content
+		}
+	}
+	if invariants != 1 {
+		t.Fatalf("protected invariants = %d", invariants)
+	}
+	for _, expected := range []string{"hook claude SessionStart", "hook claude UserPromptSubmit", "hook claude Stop", "hook claude SessionEnd", `"opus[1m]"`, "KEEP", "/Users/test/bin/check"} {
+		if !bytes.Contains(settings, []byte(expected)) {
+			t.Fatalf("settings missing %q: %s", expected, settings)
+		}
+	}
+	if !bytes.Contains(configuration, []byte("claude:")) || !bytes.Contains(configuration, []byte("space_id: owner")) {
+		t.Fatalf("config = %s", configuration)
+	}
+	if target.writes != 0 {
+		t.Fatalf("preview writes = %d", target.writes)
+	}
+}

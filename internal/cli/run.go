@@ -38,6 +38,7 @@ type Dependencies struct {
 	ServeMCP       func(context.Context) error
 	RunCodexHook   func(context.Context, string) error
 	RunCursorHook  func(context.Context, string) error
+	RunClaudeHook  func(context.Context, string) error
 	RunTUI         func(context.Context) error
 }
 
@@ -126,6 +127,13 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	if len(args) == 3 && args[0] == "hook" && args[1] == "cursor" {
 		if deps.RunCursorHook == nil || deps.RunCursorHook(ctx, args[2]) != nil {
 			writeLine(deps.Stderr, "mlink cursor hook failed")
+			return 1
+		}
+		return 0
+	}
+	if len(args) == 3 && args[0] == "hook" && args[1] == "claude" {
+		if deps.RunClaudeHook == nil || deps.RunClaudeHook(ctx, args[2]) != nil {
+			writeLine(deps.Stderr, "mlink claude hook failed")
 			return 1
 		}
 		return 0

@@ -408,6 +408,8 @@ func agentLabel(agent app.Agent) string {
 		return "Hermes Memory Provider"
 	case app.Cursor:
 		return "Cursor Hooks + MCP"
+	case app.Claude:
+		return "Claude Code Hooks"
 	default:
 		return string(agent)
 	}

@@ -28,6 +28,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	claudeadapter "mlink/internal/adapter/claude"
 	adapterclient "mlink/internal/adapter/client"
 	"mlink/internal/adapter/codex"
 	cursoradapter "mlink/internal/adapter/cursor"
@@ -258,6 +259,11 @@ func defaultDependencies(stdin io.Reader, stdout, stderr io.Writer) (cli.Depende
 			SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 800 * time.Millisecond, CaptureTimeout: 2 * time.Second,
 		})
 	}
+	dependencies.RunClaudeHook = func(ctx context.Context, event string) error {
+		return claudeadapter.Handle(ctx, event, stdin, stdout, adapterclient.Client{
+			SocketPath: paths.Socket, AdapterID: "claude", RecallTimeout: 800 * time.Millisecond, CaptureTimeout: 2 * time.Second,
+		})
+	}
 	dependencies.ServeBroker = runtime.ServeBroker
 	dependencies.ServeMCP = func(ctx context.Context) error {
 		backend := strictMCPBackend{client: adapterclient.Client{SocketPath: paths.Socket, AdapterID: "cursor", RecallTimeout: 2 * time.Second, CaptureTimeout: 2 * time.Second}}
@@ -380,7 +386,7 @@ func runtimeRouter(ctx context.Context, configuration config.Config, secrets sec
 		Bindings: bindings, Hermes: hermesRouting,
 	}
 	var grants []broker.Grant
-	for _, adapterID := range []string{"codex", "pi", "cursor"} {
+	for _, adapterID := range []string{"codex", "pi", "cursor", "claude"} {
 		adapter, enabled := configuration.Adapters[adapterID]
 		if !enabled || !adapter.Enabled {
 			continue
@@ -781,7 +787,7 @@ func (runtime *runtimeApplication) PlanRestore(ctx context.Context, request app.
 	}
 	defer store.Close()
 	installRequest := defaultInstallRequest()
-	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor}
+	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor, app.Claude}
 	service, _, err := runtime.prepare(ctx, installRequest, ledger)
 	if err != nil {
 		return install.ChangeSet{}, err
@@ -796,7 +802,7 @@ func (runtime *runtimeApplication) ApplyRestore(ctx context.Context, planID stri
 	}
 	defer store.Close()
 	installRequest := defaultInstallRequest()
-	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor}
+	installRequest.Agents = []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor, app.Claude}
 	service, _, err := runtime.prepare(ctx, installRequest, ledger)
 	if err != nil {
 		return err
@@ -1193,6 +1199,27 @@ func (runtime *runtimeApplication) ApplyCursorEnable(ctx context.Context, planID
 	}
 	defer store.Close()
 	return runtime.cursorLifecycleService(ledger).ApplyCursorEnable(ctx, planID)
+}
+
+func (runtime *runtimeApplication) PlanClaudeEnable(ctx context.Context) (install.ChangeSet, error) {
+	return runtime.claudeLifecycleService(previewLedger{}).PlanClaudeEnable(ctx)
+}
+
+func (runtime *runtimeApplication) ApplyClaudeEnable(ctx context.Context, planID string) error {
+	store, ledger, err := runtime.openLedger(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runtime.claudeLifecycleService(ledger).ApplyClaudeEnable(ctx, planID)
+}
+
+func (runtime *runtimeApplication) claudeLifecycleService(ledger install.Ledger) *app.Service {
+	service := runtime.baseService
+	service.Paths = runtime.paths
+	service.Target = install.LocalTarget{}
+	service.Ledger = ledger
+	return &service
 }
 
 func (runtime *runtimeApplication) cursorLifecycleService(ledger install.Ledger) *app.Service {

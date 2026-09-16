@@ -36,7 +36,7 @@ func (service *Service) Status(ctx context.Context) (Status, error) {
 	}
 	status.Installed = true
 	status.ConnectionID = configuration.ActiveConnectionID
-	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor} {
+	for _, agent := range []Agent{Codex, Pi, Hermes, Cursor, Claude} {
 		adapter, exists := configuration.Adapters[string(agent)]
 		status.Adapters[agent] = exists && adapter.Enabled
 	}

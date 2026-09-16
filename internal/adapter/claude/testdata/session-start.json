@@ -1,0 +1,7 @@
+{
+  "session_id": "4717ccee-d454-4ee9-b10f-f6b352369c5e",
+  "transcript_path": "/path/that/must/not/be/read.jsonl",
+  "cwd": "/workspace",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

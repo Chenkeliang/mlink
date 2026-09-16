@@ -473,3 +473,20 @@ func TestRunDispatchesCursorHookEvent(t *testing.T) {
 		t.Fatalf("code/calls = %d/%d", code, calls)
 	}
 }
+
+func TestRunDispatchesClaudeHookEvent(t *testing.T) {
+	calls := 0
+	code := Run(context.Background(), []string{"hook", "claude", "UserPromptSubmit"}, Dependencies{
+		Stderr: io.Discard,
+		RunClaudeHook: func(_ context.Context, event string) error {
+			calls++
+			if event != "UserPromptSubmit" {
+				t.Fatalf("event = %q", event)
+			}
+			return nil
+		},
+	})
+	if code != 0 || calls != 1 {
+		t.Fatalf("code/calls = %d/%d", code, calls)
+	}
+}

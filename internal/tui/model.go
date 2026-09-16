@@ -223,7 +223,7 @@ func New(application Application, request app.InstallRequest) Model {
 	backupConfirmation := newProtectedInput("Repeat backup passphrase", 4096)
 	return Model{
 		application: application, request: cloneRequest(request), width: 100, height: 30,
-		selected: map[app.Agent]bool{app.Codex: true, app.Pi: true, app.Hermes: true, app.Cursor: true},
+		selected: map[app.Agent]bool{app.Codex: true, app.Pi: true, app.Hermes: true, app.Cursor: true, app.Claude: true},
 		endpoint: endpoint, token: token, llmBaseURL: llmBaseURL, llmModel: llmModel,
 		llmAPIKey: llmAPIKey, capacity: capacity, identitySelected: -1,
 		restoreBundle: restoreBundle, restorePassphrase: restorePassphrase,
@@ -1134,7 +1134,9 @@ func panelModes() []string { return []string{"Install optional Memory Hub", "Ski
 func welcomeModes() []string {
 	return []string{"New installation", "Restore encrypted backup", "Connect existing MemoryCore"}
 }
-func orderedAgents() []app.Agent { return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor} }
+func orderedAgents() []app.Agent {
+	return []app.Agent{app.Codex, app.Pi, app.Hermes, app.Cursor, app.Claude}
+}
 
 func cloneRequest(input app.InstallRequest) app.InstallRequest {
 	output := input
