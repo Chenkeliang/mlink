@@ -1,0 +1,22 @@
+<svg width="400" height="120" viewBox="0 0 400 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="400" height="120" rx="14" fill="#07090F"/>
+  <defs>
+    <linearGradient id="mag-left" x1="0" y1="0" x2="60" y2="80">
+      <stop offset="0%" stop-color="#FF5E00"/>
+      <stop offset="100%" stop-color="#FF9E00"/>
+    </linearGradient>
+    <linearGradient id="mag-right" x1="60" y1="0" x2="120" y2="80">
+      <stop offset="0%" stop-color="#00D2FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20, 14)">
+    <path d="M16 84 L16 32 C16 18, 30 12, 44 26 L56 42" stroke="url(#mag-left)" stroke-width="12" stroke-linecap="round"/>
+    <path d="M106 84 L106 32 C106 18, 92 12, 78 26 L66 42" stroke="url(#mag-right)" stroke-width="12" stroke-linecap="round"/>
+    <path d="M50 48 C56 56, 66 56, 72 48" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+    <path d="M42 60 C54 74, 68 74, 80 60" stroke="#FFFFFF" stroke-width="3" stroke-dasharray="2 3" stroke-linecap="round"/>
+    <circle cx="61" cy="46" r="4.5" fill="#FFFFFF"/>
+  </g>
+  <text x="166" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="38" letter-spacing="0.02em" fill="#FFFFFF">M<tspan fill="#FF5E00">LINK</tspan></text>
+  <text x="168" y="88" font-family="ui-monospace, monospace" font-size="10" letter-spacing="0.2em" fill="#FB923C">MAGNETIC MEMORY FABRIC</text>
+</svg>

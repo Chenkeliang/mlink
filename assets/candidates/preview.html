@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MLink · Logo 视觉与概念全景方案</title>
+  <style>
+    :root {
+      --bg: #07090E;
+      --card-bg: #0D111A;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --cyan: #00F0FF;
+      --amber: #FBBF24;
+      --pink: #F43F5E;
+      --emerald: #10B981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      padding: 40px 20px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 20px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    h1 span {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--cyan);
+      background: rgba(0, 240, 255, 0.1);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      padding: 3px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.05em;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 28px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .card-top {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .badge-cyan { background: rgba(0, 240, 255, 0.12); color: var(--cyan); border: 1px solid rgba(0, 240, 255, 0.3); }
+    .badge-amber { background: rgba(251, 191, 36, 0.12); color: var(--amber); border: 1px solid rgba(251, 191, 36, 0.3); }
+    .badge-pink { background: rgba(244, 63, 94, 0.12); color: var(--pink); border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-emerald { background: rgba(16, 185, 129, 0.12); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+
+    .stage {
+      padding: 40px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 220px;
+      background: radial-gradient(circle at center, #131926 0%, #080B10 100%);
+      position: relative;
+    }
+    .stage::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+      background-size: 24px 24px;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .card-body {
+      padding: 24px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .card-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #FFF;
+      margin-bottom: 8px;
+    }
+    .card-metaphor {
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 13px;
+      color: #E2E8F0;
+      line-height: 1.6;
+      margin-bottom: 12px;
+      border-left: 3px solid var(--cyan);
+    }
+    .metaphor-amber { border-left-color: var(--amber); }
+    .metaphor-pink { border-left-color: var(--pink); }
+    .metaphor-emerald { border-left-color: var(--emerald); }
+
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 16px;
+      flex: 1;
+    }
+    .tags {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .tag {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      color: #94A3B8;
+      font-family: ui-monospace, monospace;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>MLink · 核心创意 Logo 方案 <span>ONE MEMORY PLANE</span></h1>
+    <p class="subtitle">针对 MLink 产品哲学「模型归模型，记忆归一体 · 本地化安全底座」，提炼出 4 组完全不同的高创意度视觉母题：</p>
+  </header>
+
+  <div class="grid">
+
+    <!-- Concept 01 -->
+    <div class="card">
+      <div class="card-top">
+        <span class="badge badge-cyan">方案 01 · 拓扑连续体</span>
+        <span style="font-size:12px;color:#64748B">Topological Möbius Strip</span>
+      </div>
+      <div class="stage">
+        <svg width="360" height="110" viewBox="0 0 360 110" fill="none" style="position:relative;z-index:2;">
+          <defs>
+            <linearGradient id="mob-g1" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#00F0FF"/>
+              <stop offset="50%" stop-color="#3B82F6"/>
+              <stop offset="100%" stop-color="#1D4ED8"/>
+            </linearGradient>
+            <linearGradient id="glow-sp" x1="0" y1="0" x2="100" y2="100">
+              <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8"/>
+              <stop offset="100%" stop-color="#00F0FF" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(16, 10)">
+            <!-- Mobius Ribbon M -->
+            <path d="M12 84 C12 36, 26 12, 48 12 C64 12, 70 42, 54 68 C42 88, 58 88, 64 74 C76 46, 82 12, 104 12 C126 12, 132 50, 132 84" 
+                  stroke="url(#mob-g1)" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M48 12 C30 42, 22 72, 40 84 C52 92, 72 78, 82 52 C92 26, 106 12, 118 38" 
+                  stroke="#67E8F9" stroke-width="3" stroke-linecap="round" stroke-dasharray="3 3"/>
+            <!-- Center Spark -->
+            <circle cx="70" cy="54" r="5" fill="#FFFFFF"/>
+            <circle cx="70" cy="54" r="11" fill="url(#glow-sp)"/>
+          </g>
+          <text x="166" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="36" letter-spacing="0.04em" fill="#FFFFFF">M<tspan fill="#00F0FF">LINK</tspan></text>
+          <text x="168" y="78" font-family="ui-monospace, monospace" font-size="9.5" letter-spacing="0.22em" fill="#64748B">ONE MEMORY PLANE</text>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">01 · 莫比乌斯记忆之环 (Möbius Ribbon)</div>
+        <div class="card-metaphor">
+          <strong>哲学隐喻：</strong>莫比乌斯带是几何中唯一的「单侧曲面（One Single Plane）」。象征多 Agent 无论从哪个窗口输入，最终都无缝滑入同一张连续记忆面。
+        </div>
+        <div class="card-desc">
+          将莫比乌斯环在空间中的扭转动势升维成字母「M」的双峰，中央交叠处为发光共振中枢。极具数学美感与顶级 Infra 气质。
+        </div>
+        <div class="tags">
+          <span class="tag">#数学拓扑</span>
+          <span class="tag">#无限连续单面</span>
+          <span class="tag">#优雅现代</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Concept 02 -->
+    <div class="card">
+      <div class="card-top">
+        <span class="badge badge-amber">方案 02 · 光学色散逆汇聚</span>
+        <span style="font-size:12px;color:#64748B">Optical Refraction Prism</span>
+      </div>
+      <div class="stage">
+        <svg width="360" height="110" viewBox="0 0 360 110" fill="none" style="position:relative;z-index:2;">
+          <g transform="translate(18, 10)">
+            <!-- Inbound Agent Beams -->
+            <path d="M8 20 L42 52" stroke="#38BDF8" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="8" cy="20" r="4" fill="#38BDF8"/>
+            <path d="M8 72 L42 52" stroke="#FBBF24" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="8" cy="72" r="4" fill="#FBBF24"/>
+            <path d="M112 20 L78 52" stroke="#C084FC" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="112" cy="20" r="4" fill="#C084FC"/>
+            <path d="M112 72 L78 52" stroke="#34D399" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="112" cy="72" r="4" fill="#34D399"/>
+            <!-- Central Prism Core -->
+            <path d="M60 16 L80 52 L60 88 L40 52 Z" fill="#0F172A" stroke="#E2E8F0" stroke-width="2.5"/>
+            <path d="M42 52 L60 20 L78 52 L60 84 Z" fill="#38BDF8" fill-opacity="0.35"/>
+            <circle cx="60" cy="52" r="5" fill="#FFFFFF"/>
+            <line x1="60" y1="4" x2="60" y2="16" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+          </g>
+          <text x="156" y="58" font-family="'JetBrains Mono', monospace" font-weight="800" font-size="34" letter-spacing="0.06em" fill="#F8FAFC">MLINK</text>
+          <text x="158" y="78" font-family="ui-monospace, monospace" font-size="9.5" letter-spacing="0.2em" fill="#FBBF24">MULTI-AGENT MEMORY</text>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">02 · 光棱逆汇聚 (Memory Prism)</div>
+        <div class="card-metaphor metaphor-amber">
+          <strong>哲学隐喻：</strong>光谱反向汇聚。四道代表不同 Agent（Codex、Cursor、Hermes、Pi）的光束射入暗色记忆晶体，折射出纯净中枢。
+        </div>
+        <div class="card-desc">
+          光路与晶体自然构成由外向内凝聚的「M」形光影，直观传达“模型各显神通，记忆一处聚合”的故事。
+        </div>
+        <div class="tags">
+          <span class="tag">#多光谱汇聚</span>
+          <span class="tag">#暗黑晶体</span>
+          <span class="tag">#强故事张力</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Concept 03 -->
+    <div class="card">
+      <div class="card-top">
+        <span class="badge badge-pink">方案 03 · 量子经纬织机</span>
+        <span style="font-size:12px;color:#64748B">Precision Coordinate Weave</span>
+      </div>
+      <div class="stage">
+        <svg width="360" height="110" viewBox="0 0 360 110" fill="none" style="position:relative;z-index:2;">
+          <g transform="translate(20, 12)">
+            <!-- Parallel Rails -->
+            <line x1="16" y1="8" x2="16" y2="78" stroke="#475569" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="102" y1="8" x2="102" y2="78" stroke="#475569" stroke-width="4.5" stroke-linecap="round"/>
+            <!-- Active Golden/Pink Thread forming M -->
+            <path d="M16 76 L16 10 L59 64 L102 10 L102 76" stroke="#F43F5E" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- L1 L2 L3 memory coordinate layers -->
+            <line x1="16" y1="28" x2="102" y2="28" stroke="#38BDF8" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <line x1="16" y1="46" x2="102" y2="46" stroke="#38BDF8" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <line x1="16" y1="64" x2="102" y2="64" stroke="#38BDF8" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <!-- Pins -->
+            <rect x="55" y="60" width="8" height="8" rx="2" fill="#FFFFFF"/>
+            <circle cx="16" cy="10" r="4.5" fill="#F43F5E"/>
+            <circle cx="102" cy="10" r="4.5" fill="#F43F5E"/>
+          </g>
+          <text x="156" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="34" letter-spacing="0.04em" fill="#FFFFFF">mlink<tspan fill="#F43F5E">::</tspan></text>
+          <text x="158" y="78" font-family="ui-monospace, monospace" font-size="9.5" letter-spacing="0.2em" fill="#F43F5E">SYNAPSE FABRIC</text>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">03 · 量子经纬织机 (Precision Loom)</div>
+        <div class="card-metaphor metaphor-pink">
+          <strong>哲学隐喻：</strong>记忆不是静止容器，而是时间线的编织。两侧立柱是“各不干涉的模型基准”，中间脉冲是“穿梭于 L1/L2/L3 分层的记忆经纬”。
+        </div>
+        <div class="card-desc">
+          极简高精度几何，带有瑞士国际主义平面与量子芯片的严密秩序感。
+        </div>
+        <div class="tags">
+          <span class="tag">#瑞士设计范</span>
+          <span class="tag">#L1/L2/L3三层坐标</span>
+          <span class="tag">#严谨工程美</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Concept 04 -->
+    <div class="card">
+      <div class="card-top">
+        <span class="badge badge-emerald">方案 04 · 负空间电光突触</span>
+        <span style="font-size:12px;color:#64748B">Gestalt Negative Space</span>
+      </div>
+      <div class="stage">
+        <svg width="360" height="110" viewBox="0 0 360 110" fill="none" style="position:relative;z-index:2;">
+          <defs>
+            <linearGradient id="solid-g" x1="0" y1="0" x2="0" y2="80">
+              <stop offset="0%" stop-color="#1E293B"/>
+              <stop offset="100%" stop-color="#0F172A"/>
+            </linearGradient>
+            <linearGradient id="bolt-g" x1="0" y1="0" x2="80" y2="80">
+              <stop offset="0%" stop-color="#10B981"/>
+              <stop offset="100%" stop-color="#34D399"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(18, 12)">
+            <!-- Monolith pillars with carved dynamic angles -->
+            <path d="M10 10 L44 10 L24 76 L10 76 Z" fill="url(#solid-g)" stroke="#334155" stroke-width="2"/>
+            <path d="M72 10 L106 10 L106 76 L92 76 Z" fill="url(#solid-g)" stroke="#334155" stroke-width="2"/>
+            <path d="M48 10 L68 10 L58 38 Z" fill="#334155"/>
+            <!-- Electric Negative Synapse M -->
+            <path d="M24 74 L40 20 L58 58 L76 20 L92 74" stroke="url(#bolt-g)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="58" cy="58" r="5" fill="#FFFFFF"/>
+            <circle cx="40" cy="20" r="3.5" fill="#10B981"/>
+            <circle cx="76" cy="20" r="3.5" fill="#10B981"/>
+          </g>
+          <text x="156" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="34" letter-spacing="0.05em" fill="#FFFFFF">MLINK</text>
+          <text x="158" y="78" font-family="ui-monospace, monospace" font-size="9.5" letter-spacing="0.22em" fill="#34D399">FAIL-OPEN MEMORY CORE</text>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">04 · 负空间电光突触 (Negative Synapse)</div>
+        <div class="card-metaphor metaphor-emerald">
+          <strong>哲学隐喻：</strong>格式塔负空间。外侧厚重实体是外部客户端与模型，而中央破空而出的负空间裂隙才是 MLink——“非侵入赋能，只在缝隙间建立记忆突触”。
+        </div>
+        <div class="card-desc">
+          实体几何块面间激发出一道翡翠电光的「M」形突触通道。速度感与安全感拉满，完美契合 Fail-Open 安全哲学。
+        </div>
+        <div class="tags">
+          <span class="tag">#格式塔负空间</span>
+          <span class="tag">#非侵入式中枢</span>
+          <span class="tag">#电光突触张力</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

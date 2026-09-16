@@ -1,0 +1,28 @@
+<svg width="400" height="120" viewBox="0 0 400 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="400" height="120" rx="14" fill="#07090F"/>
+  <defs>
+    <linearGradient id="p-face-1" x1="0" y1="0" x2="0" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C084FC"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="p-face-2" x1="0" y1="0" x2="90" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E879F9"/>
+      <stop offset="100%" stop-color="#C084FC"/>
+    </linearGradient>
+    <linearGradient id="p-face-3" x1="0" y1="0" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4C1D95"/>
+      <stop offset="100%" stop-color="#2E1065"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20, 12)">
+    <path d="M12 96 L12 20 L32 8 L32 84 Z" fill="url(#p-face-1)"/>
+    <path d="M32 8 L62 56 L50 68 L12 20 Z" fill="url(#p-face-2)"/>
+    <path d="M62 56 L92 8 L112 20 L74 68 Z" fill="url(#p-face-3)"/>
+    <path d="M92 8 L112 20 L112 96 L92 84 Z" fill="url(#p-face-1)"/>
+    <path d="M32 84 L50 68 L74 68 L92 84 L62 96 Z" fill="#A855F7" fill-opacity="0.9"/>
+    <circle cx="62" cy="40" r="6" fill="#FDF4FF"/>
+    <circle cx="62" cy="40" r="12" fill="#C084FC" fill-opacity="0.3"/>
+  </g>
+  <text x="166" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="38" letter-spacing="-0.01em" fill="#FFFFFF">mlink<tspan fill="#C084FC">.</tspan></text>
+  <text x="168" y="88" font-family="ui-monospace, monospace" font-size="10" letter-spacing="0.22em" fill="#A855F7">ONE MEMORY PLANE</text>
+</svg>

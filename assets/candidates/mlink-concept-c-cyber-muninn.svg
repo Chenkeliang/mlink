@@ -1,0 +1,14 @@
+<svg width="400" height="120" viewBox="0 0 400 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="400" height="120" rx="14" fill="#07090F"/>
+  <g transform="translate(20, 10)">
+    <path d="M12 78 L38 18 L52 46 L34 84 Z" fill="#0284C7"/>
+    <path d="M28 84 L48 24 L58 48 L44 88 Z" fill="#38BDF8"/>
+    <path d="M112 78 L86 18 L72 46 L90 84 Z" fill="#0284C7"/>
+    <path d="M96 84 L76 24 L66 48 L80 88 Z" fill="#38BDF8"/>
+    <path d="M62 42 L68 54 L56 54 Z" fill="#E2E8F0"/>
+    <circle cx="62" cy="48" r="2.5" fill="#00F0FF"/>
+    <path d="M52 64 L62 88 L72 64 L62 72 Z" fill="#0369A1"/>
+  </g>
+  <text x="166" y="66" font-family="'JetBrains Mono', monospace" font-weight="900" font-size="36" letter-spacing="0.04em" fill="#FFFFFF">MLINK</text>
+  <text x="168" y="88" font-family="ui-monospace, monospace" font-size="10" letter-spacing="0.22em" fill="#38BDF8">THE MEMORY SENTINEL</text>
+</svg>

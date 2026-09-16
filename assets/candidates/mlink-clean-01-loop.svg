@@ -1,0 +1,8 @@
+<svg width="280" height="72" viewBox="0 0 280 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(10, 6)">
+    <path d="M12 54 L12 18 C12 9, 21 6, 28 14 L40 28 L52 14 C59 6, 68 9, 68 18 L68 54" 
+          stroke="#38BDF8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M26 54 L54 54" stroke="#38BDF8" stroke-width="8" stroke-linecap="round"/>
+  </g>
+  <text x="100" y="47" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="800" font-size="34" letter-spacing="-0.01em" fill="#FFFFFF">mlink</text>
+</svg>

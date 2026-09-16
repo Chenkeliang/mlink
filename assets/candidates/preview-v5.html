@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MLink · 方案3 (M+L 复合标) + 像素风字标 + TUI 终端黄</title>
+  <style>
+    :root {
+      --bg: #0B0E14;
+      --card-bg: #121722;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --tui-yellow: #FFD022;
+      --tui-yellow-shadow: #9C5D08;
+      --tui-cyan: #58D7FF;
+      --text: #F8FAFC;
+      --text-muted: #8E9BAE;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Display", "Segoe UI", sans-serif;
+      padding: 40px 20px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 24px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge-tui {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 4px;
+      background: rgba(255, 208, 34, 0.15);
+      color: var(--tui-yellow);
+      border: 1px solid rgba(255, 208, 34, 0.3);
+      font-family: ui-monospace, monospace;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 28px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+    }
+    .card-header {
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .stage {
+      padding: 40px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #080B10;
+      min-height: 160px;
+    }
+    .stage-terminal {
+      background: #0F141C;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 32px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-body {
+      padding: 20px 24px;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--tui-yellow);
+      margin-bottom: 6px;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>MLink · 方案 3 (M+L 同体标) + 像素风字标 <span class="badge-tui">ANSI 220 / #FFD022</span></h1>
+    <p class="subtitle">采用方案 3 的 M+L 融合同体图形，英文「MLINK」使用 TUI 终端原生像素字标，主色精准对齐 TUI 标志性金黄色：</p>
+  </header>
+
+  <div class="grid">
+
+    <!-- Version 3.1: Monogram Smooth Mark + Pixel Wordmark (大写 MLINK) -->
+    <div class="card">
+      <div class="card-header">
+        <span style="font-weight:700; color:#FFF">3.1 · 纯正金黄 · 极简平滑 M+L 标 + 像素字标 (大写)</span>
+        <span style="font-size:12px;color:#64748B">Smooth Monogram ML + Uppercase Pixel Wordmark</span>
+      </div>
+      <div class="stage">
+        <svg width="460" height="90" viewBox="0 0 460 90" fill="none" shape-rendering="crispEdges">
+          <!-- Icon Mark: Smooth Monogram ML in TUI Yellow -->
+          <g transform="translate(18, 12)" shape-rendering="geometricPrecision">
+            <!-- Left M-Arch -->
+            <path d="M10 58 L10 20 C10 10, 20 6, 30 14 L46 28" stroke="#FFD022" stroke-width="10" stroke-linecap="round"/>
+            <!-- Right Connected L-Hook -->
+            <path d="M46 28 L62 14 C72 6, 82 10, 82 20 L82 58 L100 58" stroke="#FFD022" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
+
+          <!-- Pixel Wordmark "MLINK" using 5x5 blocks (block size 6px, gap 2px) -->
+          <!-- Color: #FFD022 (with subtle dark-gold shadow) -->
+          <g transform="translate(148, 20)" fill="#FFD022">
+            <!-- Shadow layer -->
+            <g fill="#8C5305" transform="translate(2, 2)">
+              <!-- M -->
+              <rect x="0" y="0" width="6" height="42"/><rect x="36" y="0" width="6" height="42"/>
+              <rect x="6" y="6" width="6" height="6"/><rect x="30" y="6" width="6" height="6"/>
+              <rect x="12" y="12" width="6" height="6"/><rect x="24" y="12" width="6" height="6"/>
+              <rect x="18" y="18" width="6" height="12"/>
+              <!-- L -->
+              <rect x="52" y="0" width="6" height="42"/><rect x="58" y="36" width="30" height="6"/>
+              <!-- I -->
+              <rect x="98" y="0" width="30" height="6"/><rect x="110" y="6" width="6" height="30"/><rect x="98" y="36" width="30" height="6"/>
+              <!-- N -->
+              <rect x="138" y="0" width="6" height="42"/><rect x="174" y="0" width="6" height="42"/>
+              <rect x="144" y="10" width="6" height="8"/><rect x="150" y="18" width="6" height="8"/>
+              <rect x="156" y="26" width="6" height="8"/><rect x="162" y="32" width="6" height="8"/>
+              <!-- K -->
+              <rect x="190" y="0" width="6" height="42"/>
+              <rect x="218" y="0" width="6" height="10"/><rect x="210" y="8" width="6" height="10"/>
+              <rect x="202" y="16" width="6" height="10"/><rect x="196" y="20" width="6" height="6"/>
+              <rect x="204" y="24" width="6" height="10"/><rect x="212" y="32" width="6" height="10"/>
+            </g>
+
+            <!-- Front layer #FFD022 -->
+            <!-- M -->
+            <rect x="0" y="0" width="6" height="42"/><rect x="36" y="0" width="6" height="42"/>
+            <rect x="6" y="6" width="6" height="6"/><rect x="30" y="6" width="6" height="6"/>
+            <rect x="12" y="12" width="6" height="6"/><rect x="24" y="12" width="6" height="6"/>
+            <rect x="18" y="18" width="6" height="12"/>
+            <!-- L -->
+            <rect x="52" y="0" width="6" height="42"/><rect x="58" y="36" width="30" height="6"/>
+            <!-- I -->
+            <rect x="98" y="0" width="30" height="6"/><rect x="110" y="6" width="6" height="30"/><rect x="98" y="36" width="30" height="6"/>
+            <!-- N -->
+            <rect x="138" y="0" width="6" height="42"/><rect x="174" y="0" width="6" height="42"/>
+            <rect x="144" y="10" width="6" height="8"/><rect x="150" y="18" width="6" height="8"/>
+            <rect x="156" y="26" width="6" height="8"/><rect x="162" y="32" width="6" height="8"/>
+            <!-- K -->
+            <rect x="190" y="0" width="6" height="42"/>
+            <rect x="218" y="0" width="6" height="10"/><rect x="210" y="8" width="6" height="10"/>
+            <rect x="202" y="16" width="6" height="10"/><rect x="196" y="20" width="6" height="6"/>
+            <rect x="204" y="24" width="6" height="10"/><rect x="212" y="32" width="6" height="10"/>
+          </g>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">3.1 · 现代平滑 M+L 图标 + 经典 3D 阴影像素字标</div>
+        <div class="card-desc">左侧是现代简约的 M+L 单线同体标，右侧是带有 TUI 终端复古立体阴影的像素字标，黄黑对比极其强烈。</div>
+      </div>
+    </div>
+
+    <!-- Version 3.2: Full Pixel Synergy (图标与文字全像素化) -->
+    <div class="card">
+      <div class="card-header">
+        <span style="font-weight:700; color:#FFF">3.2 · 全像素一体化 · 像素 M+L 图标 + 像素字标</span>
+        <span style="font-size:12px;color:#64748B">Pure Pixel Mark + Pixel Wordmark</span>
+      </div>
+      <div class="stage">
+        <svg width="460" height="90" viewBox="0 0 460 90" fill="none" shape-rendering="crispEdges">
+          <!-- Full Pixel M+L Mark -->
+          <g transform="translate(24, 18)" fill="#FFD022">
+            <!-- Shadow of Mark -->
+            <g fill="#8C5305" transform="translate(3, 3)">
+              <rect x="0" y="12" width="8" height="36"/>
+              <rect x="8" y="4" width="8" height="8"/>
+              <rect x="16" y="0" width="16" height="8"/>
+              <rect x="32" y="8" width="8" height="12"/>
+              <rect x="40" y="20" width="8" height="12"/>
+              <rect x="48" y="8" width="8" height="12"/>
+              <rect x="56" y="0" width="16" height="8"/>
+              <rect x="72" y="4" width="8" height="8"/>
+              <rect x="80" y="12" width="8" height="36"/>
+              <rect x="88" y="40" width="20" height="8"/>
+            </g>
+            <!-- Front of Mark -->
+            <rect x="0" y="12" width="8" height="36"/>
+            <rect x="8" y="4" width="8" height="8"/>
+            <rect x="16" y="0" width="16" height="8"/>
+            <rect x="32" y="8" width="8" height="12"/>
+            <rect x="40" y="20" width="8" height="12"/>
+            <rect x="48" y="8" width="8" height="12"/>
+            <rect x="56" y="0" width="16" height="8"/>
+            <rect x="72" y="4" width="8" height="8"/>
+            <rect x="80" y="12" width="8" height="36"/>
+            <rect x="88" y="40" width="20" height="8"/>
+          </g>
+
+          <!-- Pixel Wordmark "MLINK" -->
+          <g transform="translate(160, 24)" fill="#FFD022">
+            <!-- Shadow layer -->
+            <g fill="#8C5305" transform="translate(2, 2)">
+              <rect x="0" y="0" width="6" height="42"/><rect x="36" y="0" width="6" height="42"/>
+              <rect x="6" y="6" width="6" height="6"/><rect x="30" y="6" width="6" height="6"/>
+              <rect x="12" y="12" width="6" height="6"/><rect x="24" y="12" width="6" height="6"/>
+              <rect x="18" y="18" width="6" height="12"/>
+              <rect x="52" y="0" width="6" height="42"/><rect x="58" y="36" width="30" height="6"/>
+              <rect x="98" y="0" width="30" height="6"/><rect x="110" y="6" width="6" height="30"/><rect x="98" y="36" width="30" height="6"/>
+              <rect x="138" y="0" width="6" height="42"/><rect x="174" y="0" width="6" height="42"/>
+              <rect x="144" y="10" width="6" height="8"/><rect x="150" y="18" width="6" height="8"/>
+              <rect x="156" y="26" width="6" height="8"/><rect x="162" y="32" width="6" height="8"/>
+              <rect x="190" y="0" width="6" height="42"/>
+              <rect x="218" y="0" width="6" height="10"/><rect x="210" y="8" width="6" height="10"/>
+              <rect x="202" y="16" width="6" height="10"/><rect x="196" y="20" width="6" height="6"/>
+              <rect x="204" y="24" width="6" height="10"/><rect x="212" y="32" width="6" height="10"/>
+            </g>
+            <!-- Front layer -->
+            <rect x="0" y="0" width="6" height="42"/><rect x="36" y="0" width="6" height="42"/>
+            <rect x="6" y="6" width="6" height="6"/><rect x="30" y="6" width="6" height="6"/>
+            <rect x="12" y="12" width="6" height="6"/><rect x="24" y="12" width="6" height="6"/>
+            <rect x="18" y="18" width="6" height="12"/>
+            <rect x="52" y="0" width="6" height="42"/><rect x="58" y="36" width="30" height="6"/>
+            <rect x="98" y="0" width="30" height="6"/><rect x="110" y="6" width="6" height="30"/><rect x="98" y="36" width="30" height="6"/>
+            <rect x="138" y="0" width="6" height="42"/><rect x="174" y="0" width="6" height="42"/>
+            <rect x="144" y="10" width="6" height="8"/><rect x="150" y="18" width="6" height="8"/>
+            <rect x="156" y="26" width="6" height="8"/><rect x="162" y="32" width="6" height="8"/>
+            <rect x="190" y="0" width="6" height="42"/>
+            <rect x="218" y="0" width="6" height="10"/><rect x="210" y="8" width="6" height="10"/>
+            <rect x="202" y="16" width="6" height="10"/><rect x="196" y="20" width="6" height="6"/>
+            <rect x="204" y="24" width="6" height="10"/><rect x="212" y="32" width="6" height="10"/>
+          </g>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">3.2 · 纯粹像素化设计系统</div>
+        <div class="card-desc">将 M+L 的同体标也转化为 8-bit 点阵像素结构，图标与字标风格高度统一，浓郁的纯正终端 Geek 风格。</div>
+      </div>
+    </div>
+
+    <!-- Version 3.3: README Full Hero Banner (带终端边框与副标题) -->
+    <div class="card">
+      <div class="card-header">
+        <span style="font-weight:700; color:#FFF">3.3 · GitHub README 完整横幅效果 (Hero Banner)</span>
+        <span style="font-size:12px;color:#64748B">Production-Ready README Asset</span>
+      </div>
+      <div class="stage" style="padding:0; background:transparent;">
+        <svg width="100%" height="220" viewBox="0 0 960 220" fill="none" shape-rendering="crispEdges">
+          <!-- Background -->
+          <rect width="960" height="220" fill="#0B1017"/>
+          <!-- Border rails -->
+          <rect x="0" y="0" width="960" height="3" fill="#C37A1B"/>
+          <rect x="0" y="217" width="960" height="3" fill="#C37A1B"/>
+
+          <!-- Faint terminal grid dots on right -->
+          <g fill="#1A2433">
+            <rect x="680" y="40" width="3" height="3"/><rect x="720" y="40" width="3" height="3"/><rect x="760" y="40" width="3" height="3"/><rect x="800" y="40" width="3" height="3"/><rect x="840" y="40" width="3" height="3"/><rect x="880" y="40" width="3" height="3"/><rect x="920" y="40" width="3" height="3"/>
+            <rect x="680" y="80" width="3" height="3"/><rect x="720" y="80" width="3" height="3"/><rect x="760" y="80" width="3" height="3"/><rect x="800" y="80" width="3" height="3"/><rect x="840" y="80" width="3" height="3"/><rect x="880" y="80" width="3" height="3"/><rect x="920" y="80" width="3" height="3"/>
+            <rect x="680" y="120" width="3" height="3"/><rect x="720" y="120" width="3" height="3"/><rect x="760" y="120" width="3" height="3"/><rect x="800" y="120" width="3" height="3"/><rect x="840" y="120" width="3" height="3"/><rect x="880" y="120" width="3" height="3"/><rect x="920" y="120" width="3" height="3"/>
+            <rect x="680" y="160" width="3" height="3"/><rect x="720" y="160" width="3" height="3"/><rect x="760" y="160" width="3" height="3"/><rect x="800" y="160" width="3" height="3"/><rect x="840" y="160" width="3" height="3"/><rect x="880" y="160" width="3" height="3"/><rect x="920" y="160" width="3" height="3"/>
+          </g>
+
+          <!-- Monogram Icon Mark (Smooth in container) -->
+          <g transform="translate(60, 48)" shape-rendering="geometricPrecision">
+            <rect x="-10" y="-10" width="136" height="136" rx="16" fill="#131A26" stroke="#2D3A4F" stroke-width="2"/>
+            <path d="M12 90 L12 36 C12 20, 26 14, 40 26 L58 44" stroke="#FFD022" stroke-width="12" stroke-linecap="round"/>
+            <path d="M58 44 L76 26 C90 14, 104 20, 104 36 L104 90 L124 90" stroke="#FFD022" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
+
+          <!-- Pixel Wordmark "MLINK" -->
+          <g transform="translate(240, 56)" fill="#FFD022">
+            <!-- Shadow -->
+            <g fill="#8C5305" transform="translate(3, 3)">
+              <rect x="0" y="0" width="8" height="56"/><rect x="48" y="0" width="8" height="56"/>
+              <rect x="8" y="8" width="8" height="8"/><rect x="40" y="8" width="8" height="8"/>
+              <rect x="16" y="16" width="8" height="8"/><rect x="32" y="16" width="8" height="8"/>
+              <rect x="24" y="24" width="8" height="16"/>
+              <rect x="70" y="0" width="8" height="56"/><rect x="78" y="48" width="40" height="8"/>
+              <rect x="132" y="0" width="40" height="8"/><rect x="148" y="8" width="8" height="40"/><rect x="132" y="48" width="40" height="8"/>
+              <rect x="186" y="0" width="8" height="56"/><rect x="234" y="0" width="8" height="56"/>
+              <rect x="194" y="12" width="8" height="12"/><rect x="202" y="24" width="8" height="12"/>
+              <rect x="210" y="34" width="8" height="12"/><rect x="218" y="44" width="8" height="12"/>
+              <rect x="256" y="0" width="8" height="56"/>
+              <rect x="294" y="0" width="8" height="14"/><rect x="282" y="12" width="8" height="14"/>
+              <rect x="272" y="24" width="8" height="12"/><rect x="264" y="30" width="8" height="8"/>
+              <rect x="274" y="34" width="8" height="12"/><rect x="286" y="44" width="8" height="12"/>
+            </g>
+            <!-- Front -->
+            <rect x="0" y="0" width="8" height="56"/><rect x="48" y="0" width="8" height="56"/>
+            <rect x="8" y="8" width="8" height="8"/><rect x="40" y="8" width="8" height="8"/>
+            <rect x="16" y="16" width="8" height="8"/><rect x="32" y="16" width="8" height="8"/>
+            <rect x="24" y="24" width="8" height="16"/>
+            <rect x="70" y="0" width="8" height="56"/><rect x="78" y="48" width="40" height="8"/>
+            <rect x="132" y="0" width="40" height="8"/><rect x="148" y="8" width="8" height="40"/><rect x="132" y="48" width="40" height="8"/>
+            <rect x="186" y="0" width="8" height="56"/><rect x="234" y="0" width="8" height="56"/>
+            <rect x="194" y="12" width="8" height="12"/><rect x="202" y="24" width="8" height="12"/>
+            <rect x="210" y="34" width="8" height="12"/><rect x="218" y="44" width="8" height="12"/>
+            <rect x="256" y="0" width="8" height="56"/>
+            <rect x="294" y="0" width="8" height="14"/><rect x="282" y="12" width="8" height="14"/>
+            <rect x="272" y="24" width="8" height="12"/><rect x="264" y="30" width="8" height="8"/>
+            <rect x="274" y="34" width="8" height="12"/><rect x="286" y="44" width="8" height="12"/>
+          </g>
+
+          <!-- Tagline & Data dashes -->
+          <g fill="#FFD022">
+            <rect x="240" y="148" width="8" height="8"/>
+            <rect x="252" y="148" width="8" height="8"/>
+            <rect x="264" y="148" width="8" height="8"/>
+          </g>
+          <text x="284" y="156" fill="#FFD022" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700" letter-spacing="0.18em">ONE MEMORY PLANE · YOUR MODELS STAY YOURS</text>
+
+          <!-- Subtle Cyan status chip -->
+          <g transform="translate(240, 176)" fill="#58D7FF">
+            <rect x="0" y="0" width="6" height="6"/>
+            <text x="14" y="7" fill="#58D7FF" font-family="ui-monospace, monospace" font-size="11" letter-spacing="0.1em">LOCAL-FIRST · FAIL-OPEN · ZERO MODEL PROXY</text>
+          </g>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">3.3 · 完整 GitHub README 横幅</div>
+        <div class="card-desc">标准 960x220 比例，可直接作为 <code>README.md</code> 顶部的核心视觉资产。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

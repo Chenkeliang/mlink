@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MLink · 极简主义 · 纯粹几何减法方案</title>
+  <style>
+    :root {
+      --bg: #0A0D14;
+      --card-bg: #101522;
+      --card-border: rgba(255, 255, 255, 0.07);
+      --text: #F8FAFC;
+      --text-muted: #8492A6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Display", "Segoe UI", sans-serif;
+      padding: 40px 20px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1040px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 20px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+      color: #FFFFFF;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+      gap: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.2s ease;
+    }
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateY(-2px);
+    }
+    .card-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      letter-spacing: 0.05em;
+    }
+    .b-cyan { background: rgba(56, 189, 248, 0.12); color: #38BDF8; }
+    .b-amber { background: rgba(251, 191, 36, 0.12); color: #FBBF24; }
+    .b-violet { background: rgba(167, 139, 250, 0.12); color: #A78BFA; }
+    .b-white { background: rgba(255, 255, 255, 0.12); color: #FFFFFF; }
+
+    .stage {
+      padding: 36px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #07090E;
+      min-height: 180px;
+    }
+    .scales {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 36px;
+      padding: 14px 20px;
+      background: rgba(0, 0, 0, 0.3);
+      border-top: 1px solid var(--card-border);
+      border-bottom: 1px solid var(--card-border);
+    }
+    .scale-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: ui-monospace, monospace;
+    }
+    .scale-preview {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #141A28;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .scale-64 { width: 56px; height: 56px; }
+    .scale-32 { width: 36px; height: 36px; }
+    .scale-16 { width: 24px; height: 24px; }
+
+    .card-body {
+      padding: 20px;
+      flex: 1;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #FFFFFF;
+      margin-bottom: 6px;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>MLink · 极简主义减法设计 ✦</h1>
+    <p class="subtitle">剔除所有装饰性碎光、多重线条与繁杂粒子，保留最纯粹、最强烈的单一几何轮廓：</p>
+  </header>
+
+  <div class="grid">
+
+    <!-- Concept 1: The Continuous Infinity M -->
+    <div class="card">
+      <div class="card-header">
+        <span class="badge b-cyan">方案 01 · 纯粹单线闭环</span>
+        <span style="font-size:12px;color:#64748B">Continuous Loop M</span>
+      </div>
+      <div class="stage">
+        <!-- Big Preview -->
+        <svg width="280" height="72" viewBox="0 0 280 72" fill="none">
+          <!-- The Icon: Continuous elegant 1-stroke loop forming M -->
+          <g transform="translate(10, 6)">
+            <path d="M12 54 L12 18 C12 9, 21 6, 28 14 L40 28 L52 14 C59 6, 68 9, 68 18 L68 54" 
+                  stroke="#38BDF8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M26 54 L54 54" stroke="#38BDF8" stroke-width="8" stroke-linecap="round"/>
+          </g>
+          <!-- Wordmark -->
+          <text x="100" y="47" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="800" font-size="34" letter-spacing="-0.01em" fill="#FFFFFF">mlink</text>
+        </svg>
+      </div>
+      <div class="scales">
+        <div class="scale-item">
+          <div class="scale-preview scale-64">
+            <svg width="36" height="36" viewBox="0 0 80 80" fill="none">
+              <path d="M14 62 L14 22 C14 12, 24 8, 32 17 L40 27 L48 17 C56 8, 66 12, 66 22 L66 62" stroke="#38BDF8" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M28 62 L52 62" stroke="#38BDF8" stroke-width="9" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>64px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-32">
+            <svg width="22" height="22" viewBox="0 0 80 80" fill="none">
+              <path d="M14 62 L14 22 C14 12, 24 8, 32 17 L40 27 L48 17 C56 8, 66 12, 66 22 L66 62" stroke="#38BDF8" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M28 62 L52 62" stroke="#38BDF8" stroke-width="11" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>32px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-16">
+            <svg width="14" height="14" viewBox="0 0 80 80" fill="none">
+              <path d="M14 62 L14 22 C14 12, 24 8, 32 17 L40 27 L48 17 C56 8, 66 12, 66 22 L66 62" stroke="#38BDF8" stroke-width="14" stroke-linecap="round"/>
+              <path d="M28 62 L52 62" stroke="#38BDF8" stroke-width="14" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>16px</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="card-title">01 · 单线闭环 (Continuous Loop M)</div>
+        <div class="card-desc">仅由一根等宽流线构成。顶部自然弯折出 M 字双峰，底部闭合横杆完成 Link。没有任何多余修饰，圆润利落，小到 Favicon 依然极具辨识度。</div>
+      </div>
+    </div>
+
+    <!-- Concept 2: The Two Pillars & Chevron Bridge -->
+    <div class="card">
+      <div class="card-header">
+        <span class="badge b-amber">方案 02 · 纯几何双柱桥接</span>
+        <span style="font-size:12px;color:#64748B">Two Pillars & Bridge</span>
+      </div>
+      <div class="stage">
+        <svg width="280" height="72" viewBox="0 0 280 72" fill="none">
+          <g transform="translate(12, 8)">
+            <!-- Left Solid Pillar (Agent/Model) -->
+            <rect x="10" y="8" width="14" height="42" rx="7" fill="#FBBF24"/>
+            <!-- Right Solid Pillar (Agent/Model) -->
+            <rect x="52" y="8" width="14" height="42" rx="7" fill="#FBBF24"/>
+            <!-- Center Chevron Connector (The Link) -->
+            <path d="M24 22 L38 36 L52 22" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
+          <text x="100" y="47" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="34" letter-spacing="0.02em" fill="#FFFFFF">MLINK</text>
+        </svg>
+      </div>
+      <div class="scales">
+        <div class="scale-item">
+          <div class="scale-preview scale-64">
+            <svg width="36" height="36" viewBox="0 0 80 80" fill="none">
+              <rect x="14" y="16" width="16" height="48" rx="8" fill="#FBBF24"/>
+              <rect x="50" y="16" width="16" height="48" rx="8" fill="#FBBF24"/>
+              <path d="M30 32 L40 42 L50 32" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span>64px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-32">
+            <svg width="22" height="22" viewBox="0 0 80 80" fill="none">
+              <rect x="14" y="16" width="16" height="48" rx="8" fill="#FBBF24"/>
+              <rect x="50" y="16" width="16" height="48" rx="8" fill="#FBBF24"/>
+              <path d="M30 32 L40 42 L50 32" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>32px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-16">
+            <svg width="14" height="14" viewBox="0 0 80 80" fill="none">
+              <rect x="12" y="14" width="18" height="52" rx="9" fill="#FBBF24"/>
+              <rect x="50" y="14" width="18" height="52" rx="9" fill="#FBBF24"/>
+              <path d="M30 32 L40 42 L50 32" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>16px</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="card-title">02 · 双柱桥接 (Two Pillars & Bridge)</div>
+        <div class="card-desc">仅用 2 个实体胶囊柱 + 1 个连接折线。左右双柱代表互相独立的两个端点，中间轻巧挂起的桥梁正是 MLink。结构稳固、充满平衡感。</div>
+      </div>
+    </div>
+
+    <!-- Concept 3: The Interlocking Monogram ML -->
+    <div class="card">
+      <div class="card-header">
+        <span class="badge b-violet">方案 03 · 极简复合字标 M+L</span>
+        <span style="font-size:12px;color:#64748B">Monogram M · L Fusion</span>
+      </div>
+      <div class="stage">
+        <svg width="280" height="72" viewBox="0 0 280 72" fill="none">
+          <g transform="translate(14, 8)">
+            <!-- Left Upward Arch -->
+            <path d="M10 50 L10 18 C10 10, 18 6, 26 12 L40 24" stroke="#A78BFA" stroke-width="8.5" stroke-linecap="round"/>
+            <!-- Right Connected L-Hook (The M into L continuation) -->
+            <path d="M40 24 L54 12 C62 6, 70 10, 70 18 L70 50 L84 50" stroke="#C084FC" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
+          <text x="110" y="47" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="34" letter-spacing="-0.02em" fill="#FFFFFF">mlink</text>
+        </svg>
+      </div>
+      <div class="scales">
+        <div class="scale-item">
+          <div class="scale-preview scale-64">
+            <svg width="36" height="36" viewBox="0 0 80 80" fill="none">
+              <path d="M12 60 L12 24 C12 14, 22 10, 30 17 L40 27" stroke="#A78BFA" stroke-width="10" stroke-linecap="round"/>
+              <path d="M40 27 L50 17 C58 10, 68 14, 68 24 L68 60 L78 60" stroke="#C084FC" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span>64px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-32">
+            <svg width="22" height="22" viewBox="0 0 80 80" fill="none">
+              <path d="M12 60 L12 24 C12 14, 22 10, 30 17 L40 27" stroke="#A78BFA" stroke-width="11" stroke-linecap="round"/>
+              <path d="M40 27 L50 17 C58 10, 68 14, 68 24 L68 60 L78 60" stroke="#C084FC" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span>32px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-16">
+            <svg width="14" height="14" viewBox="0 0 80 80" fill="none">
+              <path d="M12 60 L12 24 C12 14, 22 10, 30 17 L40 27" stroke="#A78BFA" stroke-width="14" stroke-linecap="round"/>
+              <path d="M40 27 L50 17 C58 10, 68 14, 68 24 L68 60 L78 60" stroke="#C084FC" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span>16px</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="card-title">03 · M+L 融合同体标 (Monogram ML)</div>
+        <div class="card-desc">将字母「M」与「L（Link）」融为一体：右侧支脚顺势向右平伸形成 L 字底座。形体一气呵成，宛如国际现代设计大师的手笔。</div>
+      </div>
+    </div>
+
+    <!-- Concept 4: The Minimal Negative Notch M -->
+    <div class="card">
+      <div class="card-header">
+        <span class="badge b-white">方案 04 · 纯色极简切角</span>
+        <span style="font-size:12px;color:#64748B">Pure Geometric Notch</span>
+      </div>
+      <div class="stage">
+        <svg width="280" height="72" viewBox="0 0 280 72" fill="none">
+          <!-- Monolithic pure white solid block with precision 45-degree cuts -->
+          <g transform="translate(16, 10)">
+            <path d="M8 50 L8 10 L28 10 L38 28 L48 10 L68 10 L68 50 L52 50 L52 26 L42 42 L34 42 L24 26 L24 50 Z" fill="#FFFFFF"/>
+          </g>
+          <text x="100" y="47" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="34" letter-spacing="-0.03em" fill="#FFFFFF">MLINK</text>
+        </svg>
+      </div>
+      <div class="scales">
+        <div class="scale-item">
+          <div class="scale-preview scale-64">
+            <svg width="36" height="36" viewBox="0 0 80 80" fill="none">
+              <path d="M10 65 L10 15 L32 15 L40 32 L48 15 L70 15 L70 65 L54 65 L54 35 L44 50 L36 50 L26 35 L26 65 Z" fill="#FFFFFF"/>
+            </svg>
+          </div>
+          <span>64px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-32">
+            <svg width="22" height="22" viewBox="0 0 80 80" fill="none">
+              <path d="M10 65 L10 15 L32 15 L40 32 L48 15 L70 15 L70 65 L54 65 L54 35 L44 50 L36 50 L26 35 L26 65 Z" fill="#FFFFFF"/>
+            </svg>
+          </div>
+          <span>32px</span>
+        </div>
+        <div class="scale-item">
+          <div class="scale-preview scale-16">
+            <svg width="14" height="14" viewBox="0 0 80 80" fill="none">
+              <path d="M10 65 L10 15 L32 15 L40 32 L48 15 L70 15 L70 65 L54 65 L54 35 L44 50 L36 50 L26 35 L26 65 Z" fill="#FFFFFF"/>
+            </svg>
+          </div>
+          <span>16px</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="card-title">04 · 实体极简切角标 (Solid Monolith M)</div>
+        <div class="card-desc">纯色厚重实体，无渐变、无发光、无描边。类似 Vercel / Linear 的绝对自信感，用纯粹的正负几何切割展现工程底座的坚如磐石。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

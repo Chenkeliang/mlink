@@ -1,0 +1,26 @@
+<svg width="400" height="120" viewBox="0 0 400 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="400" height="120" rx="12" fill="#080C14"/>
+  <defs>
+    <linearGradient id="mob-g1" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="50%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="glow-sp" x1="0" y1="0" x2="100" y2="100">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(24, 15)">
+    <!-- Mobius Ribbon M -->
+    <path d="M12 84 C12 36, 26 12, 48 12 C64 12, 70 42, 54 68 C42 88, 58 88, 64 74 C76 46, 82 12, 104 12 C126 12, 132 50, 132 84" 
+          stroke="url(#mob-g1)" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M48 12 C30 42, 22 72, 40 84 C52 92, 72 78, 82 52 C92 26, 106 12, 118 38" 
+          stroke="#67E8F9" stroke-width="3" stroke-linecap="round" stroke-dasharray="3 3"/>
+    <!-- Center Spark -->
+    <circle cx="70" cy="54" r="5" fill="#FFFFFF"/>
+    <circle cx="70" cy="54" r="11" fill="url(#glow-sp)"/>
+  </g>
+  <text x="186" y="64" font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif" font-weight="900" font-size="38" letter-spacing="0.04em" fill="#FFFFFF">M<tspan fill="#00F0FF">LINK</tspan></text>
+  <text x="188" y="86" font-family="ui-monospace, monospace" font-size="10" letter-spacing="0.22em" fill="#64748B">ONE MEMORY PLANE</text>
+</svg>
