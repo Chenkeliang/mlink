@@ -6,9 +6,12 @@ These constraints apply to all work inside this repository. They supplement the 
 
 - MLink is a memory connection layer for Agents. It must not proxy Agent LLM traffic or change model providers, base URLs, API keys, subscription sessions, or authentication flows.
 - Agent adapters depend only on MLink's canonical memory model. Provider-specific types and behavior stay behind the Provider boundary.
-- The first release supports Codex, Pi, Hermes Agent, local Cursor Desktop/CLI, and TencentDB MemoryCore. Cursor Cloud Agent and Tab memory are outside the local adapter boundary.
+- The first release supports Codex, Pi, Hermes Agent, local Cursor Desktop/CLI, local Claude Code (desktop app and CLI share one user configuration), and TencentDB MemoryCore. Cursor Cloud Agent and Tab memory are outside the local adapter boundary.
 - Cursor lifecycle capture uses user-level Hooks and must fail open. Query-specific recall uses the local `mlink-memory` stdio MCP server and is authoritative; `sessionStart` context is best-effort only.
 - Cursor integration must never read or modify model selection, provider, subscription, API-key, authentication, or general editor settings. Owned changes are limited to semantic entries in `~/.cursor/hooks.json` and `~/.cursor/mcp.json`.
+- Claude Code integration must never read or modify model selection, provider, subscription, API-key, authentication, permissions, plugins, or any other Claude Code setting. Owned changes are limited to MLink's own entries under the `hooks` key of `~/.claude/settings.json`, and every plan must carry a protected invariant over the rest of that file.
+- Claude Code lifecycle capture uses user-level Hooks and must fail open. A turn that carries no prompt text or no turn correlation is skipped, never reported as a Hook failure.
+- MLink does not manage Claude Code's built-in auto-memory. It never reads, writes or migrates `~/.claude/projects/*/memory/`, and `autoMemoryEnabled` stays the user's own setting.
 
 ## Implementation Stack
 
